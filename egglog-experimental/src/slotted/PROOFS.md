@@ -20,8 +20,8 @@ A term is what the language writes: a constructor applied to children, a payload
 literal, or a slot such as `$a`. A binder column holds the bound slot itself.
 Ordinary proof steps compare terms syntactically: `(Lam $a $a)` and
 `(Lam $b $b)` are different terms. Equivariance explicitly transports proofs
-between slot names. Source equality conditions compare bound names by scope,
-and the final claim records how its requested terms are named in the proof.
+between slot names. Alpha changes bound names by scope. The final claim records
+how its requested terms are named in the proof.
 
 Printed proofs preserve source slot names in terms, substitutions, and renamings.
 They use egglog's S-expression format, with `let` bindings for shared subproofs
@@ -32,10 +32,9 @@ slot has one name throughout the proof, including permutation coordinates that
 appear only in an equivariance step or the final witness. Numbered source slots
 remain numbered.
 
-When source terms and rule instances are read, each binder receives a name
-separate from other binders and free slots. Names already distinct are preserved.
-This lets alpha-equivalent terms differ by a permutation of slot names. The
-translator and checker use the same binder refresh.
+Source axioms and rule instances retain their bound names. Lifting may give
+binders distinct names to reconstruct encoded matches; explicit Alpha steps
+justify those changes.
 
 The checker associates each equality with its carrier sort. An equality derived
 from a source union or rewrite retains that sort through composition and
@@ -54,9 +53,9 @@ The explicit Equivariance rule applies this operation to both endpoints of a pro
 
 # Justifications
 
-The ordinary equality rules, source axioms and source rewrite applications, plus
-Equivariance. The checker is independent of egglog's checker; its small equality
-rules have the same ordinary semantics.
+The slotted checker delegates ordinary equality steps and exact fact/action
+checking to egglog's checker. It validates source axioms, slotted rule conditions,
+sorts, Alpha, and Equivariance locally.
 
 **Fiat.** `t = t` for a term the program built -- a slot, a payload literal, or a
 subterm of a `let` or a `union` -- and `a = b` for a source `(union a b)`, in
@@ -68,9 +67,11 @@ slots, as required by the [language](LANGUAGE.md#fresh-slots).
 
 Premises are ordered: first a proof `t = L[σ]`, then evidence for the original
 `:when` facts in source order. An equality `(= a b)` requires a proof with
-endpoints `a[σ]` and `b[σ]`, up to alpha-equivalence with identical free names.
+endpoints `a[σ]` and `b[σ]` exactly. An Alpha step may establish the required spelling.
 A renaming equality `(renaming-= a b)` requires an ordinary equality proof
-`a[σ] = c`, where `c` matches `b[σ]` up to bound names and a bijection of free slots.
+`a[σ] = c` and an explicit permutation `m`. The checker requires
+`c` to be alpha-equivalent to `rename(m, b[σ])`. This evidence prints as
+`(RenamingGuard proof (renaming ...))`; existence of the operands alone is insufficient.
 A constructor fact requires an existence proof ending at its instantiated term.
 The remaining guards require existence proofs for their term operands and the checks
 below. Nested terms stay nested; generated pattern variables do not appear in
@@ -89,6 +90,12 @@ in scope at the rule declaration. The conclusion is
 right-hand side using `subst` is unsupported.
 
 **Sym.** From `a = b`, derive `b = a`.
+
+**Alpha.** From `a = b`, derive `a = c` when `b` and `c` are alpha-equivalent.
+The checker compares binding scopes and preserves free names, constructor heads,
+payloads, and the carrier sort. The premise establishes existence; Alpha cannot
+introduce an arbitrary term without a proof. Its printed form is
+`(Alpha (= a c) premise)`.
 
 **Trans.** From `a = b` and `b = c`, derive `a = c`. The middle terms must
 be syntactically identical and their carrier sorts must agree.
@@ -141,7 +148,7 @@ root equality, not another inference rule. For example, alpha-renaming needs onl
 # Normalization
 
 The lifted proof is checked before and after a normalization pass. The pass
-carries an accumulated permutation through Sym, Trans and Congr, materializing
+carries an accumulated permutation through Sym, Trans, Congr, and Alpha, materializing
 it in their endpoints. Nested equivariance steps compose. Source axioms and
 rule instances retain their provenance and substitutions, so remaining
 equivariance steps sit immediately above source steps. A renamed source union
@@ -159,8 +166,8 @@ by egglog's term/proof encoding. Generated machinery rules have stable names und
 `slotted/`, so the translator can identify their derivations. User rules use their
 source names, disambiguated when reused, with `/apply` and `/drain` on companion rules.
 
-`group-coset-reps` returns a vector sorted by content in both profiles, so the index
-a `Reading` row was read at means the same in every run, which a proof citing it needs.
+`group-coset-reps` returns a `Group`. Indexed reads use `group-elements`, sorted
+by renaming content, so runtime reads and proof validation agree on each index.
 
 The proof-compatible encoding represents these operations as follows:
 
@@ -185,36 +192,25 @@ The proof-compatible encoding represents these operations as follows:
   queries without proof extraction. `--slotted-proof-checks` runs this encoding
   with ordinary checks for comparison.
 
-**Source metadata.** Four hidden `Unit` functions, declared beside the layout tables
-and filled by the compiler, carry the source a translator needs:
+**Source recording.** `(slotted-source command)` retains declarations, globals,
+unions, and original rewrites as native source syntax. Records execute in source
+order and follow `push`/`pop`; later declarations cannot change an earlier axiom's
+sort or a rewrite's captured globals. Rewrites retain nested expressions and the
+original `:when` order. Unnamed rewrites receive names unique across scopes and
+successive inputs.
 
-| row | holds |
-| --- | --- |
-| `(SlottedCarrier "Sort" n)` | the equality sort with carrier index `n`, the suffix of its tables |
-| `(SlottedRuleSource "name" "(rewrite LHS RHS :when (...))")` | the original rewrite and `:when` clause under its proof name |
-| `(SlottedLetSource "x" "(Mul $7 (Null))")` | a global and the term text it was bound to |
-| `(SlottedUnionSource "a" "b" "U")` | the two terms of a top-level `union`, as written, and their carrier sort |
-
-Source text preserves identifier spelling: `x` and `?x` are distinct variables.
-Slot literals keep their `$`; globals are resolved through `SlottedLetSource`.
-A rewrite retains its original nested expressions and condition order.
-Unnamed rewrites receive names unique across scopes and successive inputs.
-Source recording follows execution order; `push` and `pop` restore the recorded
-source together with the database.
-
-The source recorder resolves globals through `SlottedLetSource` and reads
-binder positions from `SlottedBinderLayout`. Constructor declarations provide
-column and output sorts. Each claim also carries a JSON map of source slot
-spellings to interned IDs, including names from earlier inputs. These records
-provide the source program used by the checker; the checker does not inspect
-encoded tables.
+The checker uses native egglog rules, with a rewrite desugared to its root fact,
+original conditions, and union action. Constructor and binder information comes
+from the source declarations. Each claim retains its source expressions and the
+mapping from source slot names to encoded IDs; the checker does not read encoded
+tables.
 
 # Translation
 
-Flattening turns nested constructor patterns into atoms. For each rewrite,
-`slotted-record` retains the flattened rewrite and the pattern, class, reading,
-and frame names allocated by the compiler. These records survive serialization
-and push/pop. The source checker does not consult them.
+The source recorder uses the compiler's lowering to reconstruct flattened rules
+and their generated pattern, class, reading, and frame names. Claims carry the
+corresponding names for their compiled queries. These mappings belong to lifting;
+the source checker does not consult them.
 
 Encoding translation produces proofs over those flattened rewrites. A separate
 pass in [`proofs/unflatten.rs`](proofs/unflatten.rs) reconstructs nested terms
@@ -286,6 +282,7 @@ proof: [a rewrite](../../tests/snapshots/slotted_proofs__demo_rewrite.snap),
 [a nested rewrite with original conditions](../../tests/snapshots/slotted_proofs__demo_nested_conditions.snap),
 [a renaming equality guard](../../tests/snapshots/slotted_proofs__demo_renaming_guard.snap),
 [bound-slot renaming](../../tests/snapshots/slotted_proofs__demo_alpha_renaming.snap),
+[scoped Alpha](../../tests/snapshots/slotted_proofs__demo_scoped_alpha.snap),
 [congruence through a binder](../../tests/snapshots/slotted_proofs__demo_binder_congruence.snap),
 [a redundant slot](../../tests/snapshots/slotted_proofs__demo_redundant_slot.snap),
 and [fresh names avoiding source and rule variables](../../tests/snapshots/slotted_proofs__demo_fresh_names.snap).
@@ -302,12 +299,12 @@ To replay lowered code, use
 From Rust, compile with `Options { proof_mode: ProofMode::Prove, ..Default::default() }`
 and evaluate the result with `new_egraph_with_proofs()`.
 `make slotted-proof-tests` runs the supported source corpus through the Rust API
-and checks the generated benchmark goals with proofs in both matching modes.
+and checks the generated benchmark goals and seeded fuzz cases with proofs.
 The benchmark checks use the same workload generators and iteration budgets as
-`slotted/eval.py`. The same tests run in `make check`.
-`make test` also runs bounded, seeded proof fuzzing over toy terms, deeper terms
-with binders and shared variables, and Array in both matching modes. For larger
-runs, use `uv run --locked python slotted/xdiff/proofs.py 100 0` (case count, seed).
+`slotted/eval.py`, in both matching modes. `make test` depends on these tests;
+`make check` runs them too. Proof fuzzing covers toy terms, deeper terms with
+binders and shared variables, and Array in both matching modes. For larger runs,
+use `uv run --locked python slotted/xdiff/proofs.py 100 0` (case count, seed).
 `--deep` selects the deeper toy terms; `--language array` selects the Array
 generator and supports `--no-aliasing`.
 The fuzzer checks equivalent probe pairs, reports cases whose proofs use rewrites,

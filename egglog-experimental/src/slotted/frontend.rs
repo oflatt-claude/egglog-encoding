@@ -5,7 +5,7 @@ use super::{
     query, rewrite,
     syntax::{self, Form, quote},
 };
-use egglog::ast::{ParseError, Span};
+use egglog::ast::{Command, GenericAction, ParseError, Rewrite as SourceRewrite, Sexp, Span};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -171,11 +171,7 @@ impl Compiler {
             }
         }
         if !sorts.is_empty() && !self.state.initialized {
-            self.emit(
-                &mut out,
-                maintenance::shared(self.options.proof_mode != ProofMode::Disabled),
-                None,
-            );
+            self.emit(&mut out, maintenance::shared(), None);
             self.state.initialized = true;
         }
         for sort in sorts {
@@ -191,13 +187,7 @@ impl Compiler {
                 maintenance::carrier(&s, self.options.proof_mode != ProofMode::Disabled),
                 Some(&sort),
             );
-            if self.options.proof_mode != ProofMode::Disabled {
-                out.push(format!(
-                    "(set (SlottedCarrier {} {}) ())",
-                    quote(&sort),
-                    s.index
-                ));
-            }
+            out.push(self.source_record(format!("(sort {sort})")));
             self.state.lang.carriers.push(s);
         }
         for f in ctors {
@@ -213,6 +203,7 @@ impl Compiler {
                 ),
                 Some(&op.name),
             );
+            out.push(self.source_record(f.render()));
             self.state.lang.constructors.insert(op.name.clone(), op);
         }
         self.state.declared.extend(declared);
@@ -376,16 +367,6 @@ impl Compiler {
         })
     }
 
-    fn metadata(&self, table: &str, args: &[String]) -> String {
-        if self.options.proof_mode == ProofMode::Disabled {
-            return String::new();
-        }
-        format!(
-            "\n(set ({table} {}) ())",
-            args.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ")
-        )
-    }
-
     fn command(&mut self, f: &Form) -> Result<String, String> {
         let (head, args) = f.call()?;
         match head {
@@ -416,10 +397,7 @@ impl Compiler {
                     )
                 };
                 self.state.lang.globals.insert(name.into(), t);
-                Ok(format!(
-                    "{encoded}{}",
-                    self.metadata("SlottedLetSource", &[name.to_owned(), args[1].render()])
-                ))
+                Ok(format!("{encoded}{}", self.source_record(f.render())))
             }
             "union" => {
                 if args.len() != 2 {
@@ -430,10 +408,7 @@ impl Compiler {
                     "(union {} {}){}",
                     self.state.lang.encode_top(&terms[0], &sort),
                     self.state.lang.encode_top(&terms[1], &sort),
-                    self.metadata(
-                        "SlottedUnionSource",
-                        &[args[0].render(), args[1].render(), sort.clone()]
-                    )
+                    self.source_record(f.render())
                 ))
             }
             "rewrite" => self.rewrite(args),
@@ -806,56 +781,68 @@ impl Compiler {
         Ok(())
     }
 
-    fn rewrite(&mut self, args: &[Form]) -> Result<String, String> {
-        if args.len() < 2 {
-            return Err("rewrite needs a left- and right-hand side".into());
+    fn source_record(&self, command: impl std::fmt::Display) -> String {
+        if self.options.proof_mode != ProofMode::Prove {
+            return String::new();
         }
-        let lhs = self.term(&args[0], false, None)?;
-        let mut rhs = self.term(&args[1], false, None)?;
-        let mut p = Pattern::new(args);
+        let option = if self.options.no_aliasing {
+            ":no-aliasing "
+        } else {
+            ""
+        };
+        format!("\n(slotted-source {option}{command})")
+    }
+
+    fn rewrite(&mut self, args: &[Form]) -> Result<String, String> {
+        let mut source = source_rewrite(args)?;
+        let name = if source.name.is_empty() {
+            format!("_slotted_match_{}", self.next_rule)
+        } else {
+            source.name.clone()
+        };
+        source.name = if self.options.proof_mode == ProofMode::Disabled {
+            name
+        } else {
+            let mut unique = name.clone();
+            let mut suffix = self.next_rule;
+            while !self.used_rule_names.insert(unique.clone()) {
+                unique = format!("{name}#{suffix}");
+                suffix += 1;
+            }
+            unique
+        };
+        let (encoded, _) = self.lower_rewrite(&source)?;
+        self.next_rule += 1;
+        Ok(format!(
+            "{encoded}{}",
+            self.source_record(format!(
+                "(rewrite {} {} :when ({}) :name {})",
+                source.lhs,
+                source.rhs,
+                egglog_ast::util::ListDisplay(&source.conditions, " "),
+                quote(&source.name),
+            ))
+        ))
+    }
+
+    pub(super) fn lower_rewrite(
+        &mut self,
+        source: &SourceRewrite,
+    ) -> Result<(String, flatten::Rewrite), String> {
+        let lhs_form = Form::from_expr(&source.lhs);
+        let rhs_form = Form::from_expr(&source.rhs);
+        let facts: Vec<_> = source.conditions.iter().map(Form::from_fact).collect();
+        let mut forms = vec![lhs_form.clone(), rhs_form.clone()];
+        forms.extend(facts.clone());
+        let lhs = self.term(&lhs_form, false, None)?;
+        let mut rhs = self.term(&rhs_form, false, None)?;
+        let mut p = Pattern::new(&forms);
         let root = self.pattern_value(&mut p, lhs.clone())?;
         if !matches!(lhs, Term::Node(_, _)) {
             p.proof_names.patterns.insert(0, vec![]);
         }
-        let mut name = None;
-        let mut when_seen = false;
-        let mut source = format!("(rewrite {} {}", args[0].render(), args[1].render());
-        let mut i = 2;
-        while i < args.len() {
-            let key = args[i].atom()?;
-            i += 1;
-            let start = i;
-            while i < args.len() && !matches!(&args[i], Form::Atom(s) if s.starts_with(':')) {
-                i += 1;
-            }
-            let values = &args[start..i];
-            match key {
-                ":ruleset" => return Err("named rulesets are not supported by the slotted schedule; omit :ruleset and use (run N)".into()),
-                ":name" => {
-                    if values.len() != 1 {
-                        return Err(":name expects one argument".into());
-                    }
-                    name = Some(unquote(values[0].atom()?)?);
-                }
-                ":when" => {
-                    if when_seen {
-                        return Err("several :when clauses; use one list of facts".into());
-                    }
-                    when_seen = true;
-                    if values.len() != 1 {
-                        return Err(":when takes one list of facts".into());
-                    }
-                    source.push_str(&format!(" :when {}", values[0].render()));
-                    let facts = values[0].list()?;
-                    if facts.iter().any(|f| !matches!(f, Form::List(_))) {
-                        return Err(":when takes a list of facts".into());
-                    }
-                    for fact in facts {
-                        self.pattern_fact(&mut p, fact)?;
-                    }
-                }
-                _ => return Err(format!("unsupported rewrite option {key}")),
-            }
+        for fact in &facts {
+            self.pattern_fact(&mut p, fact)?;
         }
         if self.options.no_aliasing && p.patterns > 1 {
             return Err("no-aliasing mode requires a single nested pattern".into());
@@ -875,20 +862,7 @@ impl Compiler {
         }
         self.global_terms(&mut p, &mut rhs, None);
         self.finish_pattern(&mut p)?;
-        let name = name.unwrap_or_else(|| format!("_slotted_match_{}", self.next_rule));
-        let name = if self.options.proof_mode == ProofMode::Disabled {
-            name
-        } else {
-            let mut unique = name.clone();
-            let mut suffix = self.next_rule;
-            while !self.used_rule_names.insert(unique.clone()) {
-                unique = format!("{name}#{suffix}");
-                suffix += 1;
-            }
-            unique
-        };
-        source.push(')');
-        let flattened = flatten::rewrite(
+        let mut flattened = flatten::rewrite(
             &self.state.lang,
             &root,
             &lhs,
@@ -897,40 +871,100 @@ impl Compiler {
             &p.conditions,
             p.proof_names,
         );
-        let (result, proof_names) = rewrite::compile(
+        let (encoded, names) = rewrite::compile(
             &self.state.lang,
             rewrite::Rewrite {
                 root: &root,
                 atoms: &p.atoms,
                 rhs: &rhs,
                 conditions: p.conditions,
-                name: Some(&name),
+                name: Some(&source.name),
                 ordinal: self.state.rules,
                 nested: self.options.no_aliasing,
             },
             flattened.names,
         )?;
         self.state.rules += 1;
-        self.next_rule += 1;
-        let recorded_names = if self.options.proof_mode == ProofMode::Prove {
-            format!(
-                "\n(slotted-record \"rule-names\" {} {})",
-                quote(&name),
-                quote(
-                    &serde_json::to_string(&flatten::Rewrite {
-                        source: flattened.source,
-                        names: proof_names
-                    })
-                    .unwrap()
-                ),
-            )
-        } else {
-            String::new()
+        flattened.names = names;
+        flattened.rule.name = source.name.clone();
+        Ok((encoded, flattened))
+    }
+
+    pub(super) fn language(&self) -> &Language {
+        &self.state.lang
+    }
+
+    pub(super) fn retain_source(
+        &mut self,
+        source: Sexp,
+        no_aliasing: bool,
+    ) -> Result<(Command, Option<flatten::Rewrite>), String> {
+        self.options = Options {
+            no_aliasing,
+            proof_mode: ProofMode::Prove,
         };
-        Ok(format!(
-            "{result}{}{recorded_names}",
-            self.metadata("SlottedRuleSource", &[name, source])
-        ))
+        let form = syntax::convert(source);
+        let (head, args) = form.call()?;
+        let command = match head {
+            "sort" if args.len() == 1 => {
+                let sort = args[0].symbol()?;
+                self.state
+                    .lang
+                    .carriers
+                    .push(Symbols::new(sort, self.state.lang.carriers.len()));
+                Command::Sort {
+                    span: egglog::span!(),
+                    name: sort.into(),
+                    presort_and_args: None,
+                    uf: None,
+                    container_rebuild: None,
+                    proof_constructors: None,
+                    unionable: true,
+                }
+            }
+            "constructor" => {
+                let op = self.constructor(&form)?;
+                let command = Command::Constructor {
+                    span: egglog::span!(),
+                    name: op.name.clone(),
+                    schema: egglog::ast::Schema::new(
+                        op.input_sorts().map(str::to_owned).collect(),
+                        op.sort.clone(),
+                    ),
+                    cost: None,
+                    unextractable: false,
+                    hidden: false,
+                    let_binding: false,
+                };
+                self.state.lang.constructors.insert(op.name.clone(), op);
+                command
+            }
+            "let" if args.len() == 2 => {
+                let value = self.term(&args[1], true, None)?;
+                self.state
+                    .lang
+                    .globals
+                    .insert(args[0].symbol()?.into(), value);
+                Command::Action(GenericAction::Let(
+                    egglog::span!(),
+                    args[0].symbol()?.into(),
+                    args[1].expr()?,
+                ))
+            }
+            "union" if args.len() == 2 => Command::Action(GenericAction::Union(
+                egglog::span!(),
+                args[0].expr()?,
+                args[1].expr()?,
+            )),
+            "rewrite" => Command::Rewrite(String::new(), source_rewrite(args)?, false),
+            _ => return Err(format!("unsupported source record {head}")),
+        };
+        let flat = if let Command::Rewrite(_, rule, false) = &command {
+            Some(self.lower_rewrite(rule)?.1)
+        } else {
+            None
+        };
+        Ok((command, flat))
     }
 
     fn proof_claim(&mut self, fact: &Form) -> Result<Option<String>, String> {
@@ -985,9 +1019,9 @@ impl Compiler {
         let proof = format!(
             "(prove-slotted ({kind} {} ({} {}) ({} {}) {} {}) {})",
             q.sorts[&roots[0]],
-            quote(&terms[0].render()),
+            terms[0].render(),
             roots[0],
-            quote(&terms[1].render()),
+            terms[1].render(),
             roots[1],
             quote(
                 &serde_json::to_string(
@@ -1108,6 +1142,49 @@ impl Compiler {
         }
         Ok(super::check::emit(&q, f, !negated))
     }
+}
+
+pub(super) fn source_rewrite(args: &[Form]) -> Result<SourceRewrite, String> {
+    if args.len() < 2 {
+        return Err("rewrite needs a left- and right-hand side".into());
+    }
+    let mut source = SourceRewrite {
+        span: egglog::span!(),
+        lhs: args[0].expr()?,
+        rhs: args[1].expr()?,
+        conditions: vec![],
+        name: String::new(),
+    };
+    let mut when_seen = false;
+    let mut i = 2;
+    while i < args.len() {
+        let key = args[i].atom()?;
+        i += 1;
+        let start = i;
+        while i < args.len() && !matches!(&args[i], Form::Atom(s) if s.starts_with(':')) {
+            i += 1;
+        }
+        let values = &args[start..i];
+        match key {
+            ":ruleset" => return Err("named rulesets are not supported by the slotted schedule; omit :ruleset and use (run N)".into()),
+            ":name" => {
+                let [value] = values else { return Err(":name expects one argument".into()) };
+                source.name = unquote(value.atom()?)?;
+            }
+            ":when" => {
+                if when_seen { return Err("several :when clauses; use one list of facts".into()); }
+                when_seen = true;
+                let [value] = values else { return Err(":when takes one list of facts".into()) };
+                let facts = value.list()?;
+                if facts.iter().any(|fact| !matches!(fact, Form::List(_))) {
+                    return Err(":when takes a list of facts".into());
+                }
+                source.conditions = facts.iter().map(Form::fact).collect::<Result<_, _>>()?;
+            }
+            _ => return Err(format!("unsupported rewrite option {key}")),
+        }
+    }
+    Ok(source)
 }
 
 fn read(

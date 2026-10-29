@@ -3,19 +3,19 @@
 use super::HashMap;
 use super::checker::check_claim;
 use super::format::SlottedConclusion;
-use super::source::{ColumnKind, SlottedProgram, SourceError};
+use super::source::{SlottedProgram, SourceError};
 use super::terms::FreshSlots;
 use super::translate::{matched_frame, translate};
+use crate::slotted::Compiler;
 use crate::slotted::flatten::Rewrite as FlatRewrite;
 use crate::slotted::query::ProofNames;
 use egglog::TermDag;
 use egglog::ast::{
-    Command, Expr, Fact, GenericAction, GenericExpr, Literal, Macro, ParseError, Parser, Sexp, Span,
+    Command, Expr, Fact, GenericAction, Literal, Macro, ParseError, Parser, Sexp, Span,
 };
 use egglog::proof::{ProofId, ProofStore};
-use egglog::util::SymbolGen;
-use egglog::{CommandMacro, CommandOutput, EGraph, Error, TypeInfo, UserDefinedCommand};
-use std::collections::{BTreeMap, BTreeSet};
+use egglog::{CommandOutput, EGraph, Error, UserDefinedCommand};
+use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
@@ -23,9 +23,9 @@ use std::sync::Arc;
 struct SlottedClaim {
     kind: String,
     sort: String,
-    lhs: String,
+    lhs: Expr,
     lhs_root: String,
-    rhs: String,
+    rhs: Expr,
     rhs_root: String,
     slot_names: BTreeMap<String, i64>,
     names: ProofNames,
@@ -43,11 +43,9 @@ pub(crate) fn register(graph: &mut EGraph) {
         .unwrap();
     graph.parser.add_command_macro(Arc::new(ProveSlotted));
     graph
-        .add_command("slotted-record".into(), Arc::new(RecordSource))
+        .add_command("slotted-record-source".into(), Arc::new(RecordSource))
         .unwrap();
-    graph
-        .command_macros_mut()
-        .register(Arc::new(SourceMetadata));
+    graph.parser.add_command_macro(Arc::new(RecordSource));
 }
 
 fn error(message: impl Display) -> Error {
@@ -57,43 +55,66 @@ fn error(message: impl Display) -> Error {
     ))
 }
 
-struct SourceMetadata;
-
-impl CommandMacro for SourceMetadata {
-    fn transform(
-        &self,
-        command: Command,
-        _: &mut SymbolGen,
-        _: &TypeInfo,
-    ) -> Result<Vec<Command>, Error> {
-        let string = |s: &str| Expr::Lit(egglog::span!(), Literal::String(s.into()));
-        let args = match &command {
-            Command::Action(GenericAction::Set(_, head, args, _))
-                if METADATA_TABLES.contains(&head.as_str()) =>
-            {
-                let mut out = vec![string(head)];
-                out.extend(args.clone());
-                out
-            }
-            Command::Constructor { name, schema, .. } if schema.outputs.len() == 1 => {
-                let mut out = vec![
-                    string("constructor"),
-                    string(name),
-                    string(&schema.outputs[0]),
-                ];
-                out.extend(schema.input.iter().map(|s| string(s)));
-                out
-            }
-            _ => return Ok(vec![command]),
-        };
-        Ok(vec![
-            command,
-            Command::UserDefined(egglog::span!(), "slotted-record".into(), args),
-        ])
+// Extension commands receive Expr arguments. These functions transport syntax
+// without evaluating it, including empty lists such as an empty :when clause.
+fn datum(source: &Sexp) -> Expr {
+    match source {
+        Sexp::Atom(name, span) => Expr::Call(
+            span.clone(),
+            "slotted-source-atom".into(),
+            vec![Expr::Lit(span.clone(), Literal::String(name.clone()))],
+        ),
+        Sexp::Literal(lit, span) => Expr::Lit(span.clone(), lit.clone()),
+        Sexp::List(items, span) => Expr::Call(
+            span.clone(),
+            "slotted-source-list".into(),
+            items.iter().map(datum).collect(),
+        ),
     }
 }
 
+fn source_datum(expr: &Expr) -> Result<Sexp, Error> {
+    Ok(match expr {
+        Expr::Call(span, head, args) if head == "slotted-source-atom" => {
+            let [Expr::Lit(_, Literal::String(name))] = args.as_slice() else {
+                return Err(error("invalid source atom"));
+            };
+            Sexp::Atom(name.clone(), span.clone())
+        }
+        Expr::Lit(span, lit) => Sexp::Literal(lit.clone(), span.clone()),
+        Expr::Call(span, head, args) if head == "slotted-source-list" => Sexp::List(
+            args.iter().map(source_datum).collect::<Result<_, _>>()?,
+            span.clone(),
+        ),
+        _ => return Err(error("invalid source datum")),
+    })
+}
+
 struct RecordSource;
+
+impl Macro<Vec<Command>> for RecordSource {
+    fn name(&self) -> &str {
+        "slotted-source"
+    }
+
+    fn parse(&self, args: &[Sexp], span: Span, _: &mut Parser) -> Result<Vec<Command>, ParseError> {
+        let (nested, source) = match args {
+            [source] => (false, source),
+            [Sexp::Atom(option, _), source] if option == ":no-aliasing" => (true, source),
+            _ => {
+                return Err(ParseError(
+                    span,
+                    "expected (slotted-source [:no-aliasing] command)".into(),
+                ));
+            }
+        };
+        Ok(vec![Command::UserDefined(
+            span.clone(),
+            "slotted-record-source".into(),
+            vec![Expr::Lit(span, Literal::Bool(nested)), datum(source)],
+        )])
+    }
+}
 
 impl UserDefinedCommand for RecordSource {
     fn supports_proofs(&self) -> bool {
@@ -101,35 +122,25 @@ impl UserDefinedCommand for RecordSource {
     }
 
     fn update(&self, graph: &mut EGraph, args: &[Expr]) -> Result<Vec<CommandOutput>, Error> {
-        let Some((head, args)) = args.split_first() else {
-            return Err(error("missing metadata kind"));
+        let [Expr::Lit(_, Literal::Bool(nested)), source] = args else {
+            return Err(error("invalid source record"));
         };
-        let head = lit_string(head).ok_or_else(|| error("expected metadata kind"))?;
         let state = graph.extension_state_or_default::<SlottedProofState>();
-        if head == "constructor" {
-            let strings = args
-                .iter()
-                .map(|a| lit_string(a).ok_or_else(|| error("expected constructor signature")))
-                .collect::<Result<Vec<_>, _>>()?;
-            let [name, output, inputs @ ..] = strings.as_slice() else {
-                return Err(error("missing constructor signature"));
-            };
-            state
-                .signatures
-                .insert(name.clone(), (inputs.to_vec(), output.clone()));
-        } else if head == "rule-names" {
-            let [name, names] = args else {
-                return Err(error("expected a rule and its generated names"));
-            };
-            let name = lit_string(name).ok_or_else(|| error("expected a rule name"))?;
-            let names = lit_string(names).ok_or_else(|| error("expected generated names"))?;
-            state
-                .names
-                .rules
-                .insert(name, serde_json::from_str(&names).map_err(error)?);
-        } else {
-            state.record(&head, args).map_err(error)?;
+        let (command, flat) = state
+            .compiler
+            .retain_source(source_datum(source)?, *nested)
+            .map_err(error)?;
+        if let Some(flat) = flat {
+            state.names.rules.insert(flat.rule.name.clone(), flat);
         }
+        state.sources.push(command);
+        state.names.carriers = state
+            .compiler
+            .language()
+            .carriers
+            .iter()
+            .map(|s| (s.sort.clone(), s.index as i64))
+            .collect();
         Ok(vec![])
     }
 }
@@ -150,7 +161,7 @@ impl Macro<Vec<Command>> for ProveSlotted {
         let bad = || {
             ParseError(
                 span.clone(),
-                "expected (prove-slotted (<kind> <sort> (\"lhs\" root) (\"rhs\" root) \"slot names\" \"query names\") facts...)"
+                "expected (prove-slotted (<kind> <sort> (lhs root) (rhs root) \"slot names\" \"query names\") facts...)"
                     .into(),
             )
         };
@@ -167,18 +178,21 @@ impl Macro<Vec<Command>> for ProveSlotted {
         else {
             return Err(bad());
         };
-        let side = |xs: &[Sexp]| -> Result<[String; 2], ParseError> {
-            let [Sexp::Literal(Literal::String(text), _), Sexp::Atom(root, _)] = xs else {
-                return Err(bad());
-            };
-            Ok([text.clone(), root.clone()])
+        let [lhs, Sexp::Atom(lhs_root, _)] = lhs.as_slice() else {
+            return Err(bad());
         };
-        let mut parsed = [kind.clone(), sort.clone()]
-            .into_iter()
-            .chain(side(lhs)?)
-            .chain(side(rhs)?)
-            .map(|s| Expr::Lit(span.clone(), Literal::String(s)))
-            .collect::<Vec<_>>();
+        let [rhs, Sexp::Atom(rhs_root, _)] = rhs.as_slice() else {
+            return Err(bad());
+        };
+        let string = |s: &String| Expr::Lit(span.clone(), Literal::String(s.clone()));
+        let mut parsed = vec![
+            string(kind),
+            string(sort),
+            datum(lhs),
+            string(lhs_root),
+            datum(rhs),
+            string(rhs_root),
+        ];
         let [
             Sexp::Literal(Literal::String(slots), _),
             Sexp::Literal(Literal::String(names), _),
@@ -210,22 +224,24 @@ impl UserDefinedCommand for ProveSlotted {
         let [
             Expr::Lit(_, Literal::String(kind)),
             Expr::Lit(_, Literal::String(sort)),
-            Expr::Lit(_, Literal::String(lhs)),
+            lhs,
             Expr::Lit(_, Literal::String(lhs_root)),
-            Expr::Lit(_, Literal::String(rhs)),
+            rhs,
             Expr::Lit(_, Literal::String(rhs_root)),
             Expr::Lit(_, Literal::String(slot_names)),
             Expr::Lit(_, Literal::String(names)),
             facts @ ..,
         ] = args
         else {
-            return Err(error("expected eight claim strings followed by facts"));
+            return Err(error("invalid slotted claim arguments"));
         };
         let claim = SlottedClaim {
             kind: kind.clone(),
             sort: sort.clone(),
-            lhs: lhs.clone(),
-            rhs: rhs.clone(),
+            lhs: crate::slotted::syntax::source_expr(&source_datum(lhs)?)
+                .map_err(Error::ParseError)?,
+            rhs: crate::slotted::syntax::source_expr(&source_datum(rhs)?)
+                .map_err(Error::ParseError)?,
             lhs_root: lhs_root.clone(),
             rhs_root: rhs_root.clone(),
             slot_names: serde_json::from_str(slot_names).map_err(error)?,
@@ -260,24 +276,6 @@ impl UserDefinedCommand for ProveSlotted {
     }
 }
 
-/// One source-level fact the compiler recorded, in program order.
-#[derive(Clone, Debug)]
-enum Source {
-    Let(String, String),
-    Union(String, String, String),
-    Rule(String, String),
-}
-
-/// The physical layout the compiler publishes for a constructor, before it is
-/// read into surface columns.
-#[derive(Clone, Debug, Default)]
-struct RawLayout {
-    arity: Option<usize>,
-    edges: BTreeSet<usize>,
-    binders: BTreeSet<usize>,
-    payloads: BTreeSet<usize>,
-}
-
 /// The carrier identities and generated rule bindings used by reconstruction.
 #[derive(Clone, Debug, Default)]
 pub(super) struct EncodingNames {
@@ -297,76 +295,14 @@ impl EncodingNames {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 struct SlottedProofState {
+    compiler: Compiler,
     names: EncodingNames,
-    layouts: HashMap<String, RawLayout>,
-    /// Each declared constructor's input and output sorts, as the encoded
-    /// program declares them: a child column is a `Renaming` and then its sort.
-    signatures: HashMap<String, (Vec<String>, String)>,
-    sources: Vec<Source>,
-}
-
-const METADATA_TABLES: &[&str] = &[
-    "SlottedCarrier",
-    "SlottedNodeLayout",
-    "SlottedEdgeLayout",
-    "SlottedBinderLayout",
-    "SlottedPayloadLayout",
-    "SlottedRuleSource",
-    "SlottedLetSource",
-    "SlottedUnionSource",
-];
-
-fn lit_string(e: &Expr) -> Option<String> {
-    match e {
-        GenericExpr::Lit(_, Literal::String(s)) => Some(s.clone()),
-        _ => None,
-    }
-}
-
-fn lit_int(e: &Expr) -> Option<i64> {
-    match e {
-        GenericExpr::Lit(_, Literal::Int(n)) => Some(*n),
-        _ => None,
-    }
+    sources: Vec<Command>,
 }
 
 impl SlottedProofState {
-    /// Record a top-level `(set (Slotted... args) ())` metadata row.
-    fn record(&mut self, head: &str, args: &[Expr]) -> Result<(), SourceError> {
-        let bad = || SourceError(format!("malformed metadata row ({head} ...)"));
-        let s = |i: usize| args.get(i).and_then(lit_string).ok_or_else(bad);
-        let n = |i: usize| args.get(i).and_then(lit_int).ok_or_else(bad);
-        match head {
-            "SlottedCarrier" => {
-                self.names.carriers.insert(s(0)?, n(1)?);
-            }
-            "SlottedNodeLayout" => {
-                let arity = usize::try_from(n(1)?).map_err(|_| bad())?;
-                self.layouts.entry(s(0)?).or_default().arity = Some(arity);
-            }
-            "SlottedEdgeLayout" => {
-                let edge = usize::try_from(n(1)?).map_err(|_| bad())?;
-                self.layouts.entry(s(0)?).or_default().edges.insert(edge);
-            }
-            "SlottedBinderLayout" => {
-                let edge = usize::try_from(n(1)?).map_err(|_| bad())?;
-                self.layouts.entry(s(0)?).or_default().binders.insert(edge);
-            }
-            "SlottedPayloadLayout" => {
-                let col = usize::try_from(n(1)?).map_err(|_| bad())?;
-                self.layouts.entry(s(0)?).or_default().payloads.insert(col);
-            }
-            "SlottedRuleSource" => self.sources.push(Source::Rule(s(0)?, s(1)?)),
-            "SlottedLetSource" => self.sources.push(Source::Let(s(0)?, s(1)?)),
-            "SlottedUnionSource" => self.sources.push(Source::Union(s(0)?, s(1)?, s(2)?)),
-            _ => return Err(SourceError(format!("unknown metadata {head}"))),
-        }
-        Ok(())
-    }
-
-    /// The source program as recorded so far, over a fresh term dag.
     fn program(
         &self,
         slot_names: &BTreeMap<String, i64>,
@@ -376,68 +312,50 @@ impl SlottedProofState {
             slot_names: slot_names.clone(),
             ..Default::default()
         };
-        for (name, layout) in &self.layouts {
-            if self.names.is_var_constructor(name) {
-                continue;
-            }
-            let arity = layout
-                .arity
-                .ok_or_else(|| SourceError(format!("constructor {name} has no node layout")))?;
-            let (inputs, output) = self
-                .signatures
-                .get(name)
-                .ok_or_else(|| SourceError(format!("constructor {name} was never declared")))?;
-            if inputs.len() != arity {
-                return Err(SourceError(format!(
-                    "constructor {name} is declared with {} columns, its layout has {arity}",
-                    inputs.len()
-                )));
-            }
-            let mut columns = vec![];
-            let mut i = 0;
-            while i < arity {
-                if layout.edges.contains(&i) {
-                    let kind = if layout.binders.contains(&i) {
-                        ColumnKind::Binder
-                    } else {
-                        ColumnKind::Child
-                    };
-                    // the edge's renaming, then the child's sort
-                    let sort = inputs.get(i + 1).cloned().ok_or_else(|| {
-                        SourceError(format!("constructor {name}: edge {i} has no class column"))
-                    })?;
-                    columns.push((kind, sort));
-                    i += 2;
-                } else if layout.payloads.contains(&i) {
-                    columns.push((ColumnKind::Payload, inputs[i].clone()));
-                    i += 1;
-                } else {
-                    return Err(SourceError(format!(
-                        "constructor {name}: physical column {i} is neither an edge nor a payload"
-                    )));
-                }
-            }
-            program.add_sorted_constructor(name, output, columns);
-        }
+        let language = self.compiler.language();
         let mut flattened = program.clone();
         for source in &self.sources {
             match source {
-                Source::Let(name, text) => {
-                    program.add_let(&mut dag, name, text)?;
-                    flattened.add_let(&mut dag, name, text)?;
+                Command::Sort { name, .. } => {
+                    program.sorts.insert(name.clone());
+                    flattened.sorts.insert(name.clone());
                 }
-                Source::Union(a, b, sort) => {
-                    program.add_union(&mut dag, a, b, sort)?;
-                    flattened.add_union(&mut dag, a, b, sort)?;
+                Command::Constructor { name, .. } => {
+                    let op = &language.constructors[name];
+                    program.constructors.insert(name.clone(), op.clone());
+                    flattened.constructors.insert(name.clone(), op.clone());
                 }
-                Source::Rule(name, text) => {
-                    program.add_named_rewrite(&mut dag, Some(name), text)?;
-                    let rule =
-                        self.names.rules.get(name).ok_or_else(|| {
-                            SourceError(format!("missing flattened rewrite {name}"))
-                        })?;
-                    flattened.add_named_rewrite(&mut dag, Some(name), &rule.source)?;
+                Command::Action(GenericAction::Let(_, name, value)) => {
+                    program.add_let_expr(&mut dag, name, value)?;
+                    flattened.add_let_expr(&mut dag, name, value)?;
+                    let term = flattened.refresh_binders(&mut dag, flattened.lets[name]);
+                    flattened.lets.insert(name.clone(), term);
                 }
+                Command::Action(GenericAction::Union(_, a, b)) => {
+                    let lhs = program.ground_term(&mut dag, a)?;
+                    let rhs = program.ground_term(&mut dag, b)?;
+                    let sort = program
+                        .sort_of(&dag, lhs)
+                        .or_else(|| program.sort_of(&dag, rhs))
+                        .or_else(|| {
+                            (program.sorts.len() == 1)
+                                .then(|| program.sorts.first().unwrap().clone())
+                        })
+                        .ok_or_else(|| SourceError("union has no carrier sort".into()))?;
+                    program.add_union_expr(&mut dag, a, b, &sort)?;
+                    flattened.add_union_expr(&mut dag, a, b, &sort)?;
+                    let union = flattened.unions.last().unwrap().clone();
+                    let lhs = flattened.refresh_binders(&mut dag, union.lhs);
+                    let rhs = flattened.refresh_binders(&mut dag, union.rhs);
+                    let union = flattened.unions.last_mut().unwrap();
+                    union.lhs = lhs;
+                    union.rhs = rhs;
+                }
+                Command::Rewrite(_, rule, false) => {
+                    program.add_rewrite_ast(&mut dag, rule)?;
+                    flattened.add_rewrite_ast(&mut dag, &self.names.rules[&rule.name].rule)?;
+                }
+                _ => return Err(SourceError("unsupported retained source command".into())),
             }
         }
         Ok((program, flattened, dag))
@@ -483,7 +401,7 @@ impl SlottedProofState {
         }
         // The globals were parsed before assigning query-local slot witnesses.
         let source = query_program
-            .claim(&mut dag, &claim.kind, &claim.sort, &claim.lhs, &claim.rhs)
+            .claim_expr(&mut dag, &claim.kind, &claim.sort, &claim.lhs, &claim.rhs)
             .map_err(|e| format!("claim {claim}: {e}"))?;
         log::debug!(
             "egglog proof of claim {claim}:\n{}",
@@ -525,7 +443,7 @@ mod tests {
     #[test]
     fn restricted_group_elements_lift_to_checked_source_equalities() {
         let mut compiler = Compiler::new(Options {
-            proof_mode: ProofMode::Check,
+            proof_mode: ProofMode::Prove,
             ..Default::default()
         });
         let encoded = compiler

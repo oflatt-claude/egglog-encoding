@@ -1,12 +1,12 @@
 //! Flatten nested patterns into constructor atoms before encoding their matches.
 use super::model::*;
 use super::query::{Conditions, ProofNames};
-use serde::{Deserialize, Serialize};
+use egglog::ast::{Expr, Fact, Rewrite as SourceRewrite};
 use std::collections::BTreeSet;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub(crate) struct Rewrite {
-    pub source: String,
+    pub rule: SourceRewrite,
     pub names: ProofNames,
 }
 
@@ -136,17 +136,17 @@ pub(super) fn rewrite(
         let mut kids = atom.kids.iter();
         let mut pays = atom.pays.iter();
         let args = lang.constructors[&atom.op].columns.iter().map(|column| {
-            source_text(match column {
+            source_expr(match column {
                 Column::Payload(_) => pays.next().unwrap(),
                 _ => kids.next().unwrap(),
             })
         });
-        call(&atom.op, args)
+        Expr::Call(egglog::span!(), atom.op.clone(), args.collect())
     };
     let root_atom = atoms
         .iter()
         .find(|atom| matches!(lhs, Term::Node(..)) && atom.root == root && atom.path.is_empty());
-    let flat_lhs = root_atom.map_or_else(|| root.to_owned(), atom_term);
+    let flat_lhs = root_atom.map_or_else(|| Expr::Var(egglog::span!(), root.to_owned()), atom_term);
     let mut flat_names = vec![
         root_atom
             .map(|atom| vec![(vec![], atom.root.clone())])
@@ -157,44 +157,70 @@ pub(super) fn rewrite(
         if root_atom.is_some_and(|a| a.root == atom.root && a.path == atom.path) {
             continue;
         }
-        facts.push(format!("(= {} {})", atom.root, atom_term(atom)));
+        facts.push(Fact::Eq(
+            egglog::span!(),
+            Expr::Var(egglog::span!(), atom.root.clone()),
+            atom_term(atom),
+        ));
         flat_names.push(vec![(vec![], atom.root.clone())]);
     }
     for (var, value, _) in &conditions.values {
-        facts.push(format!("(= {var} {})", source_text(value)));
+        facts.push(Fact::Eq(
+            egglog::span!(),
+            Expr::Var(egglog::span!(), var.clone()),
+            source_expr(value),
+        ));
         flat_names.push(vec![]);
     }
 
-    facts.extend(conditions.comparisons.iter().map(|(comparison, a, b)| {
-        let kind = match (comparison.modulo_renaming, comparison.negated) {
-            (false, false) => "=",
-            (false, true) => "!=",
-            (true, false) => "renaming-=",
-            (true, true) => "renaming-!=",
-        };
-        format!("({kind} {a} {b})")
-    }));
-    facts.extend(
-        conditions
-            .free_names
+    let vars = |names: &[String]| {
+        names
             .iter()
-            .map(|(var, slots)| format!("(free-names-are {var} {})", slots.join(" "))),
-    );
-    facts.extend(conditions.free.iter().map(|(free, slot, vars)| {
-        format!(
-            "({} {slot} {})",
-            if *free { "free" } else { "not-free" },
-            vars.join(" ")
+            .map(|name| Expr::Var(egglog::span!(), name.clone()))
+            .collect()
+    };
+    let predicate = |head: &str, args| Fact::Fact(Expr::Call(egglog::span!(), head.into(), args));
+    facts.extend(conditions.comparisons.iter().map(|(comparison, a, b)| {
+        match (comparison.modulo_renaming, comparison.negated) {
+            (false, false) => Fact::Eq(
+                egglog::span!(),
+                Expr::Var(egglog::span!(), a.clone()),
+                Expr::Var(egglog::span!(), b.clone()),
+            ),
+            (false, true) => predicate("!=", vars(&[a.clone(), b.clone()])),
+            (true, false) => predicate("renaming-=", vars(&[a.clone(), b.clone()])),
+            (true, true) => predicate("renaming-!=", vars(&[a.clone(), b.clone()])),
+        }
+    }));
+    facts.extend(conditions.free_names.iter().map(|(var, slots)| {
+        predicate(
+            "free-names-are",
+            vars(
+                &std::iter::once(var.clone())
+                    .chain(slots.iter().cloned())
+                    .collect::<Vec<_>>(),
+            ),
         )
     }));
-    let flattened = format!(
-        "(rewrite {flat_lhs} {} :when ({}))",
-        source_text(rhs),
-        facts.join(" ")
-    );
+    facts.extend(conditions.free.iter().map(|(free, slot, names)| {
+        predicate(
+            if *free { "free" } else { "not-free" },
+            vars(
+                &std::iter::once(slot.clone())
+                    .chain(names.iter().cloned())
+                    .collect::<Vec<_>>(),
+            ),
+        )
+    }));
     names.patterns = flat_names;
     Rewrite {
-        source: flattened,
+        rule: SourceRewrite {
+            span: egglog::span!(),
+            lhs: flat_lhs,
+            rhs: source_expr(rhs),
+            conditions: facts,
+            name: String::new(),
+        },
         names,
     }
 }

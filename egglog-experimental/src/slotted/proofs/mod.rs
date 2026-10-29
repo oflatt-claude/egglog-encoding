@@ -14,10 +14,10 @@ mod unflatten;
 
 pub use checker::{Checked, SlottedCheckError, check_claim, check_proof};
 pub use format::{
-    SlottedConclusion, SlottedJustification, SlottedProof, SlottedProofId, SlottedProofStore,
-    SlottedProposition,
+    Claim, ClaimKind, SlottedConclusion, SlottedJustification, SlottedPremise, SlottedProof,
+    SlottedProofId, SlottedProofStore, SlottedProposition,
 };
-pub use source::{Claim, ClaimKind, Condition, Constructor, Rewrite, Rhs, SlottedProgram, Union};
+pub use source::{Constructor, SlottedProgram, SourceRule, Union};
 pub use terms::Renaming;
 
 use rustc_hash::FxHasher;

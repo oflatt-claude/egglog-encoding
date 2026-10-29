@@ -26,7 +26,7 @@ impl SlottedProofStore {
                 Step::Equivariance { proof, renaming } => vec![(*proof, rho.compose(renaming))],
                 Step::Rule { premises, .. } => premises
                     .iter()
-                    .map(|&p| (p, Renaming::identity()))
+                    .map(|p| (p.proof(), Renaming::identity()))
                     .collect(),
                 _ => self
                     .children(id)
@@ -43,6 +43,14 @@ impl SlottedProofStore {
             let result = match proof.justification {
                 Step::Equivariance { .. } => children[0],
                 Step::Sym(_) => self.simple_sym(children[0]),
+                Step::Alpha(_) => {
+                    let rhs = rename(&mut self.term_dag, &rho, proof.proposition.rhs);
+                    if rhs == self.proposition(children[0]).rhs {
+                        children[0]
+                    } else {
+                        self.alpha(children[0], rhs)
+                    }
+                }
                 Step::Proj { child_index, .. } => self
                     .project(children[0], child_index)
                     .expect("normalizing preserves projected children"),
@@ -68,11 +76,17 @@ impl SlottedProofStore {
                 Step::Fiat | Step::Rule { .. } => {
                     let step = match proof.justification {
                         Step::Rule {
-                            name, substitution, ..
+                            name,
+                            substitution,
+                            premises,
                         } => Step::Rule {
                             name,
                             substitution,
-                            premises: children,
+                            premises: premises
+                                .iter()
+                                .zip(children)
+                                .map(|(p, id)| p.with_proof(id))
+                                .collect(),
                         },
                         _ => Step::Fiat,
                     };

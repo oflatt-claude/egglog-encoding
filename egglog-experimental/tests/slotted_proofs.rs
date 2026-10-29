@@ -28,6 +28,16 @@ fn prove(compiler: &mut Compiler, graph: &mut EGraph, source: &str) -> Vec<Strin
 }
 
 #[test]
+fn payload_is_a_valid_carrier_name() {
+    let proofs = prove(
+        &mut compiler(ProofMode::Prove),
+        &mut new_egraph_with_proofs(),
+        "(datatype payload (F payload)) (let input (F $a)) (check (= input (F $a)))",
+    );
+    assert_eq!(proofs.len(), 1);
+}
+
+#[test]
 fn demo_proof_snapshots() {
     for (name, source) in [
         (
@@ -63,6 +73,13 @@ fn demo_proof_snapshots() {
              (let input (Lam $a $a))\n\
              (run 0)\n\
              (check (= input (Lam $b $b)))",
+        ),
+        (
+            "demo_scoped_alpha",
+            r#"(datatype U (Lam U U :binder 0))
+(let input (Lam $a (Lam $a $a)))
+(run 0)
+(check (= input (Lam $b (Lam $c $c))))"#,
         ),
         (
             "demo_binder_congruence",
@@ -396,6 +413,16 @@ fn encoded_claim_is_checked_against_its_source() {
     "#,
         )
         .unwrap();
+    for table in [
+        "SlottedRuleSource",
+        "SlottedLetSource",
+        "SlottedUnionSource",
+        "SlottedCarrier",
+        "rule-names",
+    ] {
+        assert!(!encoded.contains(table), "source metadata table {table}");
+    }
+    assert!(encoded.contains("(slotted-source (rewrite (F _p) _p :when () :name"));
     let mut graph = new_egraph_with_proofs();
     let printed = graph
         .parse_program(None, &encoded)
@@ -404,12 +431,9 @@ fn encoded_claim_is_checked_against_its_source() {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(graph.parse_and_run_program(None, &printed).is_ok());
+    graph.parse_and_run_program(None, &printed).unwrap();
     // Leave the encoded query true while changing only its surface claim.
-    let corrupt = encoded.replace(
-        "(prove-slotted (= U (\"x\"",
-        "(prove-slotted (= U (\"(Num 2)\"",
-    );
+    let corrupt = encoded.replace("(prove-slotted (= U (x ", "(prove-slotted (= U ((Num 2) ");
     assert_ne!(corrupt, encoded);
     assert!(
         new_egraph_with_proofs()
@@ -458,7 +482,7 @@ fn original_guards_are_checked_independently_of_flattening() {
     let corrupt = encoded
         .lines()
         .map(|line| {
-            if line.starts_with("(set (SlottedRuleSource ") {
+            if line.starts_with("(slotted-source (rewrite ") {
                 line.replace("(free $s (F $s))", "(not-free $s (F $s))")
             } else {
                 line.to_owned()
@@ -507,4 +531,134 @@ fn source_rule_globals_keep_their_declaration_scope() {
         );
         assert_eq!(proofs.len(), 1);
     }
+}
+
+#[test]
+fn source_resolution_preserves_payload_locals_and_polymorphic_globals() {
+    for source in [
+        r#"(datatype U (Num i64) (Pair U U))
+        (let n $a)
+        (let input (Pair (Num 2) n))
+        (rewrite (Pair (Num n) n) (Pair n (Num n)) :name "swap")
+        (run 1)
+        (check (= input (Pair n (Num 2))))"#,
+        r#"(datatype A (F A) (G A))
+        (datatype B (H B) (J B))
+        (let fixed $a)
+        (let left (F fixed))
+        (let right (H fixed))
+        (rewrite (F fixed) (G fixed) :when () :name "a")
+        (rewrite (H fixed) (J fixed) :name "b")
+        (run 1)
+        (check (= left (G fixed)))
+        (check (= right (J fixed)))"#,
+    ] {
+        let proofs = prove(
+            &mut compiler(ProofMode::Prove),
+            &mut new_egraph_with_proofs(),
+            source,
+        );
+        assert!(!proofs.is_empty());
+    }
+}
+
+#[test]
+fn retained_declarations_preserve_the_sort_of_earlier_axioms() {
+    let mut compiler = compiler(ProofMode::Prove);
+    let mut graph = new_egraph_with_proofs();
+    prove(
+        &mut compiler,
+        &mut graph,
+        r#"
+        (datatype A (WA A))
+        (let first $a)
+        (let second $b)
+        (union first second)
+        (rewrite first second :name "slots")
+    "#,
+    );
+    let proofs = prove(
+        &mut compiler,
+        &mut graph,
+        r#"
+        (datatype B (WB B))
+        (let wrapper (WA first))
+        (check (= wrapper (WA first)))
+        (check (= wrapper wrapper))
+    "#,
+    );
+    assert_eq!(proofs.len(), 2);
+}
+
+#[test]
+fn guard_names_can_still_name_constructors() {
+    let proofs = prove(
+        &mut compiler(ProofMode::Prove),
+        &mut new_egraph_with_proofs(),
+        r#"
+        (datatype U (free) (K))
+        (let input (free))
+        (rewrite (free) (K))
+        (run 1)
+        (check (= input (K)))
+    "#,
+    );
+    assert_eq!(proofs.len(), 1);
+}
+
+#[test]
+fn constructor_and_guard_with_the_same_name_resolve_in_context() {
+    let proofs = prove(
+        &mut compiler(ProofMode::Prove),
+        &mut new_egraph_with_proofs(),
+        r#"
+        (datatype U (free U U) (Pair U U) (Hit))
+        (let input (Pair $a $b))
+        (let other (free $a $b))
+        (rewrite (Pair $x $y) (Hit) :when ((free $x (Pair $x $y))))
+        (rewrite (free $x $y) (Hit))
+        (run 1)
+        (check (= input (Hit)))
+        (check (= other (Hit)))
+    "#,
+    );
+    assert_eq!(proofs.len(), 2);
+}
+
+#[test]
+fn native_variable_names_survive_source_replay() {
+    for source in [
+        r#"(datatype U (F U) (K)) (let p (F $a))
+        (rewrite (F _) (K)) (run 1) (check (= p (K)))"#,
+        r#"(datatype U (F U)) (let p (F $a))
+        (rewrite (F _) _) (run 1) (check (= p $a))"#,
+        r#"(datatype U (F U)) (let p (F $a))
+        (rewrite (F let) let) (run 1) (check (= p $a))"#,
+        r#"(datatype U (Num i64) (Hit)) (let p (Num 1))
+        (rewrite (Num $n) (Hit)) (run 1) (check (= p (Hit)))"#,
+    ] {
+        let proofs = prove(
+            &mut compiler(ProofMode::Prove),
+            &mut new_egraph_with_proofs(),
+            source,
+        );
+        assert_eq!(proofs.len(), 1);
+    }
+}
+
+#[test]
+fn guard_operands_determine_their_carrier_despite_a_constructor_namesake() {
+    let proofs = prove(
+        &mut compiler(ProofMode::Prove),
+        &mut new_egraph_with_proofs(),
+        r#"
+        (datatype A (free A A))
+        (datatype B (Pair B B) (K))
+        (let input (Pair $a $b))
+        (rewrite (Pair $x $y) (K) :when ((free $x (Pair $x $y))))
+        (run 1)
+        (check (= input (K)))
+    "#,
+    );
+    assert_eq!(proofs.len(), 1);
 }
