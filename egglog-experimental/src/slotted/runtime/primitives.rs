@@ -348,22 +348,30 @@ pub(super) fn register_symmetries(eg: &mut EGraph, arc: ArcSort, set: ArcSort) {
         Some(egglog::sort::normalize_set_term(termdag, elements.get(n..)?))
     });
     // `(group-coset-reps grp pinned)`: the least element of each coset of the
-    // pinned slots' stabilizer, sorted by content so that an index into the
-    // vector means the same in every run and in a proof; see `group::coset_reps`.
-    add_primitive_with_validator!(eg, "group-coset-reps" = {arc.clone(): ArcSort} |s: @SetContainer (set.clone()), pinned: @MapContainer (arc.inner_sorts()[0].clone())| -?> @VecContainer (arc.clone()) {{
+    // pinned slots' stabilizer; see `group::coset_reps`.
+    add_primitive_with_validator!(eg, "group-coset-reps" = {arc.clone(): ArcSort} |s: @SetContainer (set.clone()), pinned: @MapContainer (arc.inner_sorts()[0].clone())| -?> @SetContainer (set.clone()) {{
         let values: Vec<Value> = s.data.iter().copied().collect();
         let maps = slot_maps(&state, values.iter().copied())?;
         let pinned = slot_map(state.base_values(), &pinned.data);
-        let mut chosen: Vec<usize> = group::coset_reps(&maps, &pinned);
-        chosen.sort_by(|&i, &j| maps[i].cmp(&maps[j]));
-        Some(VecContainer { do_rebuild: false, data: chosen.into_iter().map(|i| values[i]).collect() })
+        let chosen = group::coset_reps(&maps, &pinned);
+        Some(SetContainer { do_rebuild: false, data: Arc::new(chosen.into_iter().map(|i| values[i]).collect()) })
     }}, |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
         let [s, pinned] = args else { return None };
         let maps = group_from_term(termdag, *s)?;
         let pinned = renaming_from_term(termdag, *pinned)?;
-        let mut chosen: Vec<Renaming> = group::coset_reps(&maps, &pinned).into_iter().map(|i| maps[i].clone()).collect();
-        chosen.sort();
-        Some(renamings_to_term(termdag, chosen))
+        let chosen: Vec<Renaming> = group::coset_reps(&maps, &pinned).into_iter().map(|i| maps[i].clone()).collect();
+        Some(group_to_term(termdag, &chosen))
+    });
+    // Indexed reads must agree with proof terms, independent of runtime value IDs.
+    add_primitive_with_validator!(eg, "group-elements" = {arc.clone(): ArcSort} |s: @SetContainer (set.clone())| -?> @VecContainer (arc.clone()) {{
+        let mut maps = slot_maps(&state, s.data.iter().copied())?;
+        maps.sort();
+        Some(VecContainer { do_rebuild: false, data: register_renamings(&mut state, maps) })
+    }}, |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+        let [s] = args else { return None };
+        let mut maps = group_from_term(termdag, *s)?;
+        maps.sort();
+        Some(renamings_to_term(termdag, maps))
     });
 }
 
