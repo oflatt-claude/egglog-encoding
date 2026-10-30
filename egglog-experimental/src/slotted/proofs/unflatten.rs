@@ -72,7 +72,7 @@ pub(super) fn lift(
                     out.plain(proof)
                 }
                 Step::Sym(p) => out.sym(lifted[p]),
-                Step::Trans(a, b) => out.trans(lifted[a], lifted[b]).map_err(|e| e.0)?,
+                Step::Trans(a, b) => out.trans(lifted[a], lifted[b]).map_err(|e| e.to_string())?,
                 Step::Congr {
                     proof: parent,
                     child_index,
@@ -90,7 +90,7 @@ pub(super) fn lift(
                     }
                     let p = out
                         .congr(lifted[parent], *child_index, child)
-                        .map_err(|e| e.0)?;
+                        .map_err(|e| e.to_string())?;
                     let rhs = out.edge(p).rhs;
                     let renaming = term_renaming(&out.term_dag, &[(rhs, proposition.rhs)])
                         .ok_or("lifting congruence changes the right-hand term's shape")?;
@@ -99,7 +99,9 @@ pub(super) fn lift(
                 Step::Proj {
                     proof: parent,
                     child_index,
-                } => out.project(lifted[parent], *child_index).map_err(|e| e.0)?,
+                } => out
+                    .project(lifted[parent], *child_index)
+                    .map_err(|e| e.to_string())?,
                 _ => {
                     return Err(
                         "unsupported ordinary step while unflattening a slotted proof".into(),
@@ -235,12 +237,18 @@ fn lift_rule(
     let renaming = witnesses
         .renaming(&[(start, claimed.lhs)])
         .ok_or("reconstruction changes the left-hand term's shape")?;
-    let middle = witnesses.store.trans(before, source).map_err(|e| e.0)?;
+    let middle = witnesses
+        .store
+        .trans(before, source)
+        .map_err(|e| e.to_string())?;
     let result = if witnesses.renaming(&[(rhs, claimed.rhs)]).is_some() {
         middle
     } else {
         let after = witnesses.equality(rhs, claimed.rhs)?;
-        witnesses.store.trans(middle, after).map_err(|e| e.0)?
+        witnesses
+            .store
+            .trans(middle, after)
+            .map_err(|e| e.to_string())?
     };
     Ok(witnesses.store.equivariance(result, renaming))
 }
@@ -301,7 +309,7 @@ impl<'a> Witnesses<'a> {
             return Ok(proof);
         }
         let inverse = self.store.sym(proof);
-        self.store.trans(inverse, proof).map_err(|e| e.0)
+        self.store.trans(inverse, proof).map_err(|e| e.to_string())
     }
 
     fn exists(&mut self, term: TermId) -> Result<ProofId> {
@@ -405,7 +413,7 @@ impl<'a> Witnesses<'a> {
                     if let Some(renaming) = self.renaming(&[(left, current)]) {
                         let edge = if reversed { self.store.sym(edge) } else { edge };
                         let edge = self.store.equivariance(edge, renaming);
-                        work.push_back(self.store.trans(proof, edge).map_err(|e| e.0)?);
+                        work.push_back(self.store.trans(proof, edge).map_err(|e| e.to_string())?);
                     }
                 }
             }
@@ -452,7 +460,7 @@ impl<'a> Witnesses<'a> {
             .copied()
             .ok_or("unknown starting term")?;
         let back = self.store.sym(initial);
-        let initial = self.store.trans(back, initial).map_err(|e| e.0)?;
+        let initial = self.store.trans(back, initial).map_err(|e| e.to_string())?;
         let mut work = VecDeque::from([initial]);
         let mut seen = Vec::new();
         while let Some(proof) = work.pop_front() {
@@ -493,7 +501,10 @@ impl<'a> Witnesses<'a> {
                         if child == target {
                             return Ok(parent);
                         }
-                        let projection = self.store.project(parent, index).map_err(|e| e.0)?;
+                        let projection = self
+                            .store
+                            .project(parent, index)
+                            .map_err(|e| e.to_string())?;
                         self.known.entry(child).or_insert(projection);
                         let proof = self.equality(child, target).or_else(|error| {
                             if rename_source {
@@ -510,7 +521,9 @@ impl<'a> Witnesses<'a> {
                                 self.renaming(&pairs).ok_or("inconsistent sibling names")?;
                             parent = self.store.equivariance(parent, renaming);
                         }
-                        self.store.congr(parent, index, proof).map_err(|e| e.0)
+                        self.store
+                            .congr(parent, index, proof)
+                            .map_err(|e| e.to_string())
                     });
                     if expanded.is_err() {
                         break;
@@ -534,7 +547,7 @@ impl<'a> Witnesses<'a> {
                     };
                     let edge = if reversed { self.store.sym(edge) } else { edge };
                     let edge = self.store.equivariance(edge, renaming);
-                    work.push_back(self.store.trans(proof, edge).map_err(|e| e.0)?);
+                    work.push_back(self.store.trans(proof, edge).map_err(|e| e.to_string())?);
                 }
             }
         }

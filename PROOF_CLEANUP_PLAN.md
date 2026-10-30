@@ -72,16 +72,26 @@ checking with egglog, and minimal compilation metadata.
 
 ### Renaming-guard finding
 
-The complete ordinary Rule branch cannot validate a variable-operand guard such
-as `(renaming-= x y)` using equality-connected representatives. Its primitive
-validator sees only the substituted operands; normalization lifts constructor
-operands but leaves variable operands unchanged. Therefore the slotted checker
-must dispatch the original guard locally and share ordinary fact/action checks.
-No normal-checker semantic change is needed.
+With the original rule body unchanged, the complete ordinary Rule branch cannot
+validate a variable-operand guard such as `(renaming-= x y)` using equality-connected
+representatives. Its primitive validator sees only the substituted operands;
+normalization lifts constructor operands but leaves variable operands unchanged.
+The current slotted checker therefore dispatches the original guard locally and
+shares ordinary fact/action checks. Normal-checker semantics are unchanged.
 
 Guard evidence is an ordinary proof `a = c`. The validator checks whether a slot
 permutation takes `b` to an alpha-equivalent spelling of `c`. Mere existence
 proofs of `a` and `b` are insufficient.
+
+A primitive-based alternative would normalize each positive renaming guard into
+`(= a ar)`, `(= b br)`, and `(renaming-= ar br)`, where `ar` and `br` are fresh
+witness variables. Ordinary equality premises would justify the representatives;
+a primitive validator would compare their binding scopes and free names modulo
+a permutation. This can use ordinary rule checking, but introduces facts and
+variables beyond rewrite desugaring. Choosing a different substitution alone
+cannot handle guards whose operands are both captured globals. This alternative
+is a design option, not the current implementation or an accepted change to the
+original-body constraint.
 
 ## Source cleanup: implemented
 
@@ -182,3 +192,8 @@ Validation logs: `/tmp/slotted-proof-wrapper-final-check.log`,
 `/tmp/slotted-proof-wrapper-review-check.log`, and
 `/tmp/slotted-proof-wrapper-review-unit.log`. Review:
 `/tmp/slotted-proof-wrapper-fable-review.txt`.
+
+`MalformedStep` now exposes structured error variants. Its regression checks
+that invalid step construction reports the conflicting inputs without changing
+the store. Root `make check` passed again, including all 96 experimental unit
+tests. Validation log: `/tmp/slotted-malformed-step-check.log`.

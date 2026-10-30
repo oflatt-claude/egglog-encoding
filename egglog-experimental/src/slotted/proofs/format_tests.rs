@@ -15,3 +15,44 @@ fn fresh_display_names_cover_permutation_only_coordinates() {
         "(Equivariance (= $a $a) (Fiat (= $a $a)) (renaming ($v2 $v3) ($v3 $v2)))"
     );
 }
+
+#[test]
+fn malformed_steps_preserve_the_store_and_report_the_conflict() {
+    let mut dag = TermDag::default();
+    let a = slot_term(&mut dag, 0);
+    let b = slot_term(&mut dag, 1);
+    let fa = dag.app("F".into(), vec![a]);
+    let mut store = SlottedProofStore::new(dag);
+    let a_refl = store.fiat(a, a);
+    let b_refl = store.fiat(b, b);
+    let f_refl = store.fiat(fa, fa);
+    let before = store.len();
+
+    assert_eq!(
+        store.trans(a_refl, b_refl),
+        Err(MalformedStep::MiddleTermMismatch {
+            left: "$0".into(),
+            right: "$1".into(),
+        })
+    );
+    assert_eq!(
+        store.congr(f_refl, 0, b_refl),
+        Err(MalformedStep::ChildMismatch {
+            child: "$0".into(),
+            premise_lhs: "$1".into(),
+        })
+    );
+    for result in [store.congr(a_refl, 0, a_refl), store.project(a_refl, 0)] {
+        assert_eq!(
+            result,
+            Err(MalformedStep::ExpectedApplication { term: "$0".into() })
+        );
+    }
+    for result in [store.congr(f_refl, 1, a_refl), store.project(f_refl, 1)] {
+        assert_eq!(
+            result,
+            Err(MalformedStep::ChildIndexOutOfBounds { index: 1, arity: 1 })
+        );
+    }
+    assert_eq!(store.len(), before);
+}
