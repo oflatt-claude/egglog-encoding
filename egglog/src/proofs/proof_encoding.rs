@@ -2367,11 +2367,16 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             ""
         };
+        let subsumed_opt = if rule.include_subsumed {
+            ":internal-include-subsumed"
+        } else {
+            ""
+        };
         let instrumented = format!(
             "(rule ({})
                    ({proof_prelude}
                     {})
-                    {ruleset_opt} {eval_opt}
+                    {ruleset_opt} {eval_opt} {subsumed_opt}
                     :name \"{name}\")",
             ListDisplay(facts, " "),
             ListDisplay(actions, " "),

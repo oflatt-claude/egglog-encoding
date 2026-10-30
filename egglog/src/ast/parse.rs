@@ -638,11 +638,13 @@ impl Parser {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;
                         let mut unextractable = false;
+                        let mut injective = false;
                         let mut hidden = false;
                         let mut role = FunctionRole::Ordinary;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
                                 (":unextractable", []) => unextractable = true,
+                                (":injective", []) => injective = true,
                                 (":internal-hidden", []) => hidden = true,
                                 (":internal-role", [value])
                                     if value.expect_atom("constructor role")? == "global" =>
@@ -660,6 +662,7 @@ impl Parser {
                             schema: self.parse_schema(inputs, output)?,
                             cost,
                             unextractable,
+                            injective,
                             hidden,
                             role,
                         }]
@@ -1311,13 +1314,22 @@ impl Parser {
         let (name, tail, span) = sexp.expect_call("datatype variant")?;
         self.ensure_definition_name(&name, &span)?;
 
-        let (types, cost, unextractable) = match tail {
-            [types @ .., Sexp::Atom(o, _)] if *o == ":unextractable" => (types, None, true),
-            [types @ .., Sexp::Atom(o, _), c] if *o == ":cost" => {
-                (types, Some(c.expect_uint("cost")?), false)
+        let option_start = tail
+            .iter()
+            .position(|sexp| matches!(sexp, Sexp::Atom(option, _) if option.starts_with(':')))
+            .unwrap_or(tail.len());
+        let (types, options) = tail.split_at(option_start);
+        let mut cost = None;
+        let mut unextractable = false;
+        let mut injective = false;
+        for (key, values) in self.parse_options(options)? {
+            match (key, values) {
+                (":cost", [value]) => cost = Some(value.expect_uint("cost")?),
+                (":unextractable", []) => unextractable = true,
+                (":injective", []) => injective = true,
+                _ => return error!(span, "could not parse datatype variant options"),
             }
-            types => (types, None, false),
-        };
+        }
 
         Ok(Variant {
             span,
@@ -1327,6 +1339,7 @@ impl Parser {
             })?,
             cost,
             unextractable,
+            injective,
         })
     }
 

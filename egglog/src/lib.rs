@@ -43,9 +43,9 @@ use egglog_ast::util::ListDisplay;
 use egglog_bridge::{ColumnTy, QueryEntry, TableKind};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
-use egglog_reports::{
-    OverallReport, ReportLevel, RulesetTimingRole, RunReport, TimingSummary, TimingSummaryError,
-};
+use egglog_reports::{OverallReport, ReportLevel, RulesetTimingRole, RunReport};
+#[cfg(feature = "bin")]
+use egglog_reports::{TimingSummary, TimingSummaryError};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
 };
@@ -54,6 +54,8 @@ use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
+#[doc(hidden)]
+pub use proofs::proof_certificate::{CertificateVerdict, check_certificates};
 pub use proofs::proof_encoding_helpers::{
     file_supports_proofs, file_supports_proofs_with_egraph, program_supports_proofs,
 };
@@ -3145,6 +3147,7 @@ impl EGraph {
         &self.overall_report.run
     }
 
+    #[cfg(feature = "bin")]
     pub(crate) fn timing_summary(&self) -> Result<TimingSummary, TimingSummaryError> {
         TimingSummary::from_report(&self.overall_report)
     }
@@ -4177,6 +4180,7 @@ mod tests {
             iterations_before
         );
         assert!(egraph.overall_report.commands_check > check_time_before);
+        #[cfg(feature = "bin")]
         assert!(
             egraph
                 .timing_summary()

@@ -9,6 +9,35 @@ pub(crate) fn desugar_command(
     parser: &mut Parser,
     proof_testing: bool,
 ) -> Result<Vec<NCommand>, Error> {
+    // The experimental extension must consume this annotation before core lowering.
+    let injective_span = match &command {
+        Command::Constructor {
+            span,
+            injective: true,
+            ..
+        } => Some(span),
+        Command::Datatype { variants, .. } => {
+            variants.iter().find(|v| v.injective).map(|v| &v.span)
+        }
+        Command::Datatypes { datatypes, .. } => {
+            datatypes
+                .iter()
+                .find_map(|(_, _, datatype)| match datatype {
+                    Subdatatypes::Variants(variants) => {
+                        variants.iter().find(|v| v.injective).map(|v| &v.span)
+                    }
+                    Subdatatypes::NewSort(..) => None,
+                })
+        }
+        _ => None,
+    };
+    if let Some(span) = injective_span {
+        return Err(ParseError(
+            span.clone(),
+            ":injective requires egglog-experimental".into(),
+        )
+        .into());
+    }
     let res = match command {
         Command::Function {
             span,
@@ -42,6 +71,7 @@ pub(crate) fn desugar_command(
             schema,
             cost,
             unextractable,
+            injective: _,
             hidden,
             role,
         } => {
@@ -109,7 +139,7 @@ pub(crate) fn desugar_command(
                             outputs: vec![datatype.clone()],
                         },
                         variant.cost,
-                        false,
+                        variant.unextractable,
                         false,
                     )));
                 }

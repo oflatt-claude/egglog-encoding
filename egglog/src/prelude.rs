@@ -797,6 +797,7 @@ pub fn add_constructor(
         schema,
         cost,
         unextractable,
+        injective: false,
         hidden: false,
         role: FunctionRole::Ordinary,
     }])
