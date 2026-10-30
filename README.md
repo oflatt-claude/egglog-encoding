@@ -83,9 +83,10 @@ changes and downstream behavior in one reviewable unit.
 Proof-specific file tests use the `proofs/` filter: explicit `(prove ...)`
 fixtures under `tests/proofs` plus every proof-compatible file under
 proof-testing mode. Proof testing turns checks outside `fail` into proof queries
-and snapshots the generated proofs; checks inside `fail` remain negative
-assertions. Use `make proof-tests` for focused iteration and
-`make rust-check` or `make check` for the final compatibility gate.
+and extracts into `prove-extract` commands, verifies each proof, and snapshots
+the certificates. Commands inside `fail` retain their ordinary behavior. Use
+`make proof-tests` for focused iteration and `make rust-check` or `make check`
+for complete validation.
 
 ## Benchmarking
 
@@ -129,8 +130,8 @@ Treatments map directly to engine modes:
 | `off` | egglog without term or proof encoding |
 | `term` | egglog with `--term-encoding` |
 | `proofs` | egglog with `--proofs` |
-| `proof-extraction` | egglog with `--proof-extraction`; rewrite checks, then extract, materialize, clean, and simplify proofs without verifying them |
-| `proof-testing` | egglog with `--proof-testing`; extract and verify proofs for checks |
+| `proof-extraction` | egglog with `--proof-extraction`; rewrite checks and extracts, then extract, materialize, clean, and simplify proofs without verifying them |
+| `proof-testing` | egglog with `--proof-testing`; extract and verify proofs for checks and extraction results |
 | `egg` | current egg without explanation recording |
 | `egg-proofs` | current egg with explanation recording enabled |
 | `egg-proof-extraction` | current egg with explanation recording and extraction |
