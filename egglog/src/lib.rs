@@ -60,8 +60,7 @@ pub use proofs::proof_encoding_helpers::{
 /// Proof reconstruction and checking APIs.
 pub mod proof {
     pub use crate::proofs::proof_checker::{
-        ProofCheckContext, ProofCheckError, ProofCheckErrorKind, check_actions_produce_equality,
-        check_fact_matches_proposition,
+        ProofCheckContext, ProofCheckError, ProofCheckErrorKind,
     };
     pub use crate::proofs::proof_format::{
         Justification, Proof, ProofId, ProofStore, Proposition, proof_term_to_string,

@@ -45,7 +45,7 @@ pub fn proof_term_to_string(dag: &TermDag, proof: TermId) -> String {
         match head {
             "=" => "prop",
             "Fiat" | "Rule" | "Merge" | "Trans" | "Sym" | "Congr" | "Proj"
-            | "ContainerNormalize" | "Eval" | "Equivariance" | "Alpha" => "prf",
+            | "ContainerNormalize" | "Eval" | "Equivariance" | "Alpha" | "Primitive" => "prf",
             _ => "t",
         }
         .to_string()

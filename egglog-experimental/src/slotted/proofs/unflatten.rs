@@ -1,9 +1,10 @@
 //! Lift proofs of flattened rewrites back to the original source rules.
 use super::coordinates::Coordinates;
 use super::format::{ProofId, SlottedConclusion, SlottedProof, SlottedProofStore};
-use super::source::{Requirement, SlottedProgram, SourceFact, pattern_term};
+use super::source::{SlottedProgram, pattern_term};
 use super::terms::{Renaming, term_renaming};
 use super::{HashMap, HashSet};
+use egglog::ast::{ResolvedExpr, ResolvedFact};
 use egglog::proof::{Justification as Step, Proposition};
 use egglog::{Term, TermId};
 use std::collections::VecDeque;
@@ -23,8 +24,12 @@ pub(super) fn lift(
     let mut out = Coordinates::new(old);
     let mut lifted = HashMap::default();
     for (id, proof) in steps {
-        let proposition = proof.proposition().clone();
+        let proposition = proof
+            .proposition()
+            .cloned()
+            .ok_or("primitive evidence occurs before source rule reconstruction")?;
         let result = match &proof {
+            SlottedProof::Primitive { .. } => unreachable!("primitive evidence has no equality"),
             SlottedProof::Alpha { proof, .. } => {
                 let premise = out.proof(lifted[proof]);
                 let proof = out.alpha(premise, proposition.rhs);
@@ -196,23 +201,41 @@ fn lift_rule(
     let mut witnesses = Witnesses::new(store, program, premises);
     let root = witnesses.exists(lhs)?;
     let mut source_premises = vec![root];
-    for requirement in rule.conditions().iter().flat_map(SourceFact::requirements) {
-        source_premises.push(match requirement {
-            Requirement::Exists(t) => {
-                let t = instance(witnesses.store, t)?;
-                witnesses.exists(t)?
-            }
-            Requirement::RenamingEqual(a, b) => {
-                let a = instance(witnesses.store, a)?;
-                let b = instance(witnesses.store, b)?;
-                witnesses.renaming_equality(a, b)?
-            }
-            Requirement::Equal(a, b) => {
+    for fact in rule.conditions() {
+        let proof = match fact {
+            ResolvedFact::Eq(_, a, b) => {
                 let a = instance(witnesses.store, a)?;
                 let b = instance(witnesses.store, b)?;
                 witnesses.condition_equality(program, a, b)?
             }
-        });
+            ResolvedFact::Fact(ResolvedExpr::Call(
+                _,
+                egglog::ResolvedCall::Primitive(head),
+                args,
+            )) => {
+                let terms = args
+                    .iter()
+                    .map(|arg| instance(witnesses.store, arg))
+                    .collect::<Result<Vec<_>>>()?;
+                let arguments = if head.name() == "renaming-=" {
+                    vec![
+                        witnesses.renaming_equality(terms[0], terms[1])?,
+                        witnesses.reflexive(terms[1])?,
+                    ]
+                } else {
+                    terms
+                        .into_iter()
+                        .map(|term| witnesses.reflexive(term))
+                        .collect::<Result<Vec<_>>>()?
+                };
+                witnesses.store.primitive(head.name(), arguments)
+            }
+            ResolvedFact::Fact(expr) => {
+                let term = instance(witnesses.store, expr)?;
+                witnesses.exists(term)?
+            }
+        };
+        source_premises.push(proof);
     }
     let source = witnesses.store.ordinary(
         Proposition::new(lhs, rhs),
@@ -304,6 +327,9 @@ impl<'a> Witnesses<'a> {
     }
 
     fn reflexive(&mut self, term: TermId) -> Result<ProofId> {
+        if self.program.is_built(&self.store.term_dag, term) {
+            return Ok(self.store.fiat(term, term));
+        }
         let proof = self.exists(term)?;
         if self.store.proposition(proof).lhs == term {
             return Ok(proof);

@@ -5,6 +5,7 @@
 pub mod checker;
 mod coordinates;
 pub mod format;
+mod guards;
 mod lift_slots;
 mod normalize;
 pub(crate) mod pipeline;

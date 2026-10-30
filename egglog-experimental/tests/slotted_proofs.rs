@@ -68,6 +68,15 @@ fn demo_proof_snapshots() {
 (check (= input (Hit)))"#,
         ),
         (
+            "demo_multiple_guards",
+            r#"(datatype U (Pair U U) (Hit))
+(let input (Pair $a $b))
+(rewrite (Pair $x $y) (Hit)
+  :when ((renaming-= $x $y) (not-free $x $y) (!= $x $y)) :name "guards")
+(run 1)
+(check (= input (Hit)))"#,
+        ),
+        (
             "demo_alpha_renaming",
             "(datatype U (Lam U U :binder 0))\n\
              (let input (Lam $a $a))\n\
@@ -494,7 +503,12 @@ fn original_guards_are_checked_independently_of_flattening() {
     let error = new_egraph_with_proofs()
         .parse_and_run_program(None, &corrupt)
         .unwrap_err();
-    assert!(error.to_string().contains("not-free fails"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("Primitive 'slotted-proof-not-free' validation failed"),
+        "{error}"
+    );
 }
 
 #[test]

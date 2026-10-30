@@ -1,4 +1,4 @@
-//! Ordinary equalities over slotted surface terms and their justifications.
+//! Equality proofs and primitive guard evidence over slotted surface terms.
 
 use super::HashMap;
 use super::terms::{Renaming, all_slots, rename, slot_of};
@@ -42,7 +42,7 @@ pub struct SlottedConclusion {
     pub renaming: Renaming,
 }
 
-/// An ordinary egglog proof step, or a slotted equality extension.
+/// An ordinary egglog proof step, a slotted equality extension, or primitive evidence.
 /// Every premise ID refers to the same [`SlottedProofStore`].
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum SlottedProof {
@@ -64,14 +64,26 @@ pub enum SlottedProof {
         /// The permutation applied to both endpoints.
         renaming: Renaming,
     },
+    /// Evidence for one primitive fact, checked in the enclosing source rule.
+    /// Each argument proves `operand = representative`. Only `renaming-=` may
+    /// use a different representative; other guards require reflexive arguments.
+    Primitive {
+        /// The source predicate's name.
+        name: String,
+        /// Ordinary equality proofs for the operands, in source order.
+        arguments: Vec<ProofId>,
+    },
 }
 
 impl SlottedProof {
-    /// The ordinary equality stated by this step.
-    pub fn proposition(&self) -> &Proposition {
+    /// The equality stated by this step; primitive evidence is not an equality.
+    pub fn proposition(&self) -> Option<&Proposition> {
         match self {
-            Self::Ordinary(proof) => proof.proposition(),
-            Self::Alpha { proposition, .. } | Self::Equivariance { proposition, .. } => proposition,
+            Self::Ordinary(proof) => Some(proof.proposition()),
+            Self::Alpha { proposition, .. } | Self::Equivariance { proposition, .. } => {
+                Some(proposition)
+            }
+            Self::Primitive { .. } => None,
         }
     }
 
@@ -80,6 +92,7 @@ impl SlottedProof {
         match self {
             Self::Ordinary(proof) => proof.justification().premises(),
             Self::Alpha { proof, .. } | Self::Equivariance { proof, .. } => vec![*proof],
+            Self::Primitive { arguments, .. } => arguments.clone(),
         }
     }
 }
@@ -163,9 +176,11 @@ impl SlottedProofStore {
         &self.proofs[id.index()]
     }
 
-    /// The proposition stated by a stored proof step.
+    /// The equality stated by a stored step. Panics for primitive evidence.
     pub fn proposition(&self, id: ProofId) -> &Proposition {
-        self.proofs[id.index()].proposition()
+        self.proofs[id.index()]
+            .proposition()
+            .expect("expected an equality proof")
     }
 
     /// Record a proof as stated. The checker decides whether it is valid.
@@ -185,6 +200,14 @@ impl SlottedProofStore {
             proposition,
             justification,
         )))
+    }
+
+    /// Record operand evidence for one source primitive condition.
+    pub fn primitive(&mut self, name: impl Into<String>, arguments: Vec<ProofId>) -> ProofId {
+        self.add(SlottedProof::Primitive {
+            name: name.into(),
+            arguments,
+        })
     }
 
     /// State a source union or a built term's reflexivity; the checker validates it.
@@ -353,8 +376,11 @@ impl SlottedProofStore {
             .unwrap_or_else(|| (0..self.len()).map(ProofId::from_usize).collect());
         for id in ids {
             let proof = self.get(id);
-            let proposition = proof.proposition();
-            let mut terms = vec![proposition.rhs, proposition.lhs];
+            let mut terms: Vec<_> = proof
+                .proposition()
+                .into_iter()
+                .flat_map(|p| [p.rhs, p.lhs])
+                .collect();
             match proof {
                 SlottedProof::Equivariance { renaming, .. } => {
                     slots.extend(renaming.entries().flat_map(|(a, b)| [a, b]));
@@ -369,7 +395,7 @@ impl SlottedProofStore {
                         terms.extend(substitution.values().rev().copied());
                     }
                 }
-                SlottedProof::Alpha { .. } => {}
+                SlottedProof::Alpha { .. } | SlottedProof::Primitive { .. } => {}
             }
             while let Some(term) = terms.pop() {
                 if let Some(slot) = slot_of(&self.term_dag, term) {
@@ -460,6 +486,7 @@ impl SlottedProofStore {
     }
 
     /// Print a proof in egglog's S-expression format, with source slot names.
+    /// Requires acyclic dependencies and equality steps as primitive operands.
     pub fn proof_to_string(&self, root: ProofId) -> String {
         let names = self.display_names(Some(root), []);
         let (mut dag, terms) = self.named_dag(&names);
@@ -477,17 +504,15 @@ impl SlottedProofStore {
         let mut proofs = HashMap::default();
         for id in self.dependencies(root) {
             let proof = self.get(id);
-            let proposition = proof.proposition();
-            let equality = dag.app(
-                "=".into(),
-                vec![terms[proposition.lhs], terms[proposition.rhs]],
-            );
+            let equality = proof
+                .proposition()
+                .map(|p| dag.app("=".into(), vec![terms[p.lhs], terms[p.rhs]]));
             let term = match proof {
                 SlottedProof::Ordinary(proof) => {
                     proof.to_term(dag, |t| terms[t], |_, id| proofs[&id])
                 }
                 SlottedProof::Alpha { proof, .. } => {
-                    dag.app("Alpha".into(), vec![equality, proofs[proof]])
+                    dag.app("Alpha".into(), vec![equality.unwrap(), proofs[proof]])
                 }
                 SlottedProof::Equivariance {
                     proof, renaming, ..
@@ -495,8 +520,19 @@ impl SlottedProofStore {
                     let renaming = Self::renaming_term(dag, renaming, names);
                     dag.app(
                         "Equivariance".into(),
-                        vec![equality, proofs[proof], renaming],
+                        vec![equality.unwrap(), proofs[proof], renaming],
                     )
+                }
+                SlottedProof::Primitive { name, arguments } => {
+                    let operands = arguments
+                        .iter()
+                        .map(|&p| terms[self.proposition(p).lhs])
+                        .collect();
+                    let fact = dag.app(name.clone(), operands);
+                    let arguments = std::iter::once(fact)
+                        .chain(arguments.iter().map(|p| proofs[p]))
+                        .collect();
+                    dag.app("Primitive".into(), arguments)
                 }
             };
             proofs.insert(id, term);
