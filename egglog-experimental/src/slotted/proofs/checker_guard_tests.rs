@@ -1,7 +1,7 @@
 use super::check_proof;
-use crate::slotted::proofs::format::{SlottedProof, SlottedProofStore};
+use crate::slotted::proofs::format::{RulePremise, SlottedProofStore};
 use crate::slotted::proofs::source::{ColumnKind, SlottedProgram};
-use crate::slotted::proofs::terms::{Renaming, slot_term};
+use crate::slotted::proofs::terms::slot_term;
 use egglog::ast::Literal;
 use egglog::proof::{Justification, Proposition};
 use egglog::{Term, TermDag};
@@ -144,41 +144,47 @@ fn renaming_guard_checks_an_equality_witness() {
         ("renaming-=", wrong_left, false),
     ] {
         let evidence = if predicate == "renaming-=" {
-            store.renaming_eq(evidence, right)
+            RulePremise::RenamingEq {
+                left: evidence,
+                right,
+            }
         } else {
-            evidence
+            RulePremise::Equality(evidence)
         };
-        let proof = store.ordinary(
+        let proof = store.rule(
             Proposition::new(input, hit),
-            Justification::Rule {
-                name: predicate.into(),
-                substitution: vec![("x".into(), a), ("y".into(), b)].into_iter().collect(),
-                premise_proofs: vec![root, evidence],
-            },
+            predicate.into(),
+            vec![("x".into(), a), ("y".into(), b)].into_iter().collect(),
+            vec![RulePremise::Equality(root), evidence],
         );
         assert_eq!(check_proof(&mut store, &program, proof).is_ok(), valid);
     }
 
     for (predicate, guard, error) in [
-        ("renaming-=", union, "requires a RenamingEq proof"),
         (
             "renaming-=",
-            store.renaming_eq(right, union),
+            RulePremise::Equality(union),
+            "requires a RenamingEq premise",
+        ),
+        (
+            "renaming-=",
+            RulePremise::RenamingEq {
+                left: right,
+                right: union,
+            },
             "equality fact mismatch",
         ),
         (
             "renaming-!=",
-            store.renaming_eq(union, right),
-            "is not an equality",
+            RulePremise::RenamingEq { left: union, right },
+            "expected an equality premise",
         ),
     ] {
-        let proof = store.ordinary(
+        let proof = store.rule(
             Proposition::new(input, hit),
-            Justification::Rule {
-                name: predicate.into(),
-                substitution: [("x".into(), a), ("y".into(), b)].into_iter().collect(),
-                premise_proofs: vec![root, guard],
-            },
+            predicate.into(),
+            [("x".into(), a), ("y".into(), b)].into_iter().collect(),
+            vec![RulePremise::Equality(root), guard],
         );
         let actual = check_proof(&mut store, &program, proof).unwrap_err();
         assert!(actual.to_string().contains(error), "{actual}");
@@ -308,14 +314,15 @@ fn renaming_guards_preserve_binding_scopes_and_injectivity() {
         let root = store.fiat(input, input);
         let witness = store.fiat(a, program.unions[0].rhs);
         let right = store.fiat(b, b);
-        let guard = store.renaming_eq(witness, right);
-        let proof = store.ordinary(
+        let guard = RulePremise::RenamingEq {
+            left: witness,
+            right,
+        };
+        let proof = store.rule(
             Proposition::new(input, hit),
-            Justification::Rule {
-                name: "guard".into(),
-                substitution: [("x".into(), a), ("y".into(), b)].into_iter().collect(),
-                premise_proofs: vec![root, guard],
-            },
+            "guard".into(),
+            [("x".into(), a), ("y".into(), b)].into_iter().collect(),
+            vec![RulePremise::Equality(root), guard],
         );
         assert_eq!(
             check_proof(&mut store, &program, proof).is_ok(),
@@ -326,7 +333,7 @@ fn renaming_guards_preserve_binding_scopes_and_injectivity() {
 }
 
 #[test]
-fn guard_evidence_cannot_be_used_as_an_equality() {
+fn renaming_premises_require_a_renaming_condition() {
     let mut dag = TermDag::default();
     let mut program = SlottedProgram::default();
     program.add_constructor("F", vec![ColumnKind::Child]);
@@ -339,49 +346,53 @@ fn guard_evidence_cannot_be_used_as_an_equality() {
     let mut store = SlottedProofStore::new(dag);
     let root = store.fiat(input, input);
     let refl = store.fiat(slot, slot);
-    let guard = store.renaming_eq(refl, refl);
-    assert!(check_proof(&mut store, &program, guard).is_err());
-
-    for step in [
-        Justification::Sym(guard),
-        Justification::Trans(refl, guard),
-        Justification::Congr {
-            proof: root,
-            child_index: 0,
-            child_proof: guard,
-        },
-        Justification::Proj {
-            proof: guard,
-            child_index: 0,
-        },
-        Justification::Rule {
-            name: "r".into(),
-            substitution: [("x".into(), slot)].into_iter().collect(),
-            premise_proofs: vec![root, guard],
-        },
+    let guard = RulePremise::RenamingEq {
+        left: refl,
+        right: refl,
+    };
+    for premises in [
+        vec![RulePremise::Equality(root), guard],
+        vec![guard, RulePremise::Equality(refl)],
     ] {
-        let proof = store.ordinary(Proposition::new(input, slot), step);
+        let proof = store.rule(
+            Proposition::new(input, slot),
+            "r".into(),
+            [("x".into(), slot)].into_iter().collect(),
+            premises,
+        );
         let error = check_proof(&mut store, &program, proof).unwrap_err();
-        assert!(error.to_string().contains("is not an equality"), "{error}");
+        assert!(
+            error.to_string().contains("expected an equality premise"),
+            "{error}"
+        );
     }
-    for step in [
-        SlottedProof::Alpha {
-            proposition: Proposition::new(slot, slot),
-            proof: guard,
-        },
-        SlottedProof::Equivariance {
-            proposition: Proposition::new(slot, slot),
-            proof: guard,
-            renaming: Renaming::identity(),
-        },
-        SlottedProof::RenamingEq {
-            left: guard,
-            right: refl,
-        },
-    ] {
-        let proof = store.add(step);
-        let error = check_proof(&mut store, &program, proof).unwrap_err();
-        assert!(error.to_string().contains("is not an equality"), "{error}");
+}
+
+#[test]
+fn both_renaming_operands_participate_in_cycle_detection() {
+    use egglog::proof::ProofId;
+    use egglog_numeric_id::NumericId;
+
+    let mut dag = TermDag::default();
+    let slot = slot_term(&mut dag, 0);
+    let mut store = SlottedProofStore::new(dag);
+    let refl = store.fiat(slot, slot);
+    for left_is_cyclic in [true, false] {
+        let cyclic = ProofId::from_usize(store.len());
+        let (left, right) = if left_is_cyclic {
+            (cyclic, refl)
+        } else {
+            (refl, cyclic)
+        };
+        let proof = store.rule(
+            Proposition::new(slot, slot),
+            "r".into(),
+            Default::default(),
+            vec![RulePremise::RenamingEq { left, right }],
+        );
+        assert_eq!(proof, cyclic);
+        let error = check_proof(&mut store, &SlottedProgram::default(), proof).unwrap_err();
+        assert!(error.to_string().contains("the proof is cyclic"), "{error}");
     }
 }
 
@@ -432,14 +443,12 @@ fn guard_representatives_preserve_captured_operands_and_later_binder_declaration
         let root = store.fiat(input, input);
         let left = store.fiat(a, program.unions[0].rhs);
         let right = store.fiat(b, program.unions[1].rhs);
-        let guard = store.renaming_eq(left, right);
-        let proof = store.ordinary(
+        let guard = RulePremise::RenamingEq { left, right };
+        let proof = store.rule(
             Proposition::new(input, hit),
-            Justification::Rule {
-                name: "r".into(),
-                substitution: [("x".into(), a), (local.into(), b)].into_iter().collect(),
-                premise_proofs: vec![root, guard],
-            },
+            "r".into(),
+            [("x".into(), a), (local.into(), b)].into_iter().collect(),
+            vec![RulePremise::Equality(root), guard],
         );
         check_proof(&mut store, &program, proof).unwrap();
         let simplified = store.simplify(proof);
@@ -468,14 +477,12 @@ fn guard_operand_equalities_keep_their_carrier_sort() {
         let root = store.fiat(input, input);
         let left = store.fiat(a, b);
         let right = store.fiat(b, b);
-        let guard = store.renaming_eq(left, right);
-        let proof = store.ordinary(
+        let guard = RulePremise::RenamingEq { left, right };
+        let proof = store.rule(
             Proposition::new(input, a),
-            Justification::Rule {
-                name: "r".into(),
-                substitution: [("x".into(), a), ("y".into(), b)].into_iter().collect(),
-                premise_proofs: vec![root, guard],
-            },
+            "r".into(),
+            [("x".into(), a), ("y".into(), b)].into_iter().collect(),
+            vec![RulePremise::Equality(root), guard],
         );
         assert_eq!(
             check_proof(&mut store, &program, proof).is_ok(),

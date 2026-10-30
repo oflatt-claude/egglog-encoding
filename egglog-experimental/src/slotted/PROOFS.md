@@ -53,10 +53,14 @@ The explicit Equivariance rule applies this operation to both endpoints of a pro
 
 # Justifications
 
-`SlottedProof` wraps `Ordinary(egglog::proof::Proof)` and adds `Alpha`,
-`Equivariance`, and `RenamingEq`. All premises use egglog's
-`ProofId` in the same slotted proof store. Ordinary steps use egglog's
-justifications and printer.
+`SlottedProof` wraps ordinary egglog steps and adds `Rule(RuleProof)`, `Alpha`,
+and `Equivariance`. Every stored step states an ordinary equality proposition;
+equality dependencies use egglog's `ProofId` in the same slotted proof store.
+Ordinary steps use egglog's justifications and printer.
+
+A rule has `Vec<RulePremise>`: `Equality(ProofId)` or `RenamingEq { left, right }`.
+RenamingEq is inline rule-premise evidence, with no proof ID or standalone
+proposition. It cannot be a proof root or an operand of an equality step.
 
 The slotted checker delegates ordinary equality steps and rule applications to
 egglog's checker. It validates source axioms, sorts, fresh slots, Alpha, and
@@ -75,7 +79,7 @@ Premises are ordered: first a proof `t = L[σ]`, then evidence for the
 `:when` facts in source order, after ordinary guard normalization. An equality
 `(= a b)` requires a proof with endpoints `a[σ]` and `b[σ]` exactly. An Alpha step may establish the required spelling.
 A constructor fact requires an existence proof ending at its instantiated term.
-A `renaming-=` condition requires a `RenamingEq` node. Other guards use egglog's
+A `renaming-=` condition requires a `RenamingEq` premise. Other guards use egglog's
 proof normal form: constructor operands are lifted to equality facts, followed
 by the primitive call. For example, `(not-free s (F x))` requires a proof of
 `(F x) = (F x)` and the ordinary result premise `(Fiat (= () ()))`. A guard
@@ -91,7 +95,7 @@ in scope at the rule declaration. The conclusion is
 `L[σ] = R[σ]`, its reverse, or reflexivity of a subterm of either side. A
 right-hand side using `subst` is unsupported.
 
-**RenamingEq.** This node contains exactly two ordinary equality proof references,
+**RenamingEq premise.** Holds two ordinary equality proof references,
 `left` and `right`. For `(renaming-= a b)`, they establish `a[σ] = ar` and
 `b[σ] = br`. A primitive validator checks that a slot permutation takes `ar` to
 an alpha-equivalent spelling of `br`. Mere existence does not establish this
@@ -113,9 +117,10 @@ rejects terms that differ only by a bijection of their free slots.
 
 During checking, `(renaming-= a b)` becomes
 `(= a ar)`, `(= b br)`, and `(renaming-= ar br)` with fresh witness variables.
-The ordinary checker verifies the expanded rule using the supplied operand
-proofs and the primitive validator. This expansion appears only during checking;
-the printed proof retains one `RenamingEq` premise for the source condition.
+The slotted rule proof is converted to an ordinary rule proof with expanded
+premises. The ordinary checker verifies it against the expanded rule using the
+supplied operand proofs and the primitive validator. The printed proof retains
+one `RenamingEq` premise for the source condition.
 
 **Sym.** From `a = b`, derive `b = a`.
 

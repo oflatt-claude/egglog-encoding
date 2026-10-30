@@ -3,7 +3,7 @@
 //! instantiations; any remaining equivariance is immediately above a source step.
 
 use super::HashMap;
-use super::format::{ProofId, SlottedProof, SlottedProofStore};
+use super::format::{ProofId, RulePremise, SlottedProof, SlottedProofStore};
 use super::terms::{Renaming, all_slots, rename, slot_of};
 use egglog::Term;
 use egglog::proof::Justification as Step;
@@ -27,16 +27,11 @@ impl SlottedProofStore {
                 SlottedProof::Equivariance {
                     proof, renaming, ..
                 } => vec![(*proof, rho.compose(renaming))],
-                SlottedProof::Ordinary(proof)
-                    if matches!(proof.justification(), Step::Rule { .. }) =>
-                {
-                    proof
-                        .justification()
-                        .premises()
-                        .into_iter()
-                        .map(|p| (p, Renaming::identity()))
-                        .collect()
-                }
+                SlottedProof::Rule(_) => proof
+                    .premises()
+                    .into_iter()
+                    .map(|p| (p, Renaming::identity()))
+                    .collect(),
                 _ => proof
                     .premises()
                     .into_iter()
@@ -50,7 +45,21 @@ impl SlottedProofStore {
             }
             let children: Vec<_> = children.iter().map(|k| memo[k]).collect();
             let result = match proof {
-                SlottedProof::RenamingEq { .. } => self.renaming_eq(children[0], children[1]),
+                SlottedProof::Rule(mut proof) => {
+                    let normalized = |p| memo[&(p, Renaming::identity())];
+                    proof.premises = proof
+                        .premises
+                        .into_iter()
+                        .map(|p| match p {
+                            RulePremise::Equality(p) => RulePremise::Equality(normalized(p)),
+                            RulePremise::RenamingEq { left, right } => RulePremise::RenamingEq {
+                                left: normalized(left),
+                                right: normalized(right),
+                            },
+                        })
+                        .collect();
+                    self.simplify_source(SlottedProof::Rule(proof), &rho)
+                }
                 SlottedProof::Equivariance { .. } => children[0],
                 SlottedProof::Alpha { proposition, .. } => {
                     let rhs = rename(&mut self.term_dag, &rho, proposition.rhs);
@@ -84,45 +93,36 @@ impl SlottedProofStore {
                                 .expect("normalizing preserves child terms")
                         }
                     }
-                    Step::Fiat | Step::Rule { .. } => {
-                        let step = match proof.justification() {
-                            Step::Rule {
-                                name, substitution, ..
-                            } => Step::Rule {
-                                name: name.clone(),
-                                substitution: substitution.clone(),
-                                premise_proofs: children,
-                            },
-                            _ => Step::Fiat,
-                        };
-                        let p = proof.proposition();
-                        let lhs = rename(&mut self.term_dag, &rho, p.lhs);
-                        let rhs = rename(&mut self.term_dag, &rho, p.rhs);
-                        if lhs == rhs
-                            && (slot_of(&self.term_dag, lhs).is_some()
-                                || matches!(self.term_dag.get(lhs), Term::Lit(_)))
-                        {
-                            self.fiat(lhs, rhs)
-                        } else {
-                            let unchanged = (lhs, rhs) == (p.lhs, p.rhs);
-                            let slots = all_slots(&self.term_dag, p.lhs)
-                                .union(&all_slots(&self.term_dag, p.rhs))
-                                .copied()
-                                .collect();
-                            let source = self.ordinary(p.clone(), step);
-                            if unchanged {
-                                source
-                            } else {
-                                self.equivariance(source, rho.restricted(&slots))
-                            }
-                        }
-                    }
+                    Step::Fiat => self.simplify_source(SlottedProof::Ordinary(proof), &rho),
                     _ => unreachable!("normalization requires a checked slotted proof"),
                 },
             };
             memo.insert(key, result);
         }
         memo[&root]
+    }
+
+    fn simplify_source(&mut self, proof: SlottedProof, rho: &Renaming) -> ProofId {
+        let p = proof.proposition();
+        let lhs = rename(&mut self.term_dag, rho, p.lhs);
+        let rhs = rename(&mut self.term_dag, rho, p.rhs);
+        if lhs == rhs
+            && (slot_of(&self.term_dag, lhs).is_some()
+                || matches!(self.term_dag.get(lhs), Term::Lit(_)))
+        {
+            return self.fiat(lhs, rhs);
+        }
+        let unchanged = (lhs, rhs) == (p.lhs, p.rhs);
+        let slots = all_slots(&self.term_dag, p.lhs)
+            .union(&all_slots(&self.term_dag, p.rhs))
+            .copied()
+            .collect();
+        let source = self.add(proof);
+        if unchanged {
+            source
+        } else {
+            self.equivariance(source, rho.restricted(&slots))
+        }
     }
 
     fn reflexive(&self, p: ProofId) -> bool {

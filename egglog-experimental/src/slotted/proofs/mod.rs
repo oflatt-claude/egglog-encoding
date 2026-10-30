@@ -14,7 +14,10 @@ pub mod terms;
 mod unflatten;
 
 pub use checker::{Checked, SlottedCheckError, check_claim, check_proof};
-pub use format::{Claim, ClaimKind, ProofId, SlottedConclusion, SlottedProof, SlottedProofStore};
+pub use format::{
+    Claim, ClaimKind, ProofId, RulePremise, RuleProof, SlottedConclusion, SlottedProof,
+    SlottedProofStore,
+};
 pub use source::{Constructor, SlottedProgram, SourceRule, Union};
 pub use terms::Renaming;
 

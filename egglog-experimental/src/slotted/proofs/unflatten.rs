@@ -1,6 +1,6 @@
 //! Lift proofs of flattened rewrites back to the original source rules.
 use super::coordinates::Coordinates;
-use super::format::{ProofId, SlottedConclusion, SlottedProof, SlottedProofStore};
+use super::format::{ProofId, RulePremise, SlottedConclusion, SlottedProof, SlottedProofStore};
 use super::guards::proof_body;
 use super::source::{SlottedProgram, pattern_term};
 use super::terms::{Renaming, term_renaming};
@@ -25,14 +25,8 @@ pub(super) fn lift(
     let mut out = Coordinates::new(old);
     let mut lifted = HashMap::default();
     for (id, proof) in steps {
-        let proposition = proof
-            .proposition()
-            .cloned()
-            .ok_or("renaming equality occurs before source rule reconstruction")?;
+        let proposition = proof.proposition().clone();
         let result = match &proof {
-            SlottedProof::RenamingEq { .. } => {
-                unreachable!("renaming equality is not an ordinary equality")
-            }
             SlottedProof::Alpha { proof, .. } => {
                 let premise = out.proof(lifted[proof]);
                 let proof = out.alpha(premise, proposition.rhs);
@@ -44,37 +38,43 @@ pub(super) fn lift(
                 let p = out.equivariance(lifted[proof], renaming);
                 out.reframe(p, renaming.clone())
             }
-            SlottedProof::Ordinary(proof) => match proof.justification() {
-                Step::Rule {
-                    name,
-                    substitution,
-                    premise_proofs,
-                } => {
-                    let premises = premise_proofs
+            SlottedProof::Rule(proof) => {
+                let premises = proof
+                    .premises
+                    .iter()
+                    .map(|p| match p {
+                        RulePremise::Equality(p) => Ok(out.proof(lifted[p])),
+                        RulePremise::RenamingEq { .. } => {
+                            Err("renaming equality occurs before source rule reconstruction".into())
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let result = lift_rule(
+                    &mut out,
+                    program,
+                    &proof.name,
+                    proof
+                        .substitution
                         .iter()
-                        .map(|p| out.proof(lifted[p]))
-                        .collect();
-                    let result = lift_rule(
-                        &mut out,
-                        program,
-                        name,
-                        substitution.iter().map(|(v, t)| (v.clone(), *t)).collect(),
-                        premises,
-                        proposition.clone(),
-                    )
-                    .map_err(|e| format!("lifting source rule {name}: {e}"))?;
-                    let rhs = out.proposition(result).rhs;
-                    let refreshed = program.refresh_binders(&mut out.term_dag, rhs);
-                    let result = if refreshed == rhs {
-                        result
-                    } else {
-                        out.alpha(result, refreshed)
-                    };
-                    let actual = out.proposition(result).clone();
-                    let renaming = term_renaming(&out.term_dag, &[(proposition.rhs, actual.rhs)])
-                        .ok_or("lifted rule changes the right-hand term's shape")?;
-                    out.view(result, proposition.rhs, renaming)
-                }
+                        .map(|(v, t)| (v.clone(), *t))
+                        .collect(),
+                    premises,
+                    proposition.clone(),
+                )
+                .map_err(|e| format!("lifting source rule {}: {e}", proof.name))?;
+                let rhs = out.proposition(result).rhs;
+                let refreshed = program.refresh_binders(&mut out.term_dag, rhs);
+                let result = if refreshed == rhs {
+                    result
+                } else {
+                    out.alpha(result, refreshed)
+                };
+                let actual = out.proposition(result).clone();
+                let renaming = term_renaming(&out.term_dag, &[(proposition.rhs, actual.rhs)])
+                    .ok_or("lifted rule changes the right-hand term's shape")?;
+                out.view(result, proposition.rhs, renaming)
+            }
+            SlottedProof::Ordinary(proof) => match proof.justification() {
                 Step::Fiat => {
                     let proof = source_fiat(&mut out, program, proposition.clone())?;
                     out.plain(proof)
@@ -209,13 +209,13 @@ fn lift_rule(
         .collect();
     let mut witnesses = Witnesses::new(store, program, premises);
     let root = witnesses.exists(lhs)?;
-    let mut source_premises = vec![root];
+    let mut source_premises = vec![RulePremise::Equality(root)];
     for fact in &body[1..] {
         let proof = match fact {
             ResolvedFact::Eq(_, a, b) => {
                 let a = instance(witnesses.store, a)?;
                 let b = instance(witnesses.store, b)?;
-                witnesses.condition_equality(program, a, b)?
+                RulePremise::Equality(witnesses.condition_equality(program, a, b)?)
             }
             ResolvedFact::Fact(ResolvedExpr::Call(
                 _,
@@ -227,26 +227,24 @@ fn lift_rule(
                     let b = instance(witnesses.store, &args[1])?;
                     let left = witnesses.renaming_equality(a, b)?;
                     let right = witnesses.reflexive(b)?;
-                    witnesses.store.renaming_eq(left, right)
+                    RulePremise::RenamingEq { left, right }
                 } else {
                     let unit = witnesses.store.term_dag.lit(Literal::Unit);
-                    witnesses.store.fiat(unit, unit)
+                    RulePremise::Equality(witnesses.store.fiat(unit, unit))
                 }
             }
             ResolvedFact::Fact(expr) => {
                 let term = instance(witnesses.store, expr)?;
-                witnesses.exists(term)?
+                RulePremise::Equality(witnesses.exists(term)?)
             }
         };
         source_premises.push(proof);
     }
-    let source = witnesses.store.ordinary(
+    let source = witnesses.store.rule(
         Proposition::new(lhs, rhs),
-        Step::Rule {
-            name: name.into(),
-            substitution,
-            premise_proofs: source_premises,
-        },
+        name.into(),
+        substitution,
+        source_premises,
     );
     witnesses.add(source);
     if claimed.lhs != claimed.rhs

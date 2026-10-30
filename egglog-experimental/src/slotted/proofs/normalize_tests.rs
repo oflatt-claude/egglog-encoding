@@ -2,6 +2,73 @@ use super::*;
 use crate::slotted::proofs::checker::check_proof;
 use crate::slotted::proofs::source::{ColumnKind, SlottedProgram};
 use egglog::TermDag;
+use egglog::proof::Proposition;
+use egglog::util::IndexMap;
+
+#[test]
+fn transported_rules_keep_renaming_premises_in_source_coordinates() {
+    let mut dag = TermDag::default();
+    let mut program = SlottedProgram::default();
+    program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+    for name in ["F", "G", "H"] {
+        program.add_constructor(name, vec![ColumnKind::Child]);
+    }
+    for (name, term) in [("a", "(F $0)"), ("b", "(H $1)"), ("input", "(Pair a b)")] {
+        program.add_let(&mut dag, name, term).unwrap();
+    }
+    program.add_union(&mut dag, "a", "(G $0)", "U").unwrap();
+    program.add_union(&mut dag, "b", "(G $1)", "U").unwrap();
+    program
+        .add_rewrite(
+            &mut dag,
+            r#"(rewrite (Pair x y) x :when ((renaming-= x y)) :name "r")"#,
+        )
+        .unwrap();
+    let (a, b, input) = (program.lets["a"], program.lets["b"], program.lets["input"]);
+    let mut store = SlottedProofStore::new(dag);
+    let root = store.fiat(input, input);
+    let left = store.fiat(a, program.unions[0].rhs);
+    let right = store.fiat(b, program.unions[1].rhs);
+    let left_reversed = store.sym(left);
+    let left_twice = store.sym(left_reversed);
+    let right_reversed = store.sym(right);
+    let right_twice = store.sym(right_reversed);
+    let substitution: IndexMap<_, _> = [("x".into(), a), ("y".into(), b)].into_iter().collect();
+    let source = store.rule(
+        Proposition::new(input, a),
+        "r".into(),
+        substitution.clone(),
+        vec![
+            RulePremise::Equality(root),
+            RulePremise::RenamingEq {
+                left: left_twice,
+                right: right_twice,
+            },
+        ],
+    );
+    let transported = store.equivariance(source, Renaming::new([(0, 1), (1, 2), (2, 0)]).unwrap());
+    let expected = check_proof(&mut store, &program, transported).unwrap();
+    let normalized = store.simplify(transported);
+    assert_eq!(
+        check_proof(&mut store, &program, normalized).unwrap(),
+        expected
+    );
+    let SlottedProof::Equivariance { proof, .. } = store.get(normalized) else {
+        panic!("the rule conclusion requires a nonidentity renaming")
+    };
+    let SlottedProof::Rule(rule) = store.get(*proof) else {
+        panic!("equivariance must remain above the source rule")
+    };
+    assert_eq!(rule.proposition, Proposition::new(input, a));
+    assert_eq!(rule.substitution, substitution);
+    assert_eq!(
+        rule.premises,
+        vec![
+            RulePremise::Equality(root),
+            RulePremise::RenamingEq { left, right }
+        ]
+    );
+}
 
 #[test]
 fn transports_binder_children_and_preserves_source_axioms() {
@@ -40,7 +107,8 @@ fn transports_binder_children_and_preserves_source_axioms() {
     for id in store.dependencies(normalized) {
         if let SlottedProof::Equivariance { proof, .. } = store.get(id) {
             assert!(
-                matches!(store.get(*proof), SlottedProof::Ordinary(p) if matches!(p.justification(), Step::Fiat | Step::Rule { .. }))
+                matches!(store.get(*proof), SlottedProof::Rule(_))
+                    || matches!(store.get(*proof), SlottedProof::Ordinary(p) if matches!(p.justification(), Step::Fiat))
             );
         }
     }

@@ -1,6 +1,8 @@
 //! Checks surface proofs against the slotted source program.
 
-use super::format::{Claim, ClaimKind, SlottedConclusion, SlottedProof, SlottedProofStore};
+use super::format::{
+    Claim, ClaimKind, RulePremise, RuleProof, SlottedConclusion, SlottedProof, SlottedProofStore,
+};
 use super::guards::{GuardValidators, proof_body};
 use super::source::{ColumnKind, SlottedProgram, SourceFact, pattern_term};
 use super::terms::{all_slots, instantiate, rename, slot_of};
@@ -108,8 +110,7 @@ pub struct Checked {
     pub sort: Option<String>,
 }
 
-// `None` marks RenamingEq evidence, checked against the enclosing rule condition.
-type CheckedProofs = HashMap<ProofId, Option<Checked>>;
+type CheckedProofs = HashMap<ProofId, Checked>;
 
 /// Check an equality proof and every proof it depends on, returning what it proves.
 pub fn check_proof(
@@ -139,15 +140,7 @@ pub fn check_proof(
             )?;
             checked.insert(id, result);
         }
-        checked
-            .remove(&root)
-            .flatten()
-            .ok_or_else(|| SlottedCheckError::Step {
-                proof: root,
-                step: "root",
-                detail: "renaming equality must be used by a rule, not as an ordinary equality"
-                    .into(),
-            })
+        Ok(checked.remove(&root).expect("root was checked"))
     })();
     store.term_dag = std::mem::take(ordinary.term_dag_mut());
     result
@@ -219,7 +212,7 @@ fn check_one(
     program: &SlottedProgram,
     id: ProofId,
     checked: &CheckedProofs,
-) -> Result<Option<Checked>, SlottedCheckError> {
+) -> Result<Checked, SlottedCheckError> {
     let proof = store.get(id);
     let step = |step: &'static str, detail: String| SlottedCheckError::Step {
         proof: id,
@@ -234,28 +227,8 @@ fn check_one(
             ));
         }
     }
-    let equality = |p: &ProofId| {
-        checked[p].as_ref().ok_or_else(|| {
-            step(
-                "premise",
-                format!("renaming-equality proof #{p} is not an equality"),
-            )
-        })
-    };
-    if let SlottedProof::RenamingEq { left, right } = proof {
-        for p in [left, right] {
-            equality(p)?;
-        }
-        return Ok(None);
-    }
-    if !matches!(proof, SlottedProof::Ordinary(p) if matches!(p.justification(), Justification::Rule { .. }))
-    {
-        for p in proof.premises() {
-            equality(&p)?;
-        }
-    }
-    let premise = |p: &ProofId| checked[p].as_ref().expect("premise is an equality").clone();
-    let claimed = proof.proposition().expect("equality step");
+    let premise = |p: &ProofId| checked[p].clone();
+    let claimed = proof.proposition();
     if let SlottedProof::Ordinary(proof) = proof
         && matches!(proof.justification(), Justification::Fiat)
         && claimed.lhs == claimed.rhs
@@ -270,10 +243,10 @@ fn check_one(
                 unreachable!("Fiat has no premises")
             })
             .map_err(|e| step("literal", e.to_string()))?;
-        return Ok(Some(Checked {
+        return Ok(Checked {
             proposition,
             sort: None,
-        }));
+        });
     }
     let dag = ordinary.term_dag_mut();
     for term in [claimed.lhs, claimed.rhs] {
@@ -290,17 +263,16 @@ fn check_one(
     {
         ordinary
             .check_step(id, proof, &[], context, |_, p| {
-                Ok(checked[&p]
-                    .as_ref()
-                    .expect("premise is an equality")
-                    .proposition
-                    .clone())
+                Ok(checked[&p].proposition.clone())
             })
             .map_err(|e| step("equality", e.to_string()))?;
     }
     let dag = ordinary.term_dag_mut();
     let (derived, sort) = match proof {
-        SlottedProof::RenamingEq { .. } => unreachable!("renaming equality handled above"),
+        SlottedProof::Rule(proof) => {
+            return check_rule(ordinary, validators, program, id, proof, checked)
+                .map(|(proposition, sort)| Checked { proposition, sort });
+        }
         SlottedProof::Alpha { proof, .. } => {
             let p = premise(proof);
             if !program.alpha_eq(dag, p.proposition.rhs, claimed.rhs) {
@@ -334,10 +306,6 @@ fn check_one(
                     union
                         .map(str::to_owned)
                         .or_else(|| program.sort_of(dag, claimed.lhs))
-                }
-                Justification::Rule { .. } => {
-                    return check_rule(store, ordinary, validators, program, id, proof, checked)
-                        .map(|(proposition, sort)| Some(Checked { proposition, sort }));
                 }
                 Justification::Sym(inner) => premise(inner).sort,
                 Justification::Trans(left, right) => {
@@ -381,6 +349,9 @@ fn check_one(
                         .and_then(|c| c.column_sort(*child_index))
                         .map(str::to_owned)
                 }
+                Justification::Rule { .. } => {
+                    unreachable!("rules have typed premises in the slotted store")
+                }
                 Justification::MergeFn { .. }
                 | Justification::ContainerNormalize { .. }
                 | Justification::Eval => {
@@ -403,10 +374,10 @@ fn check_one(
             ),
         ));
     }
-    Ok(Some(Checked {
+    Ok(Checked {
         proposition: derived,
         sort,
-    }))
+    })
 }
 
 /// The sort each variable of a pattern must take, from the columns it occurs in.
@@ -457,23 +428,19 @@ fn check_term_sort(
 }
 
 fn check_rule(
-    store: &SlottedProofStore,
     ordinary: &mut ProofStore,
     validators: &GuardValidators,
     program: &SlottedProgram,
     id: ProofId,
-    proof: &Proof,
+    proof: &RuleProof,
     checked: &CheckedProofs,
 ) -> Result<(Proposition, Option<String>), SlottedCheckError> {
-    let Justification::Rule {
+    let RuleProof {
         name,
         substitution,
-        premise_proofs,
-    } = proof.justification()
-    else {
-        unreachable!("called for a Rule step")
-    };
-    let claimed = proof.proposition();
+        premises: premise_proofs,
+        proposition: claimed,
+    } = proof;
     let dag = ordinary.term_dag_mut();
     let rule = program
         .rewrites
@@ -601,12 +568,15 @@ fn check_rule(
     let mut symbols = SymbolGen::new(prefix);
     let mut body = Vec::new();
     let mut premises = Vec::new();
-    let equality = |p: ProofId| {
-        checked[&p]
-            .as_ref()
-            .ok_or_else(|| fail(format!("renaming-equality proof #{p} is not an equality")))
+    let equality = |premise: &RulePremise| {
+        let RulePremise::Equality(id) = premise else {
+            return Err(fail(
+                "expected an equality premise, found RenamingEq".into(),
+            ));
+        };
+        Ok(&checked[id])
     };
-    for (fact, &premise_id) in facts.iter().zip(premise_proofs) {
+    for (fact, premise) in facts.iter().zip(premise_proofs) {
         if let ResolvedFact::Fact(ResolvedExpr::Call(
             span,
             egglog::ResolvedCall::Primitive(head),
@@ -614,12 +584,12 @@ fn check_rule(
         )) = fact
         {
             let (arguments, result) = if head.name() == "renaming-=" {
-                let SlottedProof::RenamingEq { left, right } = store.get(premise_id) else {
-                    return Err(fail("renaming-= requires a RenamingEq proof".into()));
+                let RulePremise::RenamingEq { left, right } = premise else {
+                    return Err(fail("renaming-= requires a RenamingEq premise".into()));
                 };
                 let mut variables = Vec::new();
                 for (arg, &p) in args.iter().zip([left, right]) {
-                    let checked = equality(p)?;
+                    let checked = &checked[&p];
                     let p = &checked.proposition;
                     check_term_sort(program, dag, p.rhs, Some(arg.output_type().name()))
                         .map_err(&fail)?;
@@ -645,7 +615,7 @@ fn check_rule(
                 let unit = dag.lit(Literal::Unit);
                 (variables, Proposition::new(unit, unit))
             } else {
-                (args.clone(), equality(premise_id)?.proposition.clone())
+                (args.clone(), equality(premise)?.proposition.clone())
             };
             let head = validators.resolve(head.name(), args).map_err(&fail)?;
             body.push(ResolvedFact::Fact(ResolvedExpr::Call(
@@ -655,7 +625,7 @@ fn check_rule(
             )));
             premises.push(result);
         } else {
-            let checked = equality(premise_id)?;
+            let checked = equality(premise)?;
             let condition_sort = match fact {
                 ResolvedFact::Eq(_, expr, _) | ResolvedFact::Fact(expr) => expr.output_type(),
             };
