@@ -1,0 +1,109 @@
+//! Primitive validators for source guards, using the program's binding scopes.
+
+use super::source::SlottedProgram;
+use super::terms::slot_of;
+use egglog::ast::{Literal, ResolvedExpr, ResolvedExprExt, Span};
+use egglog::prelude::BaseSort;
+use egglog::sort::UnitSort;
+use egglog::{
+    Context, EGraph, Primitive, PurePrim, PureState, ResolvedCall, TermDag, TermId, TypeInfo, Value,
+};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+pub(super) const GUARDS: [(&str, &str); 6] = [
+    ("renaming-=", "slotted-proof-renaming-="),
+    ("!=", "slotted-proof-!="),
+    ("renaming-!=", "slotted-proof-renaming-!="),
+    ("free", "slotted-proof-free"),
+    ("not-free", "slotted-proof-not-free"),
+    ("free-names-are", "slotted-proof-free-names-are"),
+];
+
+pub(super) struct GuardValidators(TypeInfo);
+
+impl GuardValidators {
+    pub fn new(program: &SlottedProgram) -> Self {
+        // Only binding scopes are needed, including constructors declared after the rule.
+        let scopes = Arc::new(SlottedProgram {
+            constructors: program.constructors.clone(),
+            ..Default::default()
+        });
+        let mut graph = EGraph::default();
+        for (name, internal) in GUARDS {
+            let scopes = scopes.clone();
+            graph.add_pure_primitive(
+                GuardSignature(internal),
+                Some(Arc::new(move |dag, args| {
+                    validate(&scopes, name, dag, args)?;
+                    Some(dag.lit(Literal::Unit))
+                })),
+            );
+        }
+        Self(std::mem::take(graph.type_info()))
+    }
+
+    pub fn resolve(&self, name: &str, args: &[ResolvedExpr]) -> Result<ResolvedCall, String> {
+        let (_, internal) = GUARDS
+            .iter()
+            .find(|(guard, _)| *guard == name)
+            .ok_or_else(|| format!("unsupported source guard {name}"))?;
+        let types: Vec<_> = args
+            .iter()
+            .map(|arg| arg.output_type().clone())
+            .chain(std::iter::once(UnitSort.to_arcsort()))
+            .collect();
+        ResolvedCall::from_resolution(internal, &types, &self.0, Context::Pure, &egglog::span!())
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn validate(
+    program: &SlottedProgram,
+    name: &str,
+    dag: &mut TermDag,
+    args: &[TermId],
+) -> Option<()> {
+    let holds = match (name, args) {
+        ("renaming-=", [a, b]) => program.eq_modulo_renaming(dag, *a, *b),
+        ("renaming-!=", [a, b]) => !program.eq_modulo_renaming(dag, *a, *b),
+        ("!=", [a, b]) => !program.alpha_eq(dag, *a, *b),
+        ("free" | "not-free", [slot, terms @ ..]) if !terms.is_empty() => {
+            let slot = slot_of(dag, *slot)?;
+            let free = terms
+                .iter()
+                .any(|&term| program.free_slots(dag, term).contains(&slot));
+            free == (name == "free")
+        }
+        ("free-names-are", [term, slots @ ..]) => {
+            let wanted = slots
+                .iter()
+                .map(|&slot| slot_of(dag, slot))
+                .collect::<Option<BTreeSet<_>>>()?;
+            program.free_slots(dag, *term) == wanted
+        }
+        _ => false,
+    };
+    holds.then_some(())
+}
+
+#[derive(Clone)]
+pub(super) struct GuardSignature(pub &'static str);
+
+impl Primitive for GuardSignature {
+    fn name(&self) -> &str {
+        self.0
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn egglog::constraint::TypeConstraint> {
+        egglog::constraint::AllEqualTypeConstraint::new(self.0, span.clone())
+            .with_output_sort(UnitSort.to_arcsort())
+            .into_box()
+    }
+}
+
+impl PurePrim for GuardSignature {
+    fn apply(&self, _: PureState<'_, '_>, _: &[Value]) -> Option<Value> {
+        None
+    }
+}

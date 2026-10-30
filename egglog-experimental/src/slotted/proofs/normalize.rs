@@ -50,6 +50,7 @@ impl SlottedProofStore {
             }
             let children: Vec<_> = children.iter().map(|k| memo[k]).collect();
             let result = match proof {
+                SlottedProof::Primitive { name, .. } => self.primitive(name, children),
                 SlottedProof::Equivariance { .. } => children[0],
                 SlottedProof::Alpha { proposition, .. } => {
                     let rhs = rename(&mut self.term_dag, &rho, proposition.rhs);

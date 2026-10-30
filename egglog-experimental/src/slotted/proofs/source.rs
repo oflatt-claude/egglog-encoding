@@ -1,16 +1,17 @@
 //! Native source rules, declaration scopes, and binding semantics for proof checking.
 
 use super::format::{Claim, ClaimKind};
+use super::guards::{GUARDS, GuardSignature};
 use super::terms::{FreshSlots, Renaming, slot_of};
 use super::{HashMap, HashSet};
 use egglog::ast::{
     Expr, Fact, FunctionDecl, GenericAction, GenericActions, ResolvedExpr, ResolvedFact,
-    ResolvedRule, Rule, Schema, Span,
+    ResolvedRule, Rule, Schema,
 };
 use egglog::prelude::BaseSort;
 use egglog::sort::{EqSort, UnitSort};
 use egglog::util::{FreshGen, INTERNAL_SYMBOL_PREFIX, IndexMap, SymbolGen};
-use egglog::{EGraph, Primitive, PurePrim, PureState, ResolvedCall, Term, TermDag, TermId, Value};
+use egglog::{EGraph, ResolvedCall, Term, TermDag, TermId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -38,15 +39,8 @@ pub struct SourceRule {
     pub globals: IndexMap<String, TermId>,
 }
 
-pub(super) enum Requirement<'a> {
-    Exists(&'a ResolvedExpr),
-    Equal(&'a ResolvedExpr, &'a ResolvedExpr),
-    RenamingEqual(&'a ResolvedExpr, &'a ResolvedExpr),
-}
-
 pub(super) trait SourceFact {
     fn terms(&self) -> Vec<&ResolvedExpr>;
-    fn requirements(&self) -> Vec<Requirement<'_>>;
     fn binding(&self) -> Option<(&String, &ResolvedExpr)>;
 }
 
@@ -58,22 +52,6 @@ impl SourceFact for ResolvedFact {
                 args.iter().collect()
             }
             Self::Fact(expr) => vec![expr],
-        }
-    }
-
-    fn requirements(&self) -> Vec<Requirement<'_>> {
-        match self {
-            Self::Eq(_, a, b) => vec![Requirement::Equal(a, b)],
-            Self::Fact(ResolvedExpr::Call(_, ResolvedCall::Primitive(head), args)) => {
-                match head.name() {
-                    "renaming-=" => vec![Requirement::RenamingEqual(&args[0], &args[1])],
-                    "!=" | "renaming-!=" => args.iter().map(Requirement::Exists).collect(),
-                    "free" | "not-free" => args[1..].iter().map(Requirement::Exists).collect(),
-                    "free-names-are" => vec![Requirement::Exists(&args[0])],
-                    _ => unreachable!("source guards are validated during resolution"),
-                }
-            }
-            Self::Fact(expr) => vec![Requirement::Exists(expr)],
         }
     }
 
@@ -377,14 +355,10 @@ impl SlottedProgram {
                 .typecheck_function(&mut symbols, &decl)
                 .map_err(|e| err(&e))?;
         }
-        for name in [
-            "renaming-=",
-            "renaming-!=",
-            "free",
-            "not-free",
-            "free-names-are",
-        ] {
-            graph.add_pure_primitive(GuardSignature(name), None);
+        for (name, _) in GUARDS {
+            if name != "!=" {
+                graph.add_pure_primitive(GuardSignature(name), None);
+            }
         }
 
         // Captured carrier globals and local payload variables have distinct scopes.
@@ -851,30 +825,7 @@ impl SlottedProgram {
 }
 
 fn is_guard(name: &str) -> bool {
-    matches!(
-        name,
-        "!=" | "renaming-=" | "renaming-!=" | "free" | "not-free" | "free-names-are"
-    )
-}
-
-#[derive(Clone)]
-struct GuardSignature(&'static str);
-
-impl Primitive for GuardSignature {
-    fn name(&self) -> &str {
-        self.0
-    }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn egglog::constraint::TypeConstraint> {
-        egglog::constraint::AllEqualTypeConstraint::new(self.0, span.clone())
-            .with_output_sort(UnitSort.to_arcsort())
-            .into_box()
-    }
-}
-
-impl PurePrim for GuardSignature {
-    fn apply(&self, _: PureState<'_, '_>, _: &[Value]) -> Option<Value> {
-        None
-    }
+    GUARDS.iter().any(|(guard, _)| *guard == name)
 }
 
 fn parse_expr(text: &str) -> Result<Expr, SourceError> {

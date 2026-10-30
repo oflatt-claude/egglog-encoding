@@ -1,15 +1,17 @@
 //! Checks surface proofs against the slotted source program.
 
 use super::format::{Claim, ClaimKind, SlottedConclusion, SlottedProof, SlottedProofStore};
-use super::source::{ColumnKind, Requirement, SlottedProgram, SourceFact, pattern_term};
+use super::guards::GuardValidators;
+use super::source::{ColumnKind, SlottedProgram, SourceFact, pattern_term};
 use super::terms::{all_slots, instantiate, rename, slot_of};
 use super::{HashMap, HashSet};
-use egglog::ast::{Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact};
-use egglog::proof::{
-    Justification, ProofCheckContext, ProofId, ProofStore, Proposition,
-    check_actions_produce_equality, check_fact_matches_proposition,
+use egglog::ast::{
+    Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact, ResolvedNCommand, ResolvedVar,
 };
+use egglog::proof::{Justification, Proof, ProofCheckContext, ProofId, ProofStore, Proposition};
+use egglog::util::{FreshGen, INTERNAL_SYMBOL_PREFIX, SymbolGen};
 use egglog::{Term, TermDag, TermId};
+use egglog_numeric_id::NumericId;
 use std::collections::BTreeSet;
 use thiserror::Error;
 
@@ -104,7 +106,10 @@ pub struct Checked {
     pub sort: Option<String>,
 }
 
-/// Check a proof and every proof it depends on, returning what it proves.
+// `None` marks primitive operand evidence; its predicate is checked in the enclosing rule.
+type CheckedProofs = HashMap<ProofId, Option<Checked>>;
+
+/// Check an equality proof and every proof it depends on, returning what it proves.
 pub fn check_proof(
     store: &mut SlottedProofStore,
     program: &SlottedProgram,
@@ -117,13 +122,29 @@ pub fn check_proof(
     );
     let context = ProofCheckContext::new(&[], ordinary.term_dag_mut())
         .expect("an empty program has no invalid axioms");
+    let validators = GuardValidators::new(program);
     let result = (|| {
         let mut checked = HashMap::default();
         for id in store.dependencies(root) {
-            let result = check_one(store, &mut ordinary, &context, program, id, &checked)?;
+            let result = check_one(
+                store,
+                &mut ordinary,
+                &context,
+                &validators,
+                program,
+                id,
+                &checked,
+            )?;
             checked.insert(id, result);
         }
-        Ok(checked[&root].clone())
+        checked
+            .remove(&root)
+            .flatten()
+            .ok_or_else(|| SlottedCheckError::Step {
+                proof: root,
+                step: "root",
+                detail: "primitive evidence must be used by a rule, not as an equality".into(),
+            })
     })();
     store.term_dag = std::mem::take(ordinary.term_dag_mut());
     result
@@ -186,16 +207,17 @@ fn proposition_string(dag: &TermDag, p: &Proposition) -> String {
     format!("{} = {}", dag.to_string(p.lhs), dag.to_string(p.rhs))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_one(
     store: &SlottedProofStore,
     ordinary: &mut ProofStore,
     context: &ProofCheckContext,
+    validators: &GuardValidators,
     program: &SlottedProgram,
     id: ProofId,
-    checked: &HashMap<ProofId, Checked>,
-) -> Result<Checked, SlottedCheckError> {
+    checked: &CheckedProofs,
+) -> Result<Option<Checked>, SlottedCheckError> {
     let proof = store.get(id);
-    let claimed = proof.proposition();
     let step = |step: &'static str, detail: String| SlottedCheckError::Step {
         proof: id,
         step,
@@ -209,7 +231,28 @@ fn check_one(
             ));
         }
     }
-    let premise = |p: &ProofId| checked[p].clone();
+    let equality = |p: &ProofId| {
+        checked[p].as_ref().ok_or_else(|| {
+            step(
+                "premise",
+                format!("primitive proof #{p} is not an equality"),
+            )
+        })
+    };
+    if let SlottedProof::Primitive { arguments, .. } = proof {
+        for p in arguments {
+            equality(p)?;
+        }
+        return Ok(None);
+    }
+    if !matches!(proof, SlottedProof::Ordinary(p) if matches!(p.justification(), Justification::Rule { .. }))
+    {
+        for p in proof.premises() {
+            equality(&p)?;
+        }
+    }
+    let premise = |p: &ProofId| checked[p].as_ref().expect("premise is an equality").clone();
+    let claimed = proof.proposition().expect("equality step");
     let dag = ordinary.term_dag_mut();
     for term in [claimed.lhs, claimed.rhs] {
         check_term_sort(program, dag, term, None).map_err(|e| step("sort", e))?;
@@ -225,12 +268,17 @@ fn check_one(
     {
         ordinary
             .check_step(id, proof, &[], context, |_, p| {
-                Ok(checked[&p].proposition.clone())
+                Ok(checked[&p]
+                    .as_ref()
+                    .expect("premise is an equality")
+                    .proposition
+                    .clone())
             })
             .map_err(|e| step("equality", e.to_string()))?;
     }
     let dag = ordinary.term_dag_mut();
     let (derived, sort) = match proof {
+        SlottedProof::Primitive { .. } => unreachable!("primitive evidence handled above"),
         SlottedProof::Alpha { proof, .. } => {
             let p = premise(proof);
             if !program.alpha_eq(dag, p.proposition.rhs, claimed.rhs) {
@@ -265,14 +313,9 @@ fn check_one(
                         .map(str::to_owned)
                         .or_else(|| program.sort_of(dag, claimed.lhs))
                 }
-                Justification::Rule {
-                    name,
-                    substitution,
-                    premise_proofs,
-                } => {
-                    let premises = premise_proofs.iter().map(premise).collect::<Vec<_>>();
-                    return check_rule(dag, program, id, name, substitution, &premises, claimed)
-                        .map(|(proposition, sort)| Checked { proposition, sort });
+                Justification::Rule { .. } => {
+                    return check_rule(store, ordinary, validators, program, id, proof, checked)
+                        .map(|(proposition, sort)| Some(Checked { proposition, sort }));
                 }
                 Justification::Sym(inner) => premise(inner).sort,
                 Justification::Trans(left, right) => {
@@ -338,10 +381,10 @@ fn check_one(
             ),
         ));
     }
-    Ok(Checked {
+    Ok(Some(Checked {
         proposition: derived,
         sort,
-    })
+    }))
 }
 
 /// The sort each variable of a pattern must take, from the columns it occurs in.
@@ -392,14 +435,24 @@ fn check_term_sort(
 }
 
 fn check_rule(
-    dag: &mut TermDag,
+    store: &SlottedProofStore,
+    ordinary: &mut ProofStore,
+    validators: &GuardValidators,
     program: &SlottedProgram,
     id: ProofId,
-    name: &str,
-    substitution: &egglog::util::IndexMap<String, TermId>,
-    premises: &[Checked],
-    claimed: &Proposition,
+    proof: &Proof,
+    checked: &CheckedProofs,
 ) -> Result<(Proposition, Option<String>), SlottedCheckError> {
+    let Justification::Rule {
+        name,
+        substitution,
+        premise_proofs,
+    } = proof.justification()
+    else {
+        unreachable!("called for a Rule step")
+    };
+    let claimed = proof.proposition();
+    let dag = ordinary.term_dag_mut();
     let rule = program
         .rewrites
         .get(name)
@@ -431,18 +484,12 @@ fn check_rule(
         variable,
     };
 
-    let requirements: Vec<_> = rule
-        .conditions()
-        .iter()
-        .flat_map(SourceFact::requirements)
-        .collect();
-    let expected = 1 + requirements.len();
-    if premises.len() != expected {
+    if premise_proofs.len() != rule.rule.body.len() {
         return Err(SlottedCheckError::PremiseCount {
             proof: id,
-            name: name.to_owned(),
-            expected,
-            actual: premises.len(),
+            name: name.clone(),
+            expected: rule.rule.body.len(),
+            actual: premise_proofs.len(),
         });
     }
     let (lhs_expr, rhs_expr) = rule.endpoints();
@@ -487,109 +534,6 @@ fn check_rule(
     }
 
     let lhs = instantiate(dag, lhs_pattern, &bindings).map_err(unbound)?;
-    let root = &premises[0].proposition;
-    check_fact_matches_proposition(dag, &rule.rule.body[0], root, &bindings, name)
-        .map_err(|e| fail(format!("root premise: {e}")))?;
-    join_sorts(Some(sort.clone()), premises[0].sort.clone())
-        .map_err(|(a, b)| fail(format!("the rewrite is in {a}, its root premise in {b}")))?;
-    for (requirement, premise) in requirements.iter().zip(&premises[1..]) {
-        let got = &premise.proposition;
-        let (fact, condition_sort) = match requirement {
-            Requirement::Exists(expr) => (
-                Some(ResolvedFact::Fact((*expr).clone())),
-                expr.output_type().name().to_owned(),
-            ),
-            Requirement::Equal(a, b) => (
-                Some(ResolvedFact::Eq(
-                    egglog::span!(),
-                    (*a).clone(),
-                    (*b).clone(),
-                )),
-                a.output_type().name().to_owned(),
-            ),
-            Requirement::RenamingEqual(a, b) => {
-                let left = pattern_term(dag, a);
-                let right = pattern_term(dag, b);
-                let left = instantiate(dag, left, &bindings).map_err(unbound)?;
-                let right = instantiate(dag, right, &bindings).map_err(unbound)?;
-                if got.lhs != left || !program.eq_modulo_renaming(dag, got.rhs, right) {
-                    return Err(fail(
-                        "premise does not establish the original renaming-= guard".into(),
-                    ));
-                }
-                (None, a.output_type().name().to_owned())
-            }
-        };
-        if let Some(fact) = fact {
-            check_fact_matches_proposition(dag, &fact, got, &bindings, name)
-                .map_err(|e| fail(format!("original :when fact: {e}")))?;
-        }
-        join_sorts(Some(condition_sort), premise.sort.clone())
-            .map_err(|(a, b)| fail(format!("condition is in {a}, its premise in {b}")))?;
-    }
-
-    let instance = |dag: &mut TermDag, expr: &ResolvedExpr| {
-        let pattern = pattern_term(dag, expr);
-        instantiate(dag, pattern, &bindings).map_err(unbound)
-    };
-    for condition in rule.conditions() {
-        let ResolvedFact::Fact(ResolvedExpr::Call(_, egglog::ResolvedCall::Primitive(head), args)) =
-            condition
-        else {
-            continue;
-        };
-        let head = head.name();
-        match (head, args.as_slice()) {
-            // Equality evidence was checked with the other premises above.
-            ("renaming-=", [_, _]) => {}
-            ("free" | "not-free", [slot, terms @ ..]) => {
-                let slot = instance(dag, slot)?;
-                let slot = slot_of(dag, slot)
-                    .ok_or_else(|| fail("free/not-free requires a slot".into()))?;
-                let mut free = BTreeSet::new();
-                for term in terms {
-                    let term = instance(dag, term)?;
-                    free.extend(program.free_slots(dag, term));
-                }
-                if free.contains(&slot) != (head == "free") {
-                    return Err(fail(format!(
-                        "{head} fails for ${slot}: free slots are {free:?}"
-                    )));
-                }
-            }
-            ("free-names-are", [term, slots @ ..]) => {
-                let term = instance(dag, term)?;
-                let wanted = slots
-                    .iter()
-                    .map(|slot| {
-                        let term = instance(dag, slot)?;
-                        slot_of(dag, term)
-                            .ok_or_else(|| fail("free-names-are requires slots".into()))
-                    })
-                    .collect::<Result<BTreeSet<_>, _>>()?;
-                let free = program.free_slots(dag, term);
-                if free != wanted {
-                    return Err(fail(format!(
-                        "free-names-are: expected {wanted:?}, found {free:?}"
-                    )));
-                }
-            }
-            ("!=" | "renaming-!=", [a, b]) => {
-                let a = instance(dag, a)?;
-                let b = instance(dag, b)?;
-                let equal = if head == "renaming-!=" {
-                    program.eq_modulo_renaming(dag, a, b)
-                } else {
-                    program.alpha_eq(dag, a, b)
-                };
-                if equal {
-                    return Err(fail(format!("{head} fails for {}", dag.to_string(a))));
-                }
-            }
-            _ => return Err(fail(format!("unsupported source guard {head}"))),
-        }
-    }
-
     // Right-hand-side slot literals absent from the body must be fresh.
     let body_vars: HashSet<String> = rule
         .rule
@@ -624,20 +568,126 @@ fn check_rule(
         }
     }
 
-    // The conclusion: the instance in either direction, or reflexivity of a subterm.
+    // Expand primitive evidence only for checking. The source rule and printed
+    // substitution retain their original clauses and variable names.
+    let mut prefix = format!("{INTERNAL_SYMBOL_PREFIX}slotted-guard-");
+    while bindings.keys().any(|name| name.starts_with(&prefix)) {
+        prefix.push('-');
+    }
+    let mut symbols = SymbolGen::new(prefix);
+    let mut substitution = substitution.clone();
+    substitution.extend(rule.globals.clone());
+    let mut body = Vec::new();
+    let mut premises = Vec::new();
+    let equality = |p: ProofId| {
+        checked[&p]
+            .as_ref()
+            .ok_or_else(|| fail(format!("primitive proof #{p} is not an equality")))
+    };
+    for (fact, &premise_id) in rule.rule.body.iter().zip(premise_proofs) {
+        if let ResolvedFact::Fact(ResolvedExpr::Call(
+            span,
+            egglog::ResolvedCall::Primitive(head),
+            args,
+        )) = fact
+        {
+            let SlottedProof::Primitive {
+                name: predicate,
+                arguments,
+            } = store.get(premise_id)
+            else {
+                return Err(fail(format!(
+                    "{} requires primitive operand evidence",
+                    head.name()
+                )));
+            };
+            if predicate != head.name() || arguments.len() != args.len() {
+                return Err(fail(format!("primitive evidence does not match {fact}")));
+            }
+            let mut variables = Vec::new();
+            for (arg, &p) in args.iter().zip(arguments) {
+                let checked = equality(p)?;
+                let p = &checked.proposition;
+                if predicate != "renaming-=" && p.lhs != p.rhs {
+                    return Err(fail(format!(
+                        "{predicate} requires reflexive operand evidence"
+                    )));
+                }
+                check_term_sort(program, dag, p.rhs, Some(arg.output_type().name()))
+                    .map_err(&fail)?;
+                join_sorts(
+                    Some(arg.output_type().name().to_owned()),
+                    checked.sort.clone(),
+                )
+                .map_err(|(a, b)| fail(format!("condition is in {a}, its premise in {b}")))?;
+                let variable = symbols.fresh("argument");
+                substitution.insert(variable.clone(), p.rhs);
+                let var = ResolvedExpr::Var(
+                    arg.span(),
+                    ResolvedVar {
+                        name: variable,
+                        sort: arg.output_type().clone(),
+                        is_global_ref: false,
+                    },
+                );
+                body.push(ResolvedFact::Eq(arg.span(), arg.clone(), var.clone()));
+                premises.push(p.clone());
+                variables.push(var);
+            }
+            let head = validators.resolve(head.name(), args).map_err(&fail)?;
+            body.push(ResolvedFact::Fact(ResolvedExpr::Call(
+                span.clone(),
+                head,
+                variables,
+            )));
+            // Literal reflexivity is an ordinary Fiat; the predicate is checked
+            // by its validator when the ordinary checker reaches this fact.
+            let unit = dag.lit(Literal::Unit);
+            premises.push(Proposition::new(unit, unit));
+        } else {
+            let checked = equality(premise_id)?;
+            let condition_sort = match fact {
+                ResolvedFact::Eq(_, expr, _) | ResolvedFact::Fact(expr) => expr.output_type(),
+            };
+            join_sorts(Some(condition_sort.name().to_owned()), checked.sort.clone())
+                .map_err(|(a, b)| fail(format!("condition is in {a}, its premise in {b}")))?;
+            body.push(fact.clone());
+            premises.push(checked.proposition.clone());
+        }
+    }
+    let native_rule = egglog::ast::ResolvedRule {
+        body,
+        ..rule.rule.clone()
+    };
+    let commands = [ResolvedNCommand::NormRule { rule: native_rule }];
+    let context = ProofCheckContext::new(&commands, dag).map_err(|e| fail(e.to_string()))?;
+    let native_proof = Proof::new(
+        claimed.clone(),
+        Justification::Rule {
+            name: name.clone(),
+            substitution,
+            premise_proofs: (0..premises.len()).map(ProofId::from_usize).collect(),
+        },
+    );
+    let proven = ordinary
+        .check_step(id, &native_proof, &commands, &context, |_, p| {
+            Ok(premises[p.index()].clone())
+        })
+        .map_err(|e| fail(e.to_string()))?;
     let instance =
         (claimed.lhs, claimed.rhs) == (lhs, rhs) || (claimed.lhs, claimed.rhs) == (rhs, lhs);
-    check_actions_produce_equality(dag, &rule.rule.head, substitution, &bindings, claimed, name)
-        .map_err(|e| fail(e.to_string()))?;
-    // reflexivity of a subterm is about that subterm's sort
     let sort = if instance {
         Some(sort)
     } else {
-        program.sort_of(dag, claimed.lhs)
+        program.sort_of(ordinary.term_dag(), claimed.lhs)
     };
-    Ok((claimed.clone(), sort))
+    Ok((proven, sort))
 }
 
 #[cfg(test)]
 #[path = "checker_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "checker_guard_tests.rs"]
+mod guard_tests;

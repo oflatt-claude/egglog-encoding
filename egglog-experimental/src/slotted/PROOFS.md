@@ -53,13 +53,15 @@ The explicit Equivariance rule applies this operation to both endpoints of a pro
 
 # Justifications
 
-`SlottedProof` has three variants: `Ordinary(egglog::proof::Proof)`, `Alpha`, and
-`Equivariance`. All premises use egglog's `ProofId` in the same slotted proof
-store. Ordinary steps use egglog's justifications and printer.
+`SlottedProof` wraps `Ordinary(egglog::proof::Proof)` and adds `Alpha`,
+`Equivariance`, and `Primitive` evidence for guards. All premises use egglog's
+`ProofId` in the same slotted proof store. Ordinary steps use egglog's
+justifications and printer.
 
-The slotted checker delegates ordinary equality steps and exact fact/action
-checking to egglog's checker. It validates source axioms, slotted rule conditions,
-sorts, Alpha, and Equivariance locally.
+The slotted checker delegates ordinary equality steps and rule applications to
+egglog's checker. It validates source axioms, sorts, fresh slots, Alpha, and
+Equivariance locally. Source guards use primitive validators with the declared
+binding scopes.
 
 **Fiat.** `t = t` for a term the program built -- a slot, a payload literal, or a
 subterm of a `let` or a `union` -- and `a = b` for a source `(union a b)`, in
@@ -69,17 +71,31 @@ either direction. Reflexivity is not assumed for terms the program never built.
 Pattern variables take terms of their declared sorts; slot literals take distinct
 slots, as required by the [language](LANGUAGE.md#fresh-slots).
 
-Premises are ordered: first a proof `t = L[σ]`, then evidence for the original
-`:when` facts in source order. An equality `(= a b)` requires a proof with
+Premises are ordered: first a proof `t = L[σ]`, then one proof node per original
+`:when` fact in source order. An equality `(= a b)` requires a proof with
 endpoints `a[σ]` and `b[σ]` exactly. An Alpha step may establish the required spelling.
-A renaming equality `(renaming-= a b)` requires an ordinary equality proof
-`a[σ] = c`. The checker verifies that a slot permutation takes `b[σ]` to a term
-alpha-equivalent to `c`. The premise is an ordinary proof reference; existence
-of the operands alone is insufficient.
 A constructor fact requires an existence proof ending at its instantiated term.
-The remaining guards require existence proofs for their term operands and the checks
-below. Nested terms stay nested; generated pattern variables do not appear in
-source rule substitutions. Globals retain their bindings at rule declaration.
+Each guard requires a `Primitive` node as described below. Nested terms stay
+nested; generated pattern variables do not appear in source rule substitutions.
+Globals retain their bindings at rule declaration.
+
+RHS-only slot literals must be fresh for every other binding and the globals
+in scope at the rule declaration. The conclusion is
+`L[σ] = R[σ]`, its reverse, or reflexivity of a subterm of either side. A
+right-hand side using `subst` is unsupported.
+
+**Primitive.** A guard node contains the predicate name and one ordinary equality
+proof per operand. For `(renaming-= a b)`, the proofs establish `a[σ] = ar` and
+`b[σ] = br`. A primitive validator checks that a slot permutation takes `ar` to
+an alpha-equivalent spelling of `br`. Mere existence does not establish this
+relation. The printed form is:
+
+```lisp
+(Primitive (renaming-= a b) proof-of-a=ar proof-of-b=br)
+```
+
+Other guards use the same node with reflexive operand proofs. Primitive evidence
+is checked in its enclosing rule and cannot be used as an equality proof.
 
 Guards are evaluated on σ with the constructors' binding scopes. `free` tests
 membership in the union of the listed terms' free slots; `not-free` tests absence
@@ -88,10 +104,13 @@ from that union. `free-names-are` requires exactly the listed free slots.
 convention, and rejects alpha-equivalent terms. `(renaming-!= a b)` additionally
 rejects terms that differ only by a bijection of their free slots.
 
-RHS-only slot literals must be fresh for every other binding and the globals
-in scope at the rule declaration. The conclusion is
-`L[σ] = R[σ]`, its reverse, or reflexivity of a subterm of either side. A
-right-hand side using `subst` is unsupported.
+During checking, a guard is expanded into operand equalities and a primitive
+call on their representatives. For example, `(renaming-= a b)` becomes
+`(= a ar)`, `(= b br)`, and `(renaming-= ar br)` with fresh witness variables.
+The ordinary checker verifies the expanded rule using the supplied operand
+proofs and the primitive validator. These temporary facts and variables appear
+only during checking; the source rule and printed proof retain their original
+clauses and substitutions.
 
 **Sym.** From `a = b`, derive `b = a`.
 

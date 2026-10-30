@@ -1,0 +1,24 @@
+---
+source: egglog-experimental/tests/slotted_proofs.rs
+expression: "format!(\"Source:\\n{source}\\n\\nProof:\\n{}\", proofs[0])"
+---
+Source:
+(datatype U (Pair U U) (Hit))
+(let input (Pair $a $b))
+(rewrite (Pair $x $y) (Hit)
+  :when ((renaming-= $x $y) (not-free $x $y) (!= $x $y)) :name "guards")
+(run 1)
+(check (= input (Hit)))
+
+Proof:
+(let prf0 (Fiat (= $a $a)))
+(let prf1 (Fiat (= $b $b)))
+(Rule
+  (= (Pair $a $b) (Hit))
+  (name "guards")
+  (premises
+    (Fiat (= (Pair $a $b) (Pair $a $b)))
+    (Primitive (renaming-= $a $b) prf0 prf1)
+    (Primitive (not-free $a $b) prf0 prf1)
+    (Primitive (!= $a $b) prf0 prf1))
+  (substitution ($x $a) ($y $b)))

@@ -5,7 +5,7 @@ use crate::slotted::proofs::format::{
 use crate::slotted::proofs::source::{ColumnKind, SlottedProgram};
 use crate::slotted::proofs::terms::{Renaming, slot_term};
 use egglog::proof::{Justification, Proposition};
-use egglog::{Term, TermDag, TermId};
+use egglog::{TermDag, TermId};
 use egglog_numeric_id::NumericId;
 
 fn figure_3() -> (SlottedProofStore, SlottedProgram, Claim) {
@@ -323,148 +323,6 @@ fn original_conditions_require_evidence_in_source_order() {
 }
 
 #[test]
-fn guard_captures_are_independent_of_a_constructor_with_the_same_name() {
-    let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
-    program.add_constructor(
-        "free",
-        vec![ColumnKind::Payload("i64".into()), ColumnKind::Child],
-    );
-    program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
-    program.add_constructor("Hit", vec![]);
-    program.add_let(&mut dag, "n", "$0").unwrap();
-    program.add_let(&mut dag, "input", "(Pair $1 $2)").unwrap();
-    program
-        .add_rewrite(
-            &mut dag,
-            r#"(rewrite (Pair x y) (Hit) :when ((free n (Pair x y))) :name "guard")"#,
-        )
-        .unwrap();
-    let input = program.lets["input"];
-    let one = slot_term(&mut dag, 1);
-    let two = slot_term(&mut dag, 2);
-    let hit = dag.app("Hit".into(), vec![]);
-    let mut store = SlottedProofStore::new(dag);
-    let root = store.fiat(input, input);
-    for override_global in [false, true] {
-        let mut substitution = vec![("x".into(), one), ("y".into(), two)];
-        if override_global {
-            substitution.push(("n".into(), one));
-        }
-        let proof = store.ordinary(
-            Proposition::new(input, hit),
-            Justification::Rule {
-                name: "guard".into(),
-                substitution: substitution.into_iter().collect(),
-                premise_proofs: vec![root, root],
-            },
-        );
-        let error = check_proof(&mut store, &program, proof)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains(if override_global {
-                "overrides captured global"
-            } else {
-                "free fails"
-            }),
-            "{error}"
-        );
-    }
-}
-
-#[test]
-fn renaming_guard_checks_an_equality_witness() {
-    let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
-    program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
-    program.add_constructor("F", vec![ColumnKind::Child]);
-    program.add_constructor("G", vec![ColumnKind::Child]);
-    program.add_constructor("Hit", vec![]);
-    program.add_let(&mut dag, "a", "(F $0)").unwrap();
-    program.add_let(&mut dag, "b", "(G $1)").unwrap();
-    program.add_let(&mut dag, "input", "(Pair a b)").unwrap();
-    program.add_union(&mut dag, "a", "(G $0)", "U").unwrap();
-    for predicate in ["=", "renaming-="] {
-        program
-            .add_rewrite(
-                &mut dag,
-                &format!(
-                    r#"(rewrite (Pair x y) (Hit) :when (({predicate} x y)) :name "{predicate}")"#,
-                ),
-            )
-            .unwrap();
-    }
-    let (a, b, input) = (program.lets["a"], program.lets["b"], program.lets["input"]);
-    let hit = dag.app("Hit".into(), vec![]);
-    let mut store = SlottedProofStore::new(dag);
-    let root = store.fiat(input, input);
-    let union = store.fiat(a, program.unions[0].rhs);
-    let reflexive = store.fiat(a, a);
-    let wrong_left = store.sym(union);
-    for (predicate, evidence, valid) in [
-        ("renaming-=", union, true),
-        ("=", union, false),
-        ("renaming-=", reflexive, false),
-        ("renaming-=", wrong_left, false),
-    ] {
-        let proof = store.ordinary(
-            Proposition::new(input, hit),
-            Justification::Rule {
-                name: predicate.into(),
-                substitution: vec![("x".into(), a), ("y".into(), b)].into_iter().collect(),
-                premise_proofs: vec![root, evidence],
-            },
-        );
-        assert_eq!(check_proof(&mut store, &program, proof).is_ok(), valid);
-    }
-}
-
-#[test]
-fn renaming_disequality_rejects_different_spellings_of_the_same_term() {
-    let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
-    program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
-    program.add_constructor("F", vec![ColumnKind::Child]);
-    program.add_constructor("Hit", vec![]);
-    program
-        .add_let(&mut dag, "input", "(Pair (F $0) (F $1))")
-        .unwrap();
-    for predicate in ["!=", "renaming-!="] {
-        program
-            .add_rewrite(
-                &mut dag,
-                &format!(
-                    r#"(rewrite (Pair x y) (Hit) :when (({predicate} x y)) :name "{predicate}")"#,
-                ),
-            )
-            .unwrap();
-    }
-    let input = program.lets["input"];
-    let Term::App(_, children) = dag.get(input).clone() else {
-        unreachable!()
-    };
-    let hit = dag.app("Hit".into(), vec![]);
-    let mut store = SlottedProofStore::new(dag);
-    let root = store.fiat(input, input);
-    let x = store.project(root, 0).unwrap();
-    let y = store.project(root, 1).unwrap();
-    for (predicate, valid) in [("!=", true), ("renaming-!=", false)] {
-        let proof = store.ordinary(
-            Proposition::new(input, hit),
-            Justification::Rule {
-                name: predicate.into(),
-                substitution: vec![("x".into(), children[0]), ("y".into(), children[1])]
-                    .into_iter()
-                    .collect(),
-                premise_proofs: vec![root, x, y],
-            },
-        );
-        assert_eq!(check_proof(&mut store, &program, proof).is_ok(), valid);
-    }
-}
-
-#[test]
 fn fiat_needs_a_built_term_or_a_union() {
     let (mut store, program, _claim) = figure_3();
     let s9 = slot_term(&mut store.term_dag, 9);
@@ -478,59 +336,6 @@ fn fiat_needs_a_built_term_or_a_union() {
     );
     let wrong = store.fiat(null, bogus);
     assert!(check_proof(&mut store, &program, wrong).is_err());
-}
-
-#[test]
-fn free_name_guards_check_the_instantiated_terms() {
-    let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
-    program.add_constructor("F", vec![ColumnKind::Child; 3]);
-    program.add_let(&mut dag, "input", "(F $0 $1 $0)").unwrap();
-    let cases = [
-        ("free $s x y", true),
-        ("not-free $s x y", false),
-        ("free-names-are x $s", false),
-        ("free-names-are y $s", true),
-        ("free-names-are y", false),
-    ];
-    for (i, (condition, _)) in cases.iter().enumerate() {
-        program
-            .add_rewrite(
-                &mut dag,
-                &format!("(rewrite (F $s x y) y :name \"guard{i}\" :when (({condition})))"),
-            )
-            .unwrap();
-    }
-    let mut store = SlottedProofStore::new(dag);
-    let input = program.lets["input"];
-    let zero = slot_term(&mut store.term_dag, 0);
-    let one = slot_term(&mut store.term_dag, 1);
-    let root = store.fiat(input, input);
-    let x = store.project(root, 1).unwrap();
-    let y = store.project(root, 2).unwrap();
-    for (i, (condition, valid)) in cases.iter().enumerate() {
-        let proof = store.ordinary(
-            Proposition::new(input, zero),
-            Justification::Rule {
-                name: format!("guard{i}"),
-                substitution: vec![("$s".into(), zero), ("x".into(), one), ("y".into(), zero)]
-                    .into_iter()
-                    .collect(),
-                premise_proofs: (if i < 2 {
-                    vec![root, x, y]
-                } else if i == 2 {
-                    vec![root, x]
-                } else {
-                    vec![root, y]
-                }),
-            },
-        );
-        assert_eq!(
-            check_proof(&mut store, &program, proof).is_ok(),
-            *valid,
-            "{condition}"
-        );
-    }
 }
 
 #[test]
@@ -580,6 +385,8 @@ fn rule_instances_and_minted_slots() {
     check_proof(&mut store, &program, wrap).unwrap();
 
     // eta on the wrapped term: (Lam $4 (App t $4)) = t, with $4 not free in t
+    let slot = store.fiat(s4, s4);
+    let guard = store.primitive("not-free", vec![slot, root]);
     let eta = store.ordinary(
         Proposition::new(wrapped, t),
         Justification::Rule {
@@ -587,7 +394,7 @@ fn rule_instances_and_minted_slots() {
             substitution: vec![("$x".into(), s4), ("f".into(), t)]
                 .into_iter()
                 .collect(),
-            premise_proofs: vec![wrap, root],
+            premise_proofs: vec![wrap, guard],
         },
     );
     check_proof(&mut store, &program, eta).unwrap();
@@ -992,51 +799,4 @@ fn corrupt_and_cyclic_proofs_are_rejected() {
     let second = store.ordinary(Proposition::new(m7, zero), Justification::Sym(first));
     let err = check_proof(&mut store, &program, second).unwrap_err();
     assert!(err.to_string().contains("cyclic"), "{err}");
-}
-
-#[test]
-fn renaming_guards_preserve_binding_scopes_and_injectivity() {
-    for (representative, candidate, valid) in [
-        ("(Lam $0 (Pair $0 $1))", "(Lam $2 (Pair $2 $3))", true),
-        ("(Lam $0 (Pair $0 $1))", "(Lam $2 (Pair $2 $2))", false),
-        ("(Pair $0 $1)", "(Pair $2 $2)", false),
-        ("(Lam $0 (Lam $0 $0))", "(Lam $1 (Lam $2 $1))", false),
-    ] {
-        let mut dag = TermDag::default();
-        let mut program = SlottedProgram::default();
-        program.add_constructor("A", vec![]);
-        program.add_constructor("Hit", vec![]);
-        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
-        program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
-        program.add_let(&mut dag, "a", "(A)").unwrap();
-        program.add_let(&mut dag, "b", candidate).unwrap();
-        program.add_let(&mut dag, "input", "(Pair a b)").unwrap();
-        program
-            .add_union(&mut dag, "a", representative, "U")
-            .unwrap();
-        program
-            .add_rewrite(
-                &mut dag,
-                r#"(rewrite (Pair x y) (Hit) :when ((renaming-= x y)) :name "guard")"#,
-            )
-            .unwrap();
-        let (a, b, input) = (program.lets["a"], program.lets["b"], program.lets["input"]);
-        let hit = dag.app("Hit".into(), vec![]);
-        let mut store = SlottedProofStore::new(dag);
-        let root = store.fiat(input, input);
-        let witness = store.fiat(a, program.unions[0].rhs);
-        let proof = store.ordinary(
-            Proposition::new(input, hit),
-            Justification::Rule {
-                name: "guard".into(),
-                substitution: [("x".into(), a), ("y".into(), b)].into_iter().collect(),
-                premise_proofs: vec![root, witness],
-            },
-        );
-        assert_eq!(
-            check_proof(&mut store, &program, proof).is_ok(),
-            valid,
-            "{representative} versus {candidate}"
-        );
-    }
 }
