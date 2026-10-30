@@ -1,12 +1,10 @@
 //! Lift proofs of flattened rewrites back to the original source rules.
-use super::format::{
-    SlottedConclusion, SlottedJustification as Step, SlottedPremise, SlottedProofId,
-    SlottedProofStore, SlottedProposition,
-};
-use super::lifting::Lifting;
+use super::coordinates::Coordinates;
+use super::format::{ProofId, SlottedConclusion, SlottedProof, SlottedProofStore};
 use super::source::{Requirement, SlottedProgram, SourceFact, pattern_term};
 use super::terms::{Renaming, term_renaming};
 use super::{HashMap, HashSet};
+use egglog::proof::{Justification as Step, Proposition};
 use egglog::{Term, TermId};
 use std::collections::VecDeque;
 
@@ -22,82 +20,92 @@ pub(super) fn lift(
         .into_iter()
         .map(|id| (id, old.get(id).clone()))
         .collect();
-    let mut out = Lifting::new(old);
+    let mut out = Coordinates::new(old);
     let mut lifted = HashMap::default();
     for (id, proof) in steps {
-        let result = match &proof.justification {
-            Step::Rule {
-                name,
-                substitution,
-                premises,
-            } => {
-                let premises = premises
-                    .iter()
-                    .map(|p| out.proof(lifted[&p.proof()]))
-                    .collect();
-                let result = lift_rule(
-                    &mut out,
-                    program,
-                    name,
-                    substitution.clone(),
-                    premises,
-                    proof.proposition.clone(),
-                )
-                .map_err(|e| format!("lifting source rule {name}: {e}"))?;
-                let rhs = SlottedProofStore::proposition(&out, result).rhs;
-                let refreshed = program.refresh_binders(&mut out.term_dag, rhs);
-                let result = if refreshed == rhs {
-                    result
-                } else {
-                    out.alpha(result, refreshed)
-                };
-                let actual = SlottedProofStore::proposition(&out, result).clone();
-                let renaming = term_renaming(&out.term_dag, &[(proof.proposition.rhs, actual.rhs)])
-                    .ok_or("lifted rule changes the right-hand term's shape")?;
-                out.view(result, proof.proposition.rhs, renaming)
-            }
-            Step::Fiat => {
-                let proof = source_fiat(&mut out, program, proof.proposition)?;
+        let proposition = proof.proposition().clone();
+        let result = match &proof {
+            SlottedProof::Alpha { proof, .. } => {
+                let premise = out.proof(lifted[proof]);
+                let proof = out.alpha(premise, proposition.rhs);
                 out.plain(proof)
             }
-            Step::Sym(p) => out.sym(lifted[p]),
-            Step::Alpha(p) => {
-                let premise = out.proof(lifted[p]);
-                let proof = out.alpha(premise, proof.proposition.rhs);
-                out.plain(proof)
-            }
-            Step::Trans(a, b) => out.trans(lifted[a], lifted[b]).map_err(|e| e.0)?,
-            Step::Congr {
-                proof: parent,
-                child_index,
-                child_proof,
+            SlottedProof::Equivariance {
+                proof, renaming, ..
             } => {
-                // Restore RHS names without changing the child matched by the parent.
-                let mut child = lifted[child_proof];
-                let actual = SlottedProofStore::proposition(&out, out.proof(child));
-                let wanted = out.proposition(child);
-                if let Some(renaming) = term_renaming(
-                    &out.term_dag,
-                    &[(actual.lhs, wanted.lhs), (actual.rhs, wanted.rhs)],
-                ) {
-                    child = out.equivariance(child, &renaming);
-                }
-                let p = out
-                    .congr(lifted[parent], *child_index, child)
-                    .map_err(|e| e.0)?;
-                let rhs = out.proposition(p).rhs;
-                let renaming = term_renaming(&out.term_dag, &[(rhs, proof.proposition.rhs)])
-                    .ok_or("lifting congruence changes the right-hand term's shape")?;
-                out.reframe(p, renaming)
-            }
-            Step::Proj {
-                proof: parent,
-                child_index,
-            } => out.project(lifted[parent], *child_index).map_err(|e| e.0)?,
-            Step::Equivariance { proof, renaming } => {
                 let p = out.equivariance(lifted[proof], renaming);
                 out.reframe(p, renaming.clone())
             }
+            SlottedProof::Ordinary(proof) => match proof.justification() {
+                Step::Rule {
+                    name,
+                    substitution,
+                    premise_proofs,
+                } => {
+                    let premises = premise_proofs
+                        .iter()
+                        .map(|p| out.proof(lifted[p]))
+                        .collect();
+                    let result = lift_rule(
+                        &mut out,
+                        program,
+                        name,
+                        substitution.iter().map(|(v, t)| (v.clone(), *t)).collect(),
+                        premises,
+                        proposition.clone(),
+                    )
+                    .map_err(|e| format!("lifting source rule {name}: {e}"))?;
+                    let rhs = out.proposition(result).rhs;
+                    let refreshed = program.refresh_binders(&mut out.term_dag, rhs);
+                    let result = if refreshed == rhs {
+                        result
+                    } else {
+                        out.alpha(result, refreshed)
+                    };
+                    let actual = out.proposition(result).clone();
+                    let renaming = term_renaming(&out.term_dag, &[(proposition.rhs, actual.rhs)])
+                        .ok_or("lifted rule changes the right-hand term's shape")?;
+                    out.view(result, proposition.rhs, renaming)
+                }
+                Step::Fiat => {
+                    let proof = source_fiat(&mut out, program, proposition.clone())?;
+                    out.plain(proof)
+                }
+                Step::Sym(p) => out.sym(lifted[p]),
+                Step::Trans(a, b) => out.trans(lifted[a], lifted[b]).map_err(|e| e.0)?,
+                Step::Congr {
+                    proof: parent,
+                    child_index,
+                    child_proof,
+                } => {
+                    // Restore RHS names without changing the child matched by the parent.
+                    let mut child = lifted[child_proof];
+                    let actual = out.proposition(out.proof(child));
+                    let wanted = out.edge(child);
+                    if let Some(renaming) = term_renaming(
+                        &out.term_dag,
+                        &[(actual.lhs, wanted.lhs), (actual.rhs, wanted.rhs)],
+                    ) {
+                        child = out.equivariance(child, &renaming);
+                    }
+                    let p = out
+                        .congr(lifted[parent], *child_index, child)
+                        .map_err(|e| e.0)?;
+                    let rhs = out.edge(p).rhs;
+                    let renaming = term_renaming(&out.term_dag, &[(rhs, proposition.rhs)])
+                        .ok_or("lifting congruence changes the right-hand term's shape")?;
+                    out.reframe(p, renaming)
+                }
+                Step::Proj {
+                    proof: parent,
+                    child_index,
+                } => out.project(lifted[parent], *child_index).map_err(|e| e.0)?,
+                _ => {
+                    return Err(
+                        "unsupported ordinary step while unflattening a slotted proof".into(),
+                    );
+                }
+            },
         };
         lifted.insert(id, result);
     }
@@ -109,8 +117,8 @@ pub(super) fn lift(
 fn source_fiat(
     store: &mut SlottedProofStore,
     program: &SlottedProgram,
-    claimed: SlottedProposition,
-) -> Result<SlottedProofId> {
+    claimed: Proposition,
+) -> Result<ProofId> {
     if claimed.lhs == claimed.rhs && program.is_built(&store.term_dag, claimed.lhs)
         || program.union_sort(claimed.lhs, claimed.rhs).is_some()
     {
@@ -158,9 +166,9 @@ fn lift_rule(
     program: &SlottedProgram,
     name: &str,
     substitution: Vec<(String, TermId)>,
-    premises: Vec<SlottedProofId>,
-    claimed: SlottedProposition,
-) -> Result<SlottedProofId> {
+    premises: Vec<ProofId>,
+    claimed: Proposition,
+) -> Result<ProofId> {
     let rule = program
         .rewrites
         .get(name)
@@ -185,36 +193,31 @@ fn lift_rule(
         .collect();
     let mut witnesses = Witnesses::new(store, program, premises);
     let root = witnesses.exists(lhs)?;
-    let mut source_premises = vec![SlottedPremise::Equality(root)];
+    let mut source_premises = vec![root];
     for requirement in rule.conditions().iter().flat_map(SourceFact::requirements) {
         source_premises.push(match requirement {
             Requirement::Exists(t) => {
                 let t = instance(witnesses.store, t)?;
-                witnesses.exists(t)?.into()
+                witnesses.exists(t)?
             }
             Requirement::RenamingEqual(a, b) => {
                 let a = instance(witnesses.store, a)?;
                 let b = instance(witnesses.store, b)?;
-                let proof = witnesses.renaming_equality(a, b)?;
-                let representative = witnesses.store.proposition(proof).rhs;
-                let renaming = program
-                    .renaming_between(&mut witnesses.store.term_dag, b, representative)
-                    .ok_or("guard representative has no slot permutation")?;
-                SlottedPremise::Renaming { proof, renaming }
+                witnesses.renaming_equality(a, b)?
             }
             Requirement::Equal(a, b) => {
                 let a = instance(witnesses.store, a)?;
                 let b = instance(witnesses.store, b)?;
-                witnesses.condition_equality(program, a, b)?.into()
+                witnesses.condition_equality(program, a, b)?
             }
         });
     }
-    let source = witnesses.store.add(
-        SlottedProposition::equal(lhs, rhs),
+    let source = witnesses.store.ordinary(
+        Proposition::new(lhs, rhs),
         Step::Rule {
             name: name.into(),
             substitution,
-            premises: source_premises,
+            premise_proofs: source_premises,
         },
     );
     witnesses.add(source);
@@ -247,9 +250,9 @@ fn lift_rule(
 struct Witnesses<'a> {
     store: &'a mut SlottedProofStore,
     program: &'a SlottedProgram,
-    edges: Vec<SlottedProofId>,
-    known: HashMap<TermId, SlottedProofId>,
-    memo: HashMap<(TermId, TermId, bool), SlottedProofId>,
+    edges: Vec<ProofId>,
+    known: HashMap<TermId, ProofId>,
+    memo: HashMap<(TermId, TermId, bool), ProofId>,
     active: HashSet<(TermId, TermId, bool)>,
 }
 
@@ -257,7 +260,7 @@ impl<'a> Witnesses<'a> {
     fn new(
         store: &'a mut SlottedProofStore,
         program: &'a SlottedProgram,
-        proofs: Vec<SlottedProofId>,
+        proofs: Vec<ProofId>,
     ) -> Self {
         let mut out = Self {
             store,
@@ -273,7 +276,7 @@ impl<'a> Witnesses<'a> {
         out
     }
 
-    fn add(&mut self, proof: SlottedProofId) {
+    fn add(&mut self, proof: ProofId) {
         self.edges.push(proof);
         let inverse = self.store.sym(proof);
         let mut work = vec![inverse, proof];
@@ -292,7 +295,7 @@ impl<'a> Witnesses<'a> {
         }
     }
 
-    fn reflexive(&mut self, term: TermId) -> Result<SlottedProofId> {
+    fn reflexive(&mut self, term: TermId) -> Result<ProofId> {
         let proof = self.exists(term)?;
         if self.store.proposition(proof).lhs == term {
             return Ok(proof);
@@ -301,7 +304,7 @@ impl<'a> Witnesses<'a> {
         self.store.trans(inverse, proof).map_err(|e| e.0)
     }
 
-    fn exists(&mut self, term: TermId) -> Result<SlottedProofId> {
+    fn exists(&mut self, term: TermId) -> Result<ProofId> {
         if let Some(&p) = self.known.get(&term) {
             return Ok(p);
         }
@@ -336,7 +339,7 @@ impl<'a> Witnesses<'a> {
         program: &SlottedProgram,
         a: TermId,
         b: TermId,
-    ) -> Result<SlottedProofId> {
+    ) -> Result<ProofId> {
         for proof in self.edges.clone() {
             let p = self.store.proposition(proof).clone();
             if program.alpha_eq(&mut self.store.term_dag, p.lhs, a)
@@ -358,12 +361,7 @@ impl<'a> Witnesses<'a> {
         self.equality(a, b)
     }
 
-    fn alpha_endpoints(
-        &mut self,
-        mut proof: SlottedProofId,
-        lhs: TermId,
-        rhs: TermId,
-    ) -> SlottedProofId {
+    fn alpha_endpoints(&mut self, mut proof: ProofId, lhs: TermId, rhs: TermId) -> ProofId {
         if self.store.proposition(proof).rhs != rhs {
             proof = self.store.alpha(proof, rhs);
         }
@@ -375,7 +373,7 @@ impl<'a> Witnesses<'a> {
         proof
     }
 
-    fn renaming_equality(&mut self, a: TermId, b: TermId) -> Result<SlottedProofId> {
+    fn renaming_equality(&mut self, a: TermId, b: TermId) -> Result<ProofId> {
         for term in [a, b] {
             let proof = self.exists(term)?;
             self.add(proof);
@@ -415,18 +413,13 @@ impl<'a> Witnesses<'a> {
         Err("no equality up to renaming between the guard's terms".into())
     }
 
-    fn equality(&mut self, from: TermId, to: TermId) -> Result<SlottedProofId> {
+    fn equality(&mut self, from: TermId, to: TermId) -> Result<ProofId> {
         self.reconstruct(from, to, false)
     }
 
     // Existence allows a permutation of the whole derivation. An equality must
     // preserve its starting term as well as end at the requested target.
-    fn reconstruct(
-        &mut self,
-        from: TermId,
-        to: TermId,
-        rename_source: bool,
-    ) -> Result<SlottedProofId> {
+    fn reconstruct(&mut self, from: TermId, to: TermId, rename_source: bool) -> Result<ProofId> {
         let key = (from, to, rename_source);
         if let Some(&p) = self.memo.get(&key) {
             return Ok(p);
@@ -442,7 +435,7 @@ impl<'a> Witnesses<'a> {
         result
     }
 
-    fn search(&mut self, from: TermId, to: TermId, rename_source: bool) -> Result<SlottedProofId> {
+    fn search(&mut self, from: TermId, to: TermId, rename_source: bool) -> Result<ProofId> {
         for edge in self.edges.clone() {
             let p = self.store.proposition(edge).clone();
             if let Some(renaming) = self.renaming(&[(p.lhs, from), (p.rhs, to)]) {
@@ -554,115 +547,5 @@ impl<'a> Witnesses<'a> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::source::ColumnKind;
-    use super::*;
-    use crate::slotted::proofs::check_proof;
-    use egglog::TermDag;
-
-    #[test]
-    fn reconstructs_nested_binders_after_a_shape_change() {
-        let mut dag = TermDag::default();
-        let mut program = SlottedProgram::default();
-        for head in ["F", "G"] {
-            program.add_constructor(head, vec![ColumnKind::Child]);
-        }
-        program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
-        program
-            .add_let(&mut dag, "input", "(F (G (Lam $0 $0)))")
-            .unwrap();
-        program
-            .add_let(&mut dag, "target", "(F (Lam $3 (Lam $4 $4)))")
-            .unwrap();
-        program
-            .add_union(&mut dag, "(G (Lam $1 $1))", "(Lam $2 (Lam $1 $1))", "U")
-            .unwrap();
-        let target = program.lets.shift_remove("target").unwrap();
-        let mut store = SlottedProofStore::new(dag);
-        let root = store.fiat(program.lets["input"], program.lets["input"]);
-        let union = store.fiat(program.unions[0].lhs, program.unions[0].rhs);
-        let mut witnesses = Witnesses::new(&mut store, &program, vec![root, union]);
-        let proof = witnesses.exists(target).unwrap();
-        assert_eq!(witnesses.store.proposition(proof).rhs, target);
-        let equality = witnesses.equality(program.lets["input"], target).unwrap();
-        assert_eq!(
-            witnesses.store.proposition(equality).lhs,
-            program.lets["input"]
-        );
-        assert_eq!(witnesses.store.proposition(equality).rhs, target);
-        check_proof(&mut store, &program, proof).unwrap();
-        check_proof(&mut store, &program, equality).unwrap();
-    }
-
-    #[test]
-    fn reconstruction_preserves_shared_sibling_names() {
-        let mut dag = TermDag::default();
-        let mut program = SlottedProgram::default();
-        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
-        program.add_let(&mut dag, "input", "(Pair $0 $0)").unwrap();
-        program.add_let(&mut dag, "target", "(Pair $1 $2)").unwrap();
-        let target = program.lets.shift_remove("target").unwrap();
-        let mut store = SlottedProofStore::new(dag);
-        let root = store.fiat(program.lets["input"], program.lets["input"]);
-        let mut witnesses = Witnesses::new(&mut store, &program, vec![root]);
-        assert!(witnesses.exists(target).is_err());
-    }
-
-    #[test]
-    fn reconstruction_tries_equal_children_before_renaming_them() {
-        let mut dag = TermDag::default();
-        let mut program = SlottedProgram::default();
-        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
-        for head in ["F", "G", "H"] {
-            program.add_constructor(head, vec![ColumnKind::Child]);
-        }
-        program
-            .add_let(&mut dag, "input", "(Pair $0 (G $0))")
-            .unwrap();
-        program
-            .add_let(&mut dag, "target", "(Pair $0 (F $0))")
-            .unwrap();
-        for (lhs, rhs) in [
-            ("(G $0)", "(H $1)"),
-            ("(G $0)", "(H $0)"),
-            ("(H $0)", "(F $0)"),
-        ] {
-            program.add_union(&mut dag, lhs, rhs, "U").unwrap();
-        }
-        let target = program.lets.shift_remove("target").unwrap();
-        let mut store = SlottedProofStore::new(dag);
-        let root = store.fiat(program.lets["input"], program.lets["input"]);
-        let mut premises = vec![root];
-        for union in &program.unions {
-            premises.push(store.fiat(union.lhs, union.rhs));
-        }
-        let mut witnesses = Witnesses::new(&mut store, &program, premises);
-        let proof = witnesses.exists(target).unwrap();
-        assert_eq!(witnesses.store.proposition(proof).rhs, target);
-        check_proof(&mut store, &program, proof).unwrap();
-    }
-
-    #[test]
-    fn renaming_guard_lifts_child_equalities_through_congruence() {
-        let mut dag = TermDag::default();
-        let mut program = SlottedProgram::default();
-        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
-        for head in ["F", "G", "H"] {
-            program.add_constructor(head, vec![ColumnKind::Child]);
-        }
-        program.add_let(&mut dag, "a", "(F (G $0))").unwrap();
-        program.add_let(&mut dag, "b", "(F (H $0))").unwrap();
-        program.add_let(&mut dag, "input", "(Pair a b)").unwrap();
-        program
-            .add_union(&mut dag, "(G $0)", "(H $0)", "U")
-            .unwrap();
-        let mut store = SlottedProofStore::new(dag);
-        let root = store.fiat(program.lets["input"], program.lets["input"]);
-        let union = store.fiat(program.unions[0].lhs, program.unions[0].rhs);
-        let mut witnesses = Witnesses::new(&mut store, &program, vec![root, union]);
-        let proof = witnesses
-            .renaming_equality(program.lets["a"], program.lets["b"])
-            .unwrap();
-        check_proof(&mut store, &program, proof).unwrap();
-    }
-}
+#[path = "unflatten_tests.rs"]
+mod tests;

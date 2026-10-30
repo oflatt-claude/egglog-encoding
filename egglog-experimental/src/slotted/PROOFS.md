@@ -2,11 +2,11 @@
 
 `egglog-experimental --slotted --proofs source.egg` extracts and checks proofs
 for supported equality checks in [slotted programs](LANGUAGE.md). Each proof uses
-source terms, rewrites, and unions. The slotted checker verifies the translated
+source terms, rewrites, and unions. The slotted checker verifies the lifted
 proof against the source program before and after normalization.
 
 The compiler emits a variant of the [slotted encoding](ENCODING.md) supported by
-egglog's term/proof encoding. The translator consumes unsimplified egglog proofs;
+egglog's term/proof encoding. Slot lifting consumes unsimplified egglog proofs;
 egglog's own proof checker and simplifier are skipped in this mode.
 
 ```text
@@ -42,9 +42,9 @@ congruence. Reflexivity of bare slots and literals is sort-independent.
 
 # Propositions
 
-A proposition is an ordinary equality `t1 = t2`. Any renaming has already been
-applied to the actual terms. Symmetry, transitivity and congruence check exact
-term identities and carry no renaming state.
+A proposition uses egglog's ordinary `Proposition`: an equality `t1 = t2`.
+Any renaming has already been applied to the actual terms. Symmetry, transitivity
+and congruence check exact term identities and carry no renaming state.
 
 A renaming `m` is a finite bijection on slot names, the identity outside its
 support. `rename(m, t)` recursively renames every slot occurrence, bound and free
@@ -52,6 +52,10 @@ alike, including binder declarations. Constructor heads and payloads are unchang
 The explicit Equivariance rule applies this operation to both endpoints of a proof.
 
 # Justifications
+
+`SlottedProof` has three variants: `Ordinary(egglog::proof::Proof)`, `Alpha`, and
+`Equivariance`. All premises use egglog's `ProofId` in the same slotted proof
+store. Ordinary steps use egglog's justifications and printer.
 
 The slotted checker delegates ordinary equality steps and exact fact/action
 checking to egglog's checker. It validates source axioms, slotted rule conditions,
@@ -69,9 +73,9 @@ Premises are ordered: first a proof `t = L[σ]`, then evidence for the original
 `:when` facts in source order. An equality `(= a b)` requires a proof with
 endpoints `a[σ]` and `b[σ]` exactly. An Alpha step may establish the required spelling.
 A renaming equality `(renaming-= a b)` requires an ordinary equality proof
-`a[σ] = c` and an explicit permutation `m`. The checker requires
-`c` to be alpha-equivalent to `rename(m, b[σ])`. This evidence prints as
-`(RenamingGuard proof (renaming ...))`; existence of the operands alone is insufficient.
+`a[σ] = c`. The checker verifies that a slot permutation takes `b[σ]` to a term
+alpha-equivalent to `c`. The premise is an ordinary proof reference; existence
+of the operands alone is insufficient.
 A constructor fact requires an existence proof ending at its instantiated term.
 The remaining guards require existence proofs for their term operands and the checks
 below. Nested terms stay nested; generated pattern variables do not appear in
@@ -163,7 +167,7 @@ to the resulting displayed proof, reserving all source names and rule variables.
 
 `--slotted --proofs` compiles the same slotted graph operations into forms supported
 by egglog's term/proof encoding. Generated machinery rules have stable names under
-`slotted/`, so the translator can identify their derivations. User rules use their
+`slotted/`, so slot lifting can identify their derivations. User rules use their
 source names, disambiguated when reused, with `/apply` and `/drain` on companion rules.
 
 `group-coset-reps` returns a `Group`. Indexed reads use `group-elements`, sorted
@@ -205,39 +209,43 @@ from the source declarations. Each claim retains its source expressions and the
 mapping from source slot names to encoded IDs; the checker does not read encoded
 tables.
 
-# Translation
+# Proof lifting
 
 The source recorder uses the compiler's lowering to reconstruct flattened rules
 and their generated pattern, class, reading, and frame names. Claims carry the
 corresponding names for their compiled queries. These mappings belong to lifting;
 the source checker does not consult them.
 
-Encoding translation produces proofs over those flattened rewrites. A separate
-pass in [`proofs/unflatten.rs`](proofs/unflatten.rs) reconstructs nested terms
-using the atom equalities, congruence, projection, and equivariance. It replaces
+The pass in [`proofs/lift_slots.rs`](proofs/lift_slots.rs) produces proofs over those
+flattened rewrites. A separate pass in [`proofs/unflatten.rs`](proofs/unflatten.rs)
+reconstructs nested terms using the atom equalities, congruence, projection, and
+equivariance. It replaces
 each flattened rule application with an application of the original rewrite,
 reconstructs evidence for the original `:when` facts, and removes generated
 variables from substitutions. The final checker uses only the original source
 program and the resulting ordinary equality proof.
 
 Generated slots come from one supply that reserves all interned source slots, the input terms' slots,
-encoded renaming coordinates, and names introduced during translation. Negative
+encoded renaming coordinates, and names introduced during lifting. Negative
 input slots are valid and are reserved too. A source union is stated using its
 recorded terms, then transported to the decoded binder names by proof steps.
 
-The translator (`egglog-experimental/src/slotted/proofs/translate.rs`) maps an egglog proof over
-the encoded program to a slotted proof. Pattern expansion returns its proof,
+## Slot lifting
+
+Slot lifting maps an egglog proof over the encoded program to a proof of the
+flattened slotted program. Pattern expansion returns its proof,
 variable bindings, and occurrences together; recursive rule applications have
-their own bindings. The translator retains the shared proof arena, memoized
+their own bindings. The pass retains the shared proof arena, memoized
 derivations, and fresh-slot supply across expansions. Its core is a denotation
 `dec` from encoded terms to source terms:
 `dec(F(m1, c1, ..., mk, ck)) = F(m̂1·dec(c1), ...)`, where
 each edge is completed to a bijection by naming the child's redundant slots with
 fresh names, and `dec(SlottedVar_N 0)` is `$0`. Every encoded fact then denotes an
 ordinary proposition, and every maintenance rule firing has a fixed derivation.
-A private lifting context also retains the encoded edge coordinates needed by
-later reconstruction. Restating an edge in different coordinates reuses the same
-ordinary proof; transporting its endpoints emits Equivariance:
+The helper in [`proofs/coordinates.rs`](proofs/coordinates.rs) retains the encoded
+edge coordinates needed by later reconstruction. Restating an edge in different
+coordinates reuses the same ordinary proof; transporting its endpoints emits
+Equivariance:
 
 | encoded fact | proposition |
 | --- | --- |
@@ -254,7 +262,7 @@ have a short Sym/Equivariance/Trans derivation.
 
 `group-shrink` computes `group-close(group-restrict old-group slots)` and stages
 it in `GroupReplace`; `group-restore` publishes the result. To prove a restricted
-group element, the translator finds a product of the restricted generators and
+group element, slot lifting finds a product of the restricted generators and
 composes the corresponding proofs for the original generators. The full equality
 retains any action on redundant slots and must agree with the requested symmetry
 on the surviving slots. `EclassGroup` merges use `set-union`, so each generator
@@ -277,7 +285,7 @@ keeps the proof from its contributing side. `GroupReplace` merges select `new`.
 
 # Running
 
-The end-to-end demo snapshots show the source alongside its translated, checked
+The end-to-end demo snapshots show the source alongside its lifted, checked
 proof: [a rewrite](../../tests/snapshots/slotted_proofs__demo_rewrite.snap),
 [a nested rewrite with original conditions](../../tests/snapshots/slotted_proofs__demo_nested_conditions.snap),
 [a renaming equality guard](../../tests/snapshots/slotted_proofs__demo_renaming_guard.snap),

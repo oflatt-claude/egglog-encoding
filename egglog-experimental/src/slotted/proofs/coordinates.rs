@@ -2,16 +2,14 @@
 //! at an ordinary equality proof; changing its coordinates adds no proof step.
 
 use super::HashMap;
-use super::format::{
-    MalformedStep, SlottedConclusion, SlottedJustification, SlottedProofId, SlottedProofStore,
-    SlottedProposition,
-};
+use super::format::{MalformedStep, ProofId, SlottedConclusion, SlottedProofStore};
 use super::source::SlottedProgram;
 use super::terms::{Renaming, all_slots, rename};
 use egglog::TermId;
+use egglog::proof::{Justification, Proposition};
 use std::ops::{Deref, DerefMut};
 
-pub(super) type LiftedId = usize;
+pub(super) type ViewId = usize;
 
 /// Coordinates for an encoded edge, whose actual proof states `lhs = rename(m, rhs)`.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -22,19 +20,19 @@ pub(super) struct AppliedEquality {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-struct Lifted {
+struct View {
     proposition: AppliedEquality,
-    proof: SlottedProofId,
-    chain: Option<(LiftedId, LiftedId)>,
+    proof: ProofId,
+    chain: Option<(ViewId, ViewId)>,
 }
 
-pub(super) struct Lifting {
+pub(super) struct Coordinates {
     store: SlottedProofStore,
-    views: Vec<Lifted>,
-    index: HashMap<Lifted, LiftedId>,
+    views: Vec<View>,
+    index: HashMap<View, ViewId>,
 }
 
-impl Deref for Lifting {
+impl Deref for Coordinates {
     type Target = SlottedProofStore;
 
     fn deref(&self) -> &Self::Target {
@@ -42,13 +40,13 @@ impl Deref for Lifting {
     }
 }
 
-impl DerefMut for Lifting {
+impl DerefMut for Coordinates {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.store
     }
 }
 
-impl Lifting {
+impl Coordinates {
     pub fn new(store: SlottedProofStore) -> Self {
         Self {
             store,
@@ -60,16 +58,16 @@ impl Lifting {
     fn record(
         &mut self,
         view: AppliedEquality,
-        proof: SlottedProofId,
-        chain: Option<(LiftedId, LiftedId)>,
-    ) -> LiftedId {
+        proof: ProofId,
+        chain: Option<(ViewId, ViewId)>,
+    ) -> ViewId {
         let actual = self.store.proposition(proof).clone();
         debug_assert_eq!(actual.lhs, view.lhs);
         debug_assert_eq!(
             actual.rhs,
             rename(&mut self.store.term_dag, &view.renaming, view.rhs)
         );
-        let lifted = Lifted {
+        let lifted = View {
             proposition: view,
             proof,
             chain,
@@ -83,7 +81,7 @@ impl Lifting {
         id
     }
 
-    pub fn plain(&mut self, proof: SlottedProofId) -> LiftedId {
+    pub fn plain(&mut self, proof: ProofId) -> ViewId {
         let p = self.store.proposition(proof);
         self.record(
             AppliedEquality {
@@ -96,11 +94,11 @@ impl Lifting {
         )
     }
 
-    pub fn proof(&self, id: LiftedId) -> SlottedProofId {
+    pub fn proof(&self, id: ViewId) -> ProofId {
         self.views[id].proof
     }
 
-    pub fn view(&mut self, proof: SlottedProofId, rhs: TermId, renaming: Renaming) -> LiftedId {
+    pub fn view(&mut self, proof: ProofId, rhs: TermId, renaming: Renaming) -> ViewId {
         self.record(
             AppliedEquality {
                 lhs: self.store.proposition(proof).lhs,
@@ -112,11 +110,11 @@ impl Lifting {
         )
     }
 
-    pub fn proposition(&self, id: LiftedId) -> &AppliedEquality {
+    pub fn edge(&self, id: ViewId) -> &AppliedEquality {
         &self.views[id].proposition
     }
 
-    pub fn chain(&self, id: LiftedId) -> Option<(LiftedId, LiftedId)> {
+    pub fn chain(&self, id: ViewId) -> Option<(ViewId, ViewId)> {
         self.views[id].chain
     }
 
@@ -127,13 +125,13 @@ impl Lifting {
         }
     }
 
-    pub fn fiat(&mut self, lhs: TermId, rhs: TermId) -> LiftedId {
+    pub fn fiat(&mut self, lhs: TermId, rhs: TermId) -> ViewId {
         let proof = self.store.fiat(lhs, rhs);
         self.plain(proof)
     }
 
-    pub fn sym(&mut self, id: LiftedId) -> LiftedId {
-        let p = self.proposition(id).clone();
+    pub fn sym(&mut self, id: ViewId) -> ViewId {
+        let p = self.edge(id).clone();
         let back = self.store.sym(self.views[id].proof);
         let inverse = p.renaming.inverse();
         let proof = self.store.equivariance(back, inverse.clone());
@@ -148,11 +146,8 @@ impl Lifting {
         )
     }
 
-    pub fn trans(&mut self, left: LiftedId, right: LiftedId) -> Result<LiftedId, MalformedStep> {
-        let (l, r) = (
-            self.proposition(left).clone(),
-            self.proposition(right).clone(),
-        );
+    pub fn trans(&mut self, left: ViewId, right: ViewId) -> Result<ViewId, MalformedStep> {
+        let (l, r) = (self.edge(left).clone(), self.edge(right).clone());
         if l.rhs != r.lhs {
             return Err(MalformedStep(
                 "trans: applied-class middle terms differ".into(),
@@ -175,11 +170,11 @@ impl Lifting {
 
     pub fn congr(
         &mut self,
-        id: LiftedId,
+        id: ViewId,
         child_index: usize,
-        child: LiftedId,
-    ) -> Result<LiftedId, MalformedStep> {
-        let p = self.proposition(id).clone();
+        child: ViewId,
+    ) -> Result<ViewId, MalformedStep> {
+        let p = self.edge(id).clone();
         let child_proof = self
             .store
             .equivariance(self.views[child].proof, p.renaming.clone());
@@ -191,16 +186,16 @@ impl Lifting {
         Ok(self.record(AppliedEquality { rhs, ..p }, proof, None))
     }
 
-    pub fn project(&mut self, id: LiftedId, child_index: usize) -> Result<LiftedId, MalformedStep> {
-        let inverse = self.proposition(id).renaming.inverse();
+    pub fn project(&mut self, id: ViewId, child_index: usize) -> Result<ViewId, MalformedStep> {
+        let inverse = self.edge(id).renaming.inverse();
         let proof = self.store.project(self.views[id].proof, child_index)?;
         let proof = self.store.equivariance(proof, inverse);
         Ok(self.plain(proof))
     }
 
     /// Change edge coordinates, leaving its ordinary proof untouched.
-    pub fn reframe(&mut self, id: LiftedId, sigma: Renaming) -> LiftedId {
-        let p = self.proposition(id).clone();
+    pub fn reframe(&mut self, id: ViewId, sigma: Renaming) -> ViewId {
+        let p = self.edge(id).clone();
         let rhs = rename(&mut self.term_dag, &sigma, p.rhs);
         let view = AppliedEquality {
             rhs,
@@ -210,8 +205,8 @@ impl Lifting {
         self.record(view, self.views[id].proof, None)
     }
 
-    pub fn equivariance(&mut self, id: LiftedId, sigma: &Renaming) -> LiftedId {
-        let p = self.proposition(id).clone();
+    pub fn equivariance(&mut self, id: ViewId, sigma: &Renaming) -> ViewId {
+        let p = self.edge(id).clone();
         let lhs = rename(&mut self.term_dag, sigma, p.lhs);
         let proof = self.store.equivariance(self.views[id].proof, sigma.clone());
         self.record(
@@ -227,17 +222,17 @@ impl Lifting {
 
     pub fn rule(
         &mut self,
-        proposition: SlottedProposition,
+        proposition: Proposition,
         name: String,
         substitution: Vec<(String, TermId)>,
-        premises: Vec<LiftedId>,
+        premises: Vec<ViewId>,
         program: &SlottedProgram,
-    ) -> LiftedId {
+    ) -> ViewId {
         let premises: Vec<_> = premises
             .into_iter()
             .enumerate()
             .map(|(i, id)| {
-                let p = self.proposition(id);
+                let p = self.edge(id);
                 // The root must end at the actual rule instance. A side equality
                 // can use either orientation whose endpoint names are alpha-equivalent
                 // to the source condition; free names must match exactly.
@@ -252,18 +247,18 @@ impl Lifting {
                 }
             })
             .collect();
-        let proof = self.store.add(
+        let proof = self.store.ordinary(
             proposition,
-            SlottedJustification::Rule {
+            Justification::Rule {
                 name,
-                substitution,
-                premises: premises.into_iter().map(Into::into).collect(),
+                substitution: substitution.into_iter().collect(),
+                premise_proofs: premises,
             },
         );
         self.plain(proof)
     }
 
-    pub fn proposition_to_string(&self, p: &AppliedEquality) -> String {
+    pub fn edge_to_string(&self, p: &AppliedEquality) -> String {
         format!(
             "{} = {}·{}",
             self.term_dag.to_string(p.lhs),
@@ -272,11 +267,11 @@ impl Lifting {
         )
     }
 
-    pub fn proof_to_string(&self, id: LiftedId) -> String {
+    pub fn proof_to_string(&self, id: ViewId) -> String {
         self.store.proof_to_string(self.views[id].proof)
     }
 
-    pub fn finish(self, id: LiftedId) -> (SlottedProofStore, SlottedConclusion) {
+    pub fn finish(self, id: ViewId) -> (SlottedProofStore, SlottedConclusion) {
         let p = &self.views[id];
         let conclusion = SlottedConclusion {
             proof: p.proof,

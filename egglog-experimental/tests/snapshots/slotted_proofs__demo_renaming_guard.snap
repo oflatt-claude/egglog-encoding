@@ -1,5 +1,6 @@
 ---
 source: egglog-experimental/tests/slotted_proofs.rs
+assertion_line: 116
 expression: "format!(\"Source:\\n{source}\\n\\nProof:\\n{}\", proofs[0])"
 ---
 Source:
@@ -15,7 +16,5 @@ Proof:
 (Rule
   (= (Pair $a $b) (Hit))
   (name "guard")
-  (premises
-    (Fiat (= (Pair $a $b) (Pair $a $b)))
-    (RenamingGuard (Fiat (= (F $a) (G $a))) (renaming ($a $b) ($b $a))))
+  (premises (Fiat (= (Pair $a $b) (Pair $a $b))) (Fiat (= (F $a) (G $a))))
   (substitution ($x $a) ($y $b)))

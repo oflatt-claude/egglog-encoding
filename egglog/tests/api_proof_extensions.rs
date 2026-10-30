@@ -59,3 +59,29 @@ fn printed_strings_round_trip_through_proof_instrumentation() -> Result<(), Erro
     );
     Ok(())
 }
+
+#[test]
+fn proof_hashing_ignores_substitution_insertion_order() {
+    use egglog::proof::{Justification, Proof, Proposition};
+    use hashbrown::HashSet;
+
+    let proof = |substitution| {
+        Proof::new(
+            Proposition::new(0, 1),
+            Justification::Rule {
+                name: "r".into(),
+                premise_proofs: vec![],
+                substitution,
+            },
+        )
+    };
+    let first = proof([("x".into(), 0), ("y".into(), 1)].into_iter().collect());
+    let reversed = proof([("y".into(), 1), ("x".into(), 0)].into_iter().collect());
+    assert_eq!(first, reversed);
+    let mut proofs = HashSet::new();
+    proofs.insert(first);
+    assert!(!proofs.insert(reversed));
+    assert!(proofs.insert(proof(
+        [("x".into(), 1), ("y".into(), 0)].into_iter().collect()
+    )));
+}

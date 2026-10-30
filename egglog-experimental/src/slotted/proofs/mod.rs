@@ -1,22 +1,19 @@
-//! Surface proofs for slotted programs, their checker, and translation from
+//! Surface proofs for slotted programs, their checker, and lifting from
 //! encoded egglog proofs. See `egglog-experimental/src/slotted/PROOFS.md` for
-//! the proof format and translation rules.
+//! the proof format and lifting rules.
 
 pub mod checker;
+mod coordinates;
 pub mod format;
-mod lifting;
+mod lift_slots;
 mod normalize;
 pub(crate) mod pipeline;
 pub mod source;
 pub mod terms;
-pub(crate) mod translate;
 mod unflatten;
 
 pub use checker::{Checked, SlottedCheckError, check_claim, check_proof};
-pub use format::{
-    Claim, ClaimKind, SlottedConclusion, SlottedJustification, SlottedPremise, SlottedProof,
-    SlottedProofId, SlottedProofStore, SlottedProposition,
-};
+pub use format::{Claim, ClaimKind, ProofId, SlottedConclusion, SlottedProof, SlottedProofStore};
 pub use source::{Constructor, SlottedProgram, SourceRule, Union};
 pub use terms::Renaming;
 
