@@ -1,7 +1,7 @@
 //! Checks surface proofs against the slotted source program.
 
 use super::format::{Claim, ClaimKind, SlottedConclusion, SlottedProof, SlottedProofStore};
-use super::guards::GuardValidators;
+use super::guards::{GuardValidators, proof_body};
 use super::source::{ColumnKind, SlottedProgram, SourceFact, pattern_term};
 use super::terms::{all_slots, instantiate, rename, slot_of};
 use super::{HashMap, HashSet};
@@ -37,13 +37,15 @@ pub enum SlottedCheckError {
         name: String,
     },
     /// A rule application supplies the wrong number of premises.
-    #[error("proof #{proof}: rule {name:?} takes {expected} premises, {actual} given")]
+    #[error(
+        "proof #{proof}: rule {name:?} takes {expected} premises after guard normalization, {actual} given"
+    )]
     PremiseCount {
         /// The rejected step.
         proof: ProofId,
         /// The applied rewrite.
         name: String,
-        /// The number required by the source rewrite.
+        /// The number required after guard normalization.
         expected: usize,
         /// The number supplied by the proof.
         actual: usize,
@@ -106,7 +108,7 @@ pub struct Checked {
     pub sort: Option<String>,
 }
 
-// `None` marks primitive operand evidence; its predicate is checked in the enclosing rule.
+// `None` marks RenamingEq evidence, checked against the enclosing rule condition.
 type CheckedProofs = HashMap<ProofId, Option<Checked>>;
 
 /// Check an equality proof and every proof it depends on, returning what it proves.
@@ -143,7 +145,8 @@ pub fn check_proof(
             .ok_or_else(|| SlottedCheckError::Step {
                 proof: root,
                 step: "root",
-                detail: "primitive evidence must be used by a rule, not as an equality".into(),
+                detail: "renaming equality must be used by a rule, not as an ordinary equality"
+                    .into(),
             })
     })();
     store.term_dag = std::mem::take(ordinary.term_dag_mut());
@@ -235,12 +238,12 @@ fn check_one(
         checked[p].as_ref().ok_or_else(|| {
             step(
                 "premise",
-                format!("primitive proof #{p} is not an equality"),
+                format!("renaming-equality proof #{p} is not an equality"),
             )
         })
     };
-    if let SlottedProof::Primitive { arguments, .. } = proof {
-        for p in arguments {
+    if let SlottedProof::RenamingEq { left, right } = proof {
+        for p in [left, right] {
             equality(p)?;
         }
         return Ok(None);
@@ -253,6 +256,25 @@ fn check_one(
     }
     let premise = |p: &ProofId| checked[p].as_ref().expect("premise is an equality").clone();
     let claimed = proof.proposition().expect("equality step");
+    if let SlottedProof::Ordinary(proof) = proof
+        && matches!(proof.justification(), Justification::Fiat)
+        && claimed.lhs == claimed.rhs
+        && matches!(
+            ordinary.term_dag().get(claimed.lhs),
+            Term::Lit(Literal::Unit)
+        )
+    {
+        // Ordinary primitive guards use Unit reflexivity as their result premise.
+        let proposition = ordinary
+            .check_step(id, proof, &[], context, |_, _| {
+                unreachable!("Fiat has no premises")
+            })
+            .map_err(|e| step("literal", e.to_string()))?;
+        return Ok(Some(Checked {
+            proposition,
+            sort: None,
+        }));
+    }
     let dag = ordinary.term_dag_mut();
     for term in [claimed.lhs, claimed.rhs] {
         check_term_sort(program, dag, term, None).map_err(|e| step("sort", e))?;
@@ -278,7 +300,7 @@ fn check_one(
     }
     let dag = ordinary.term_dag_mut();
     let (derived, sort) = match proof {
-        SlottedProof::Primitive { .. } => unreachable!("primitive evidence handled above"),
+        SlottedProof::RenamingEq { .. } => unreachable!("renaming equality handled above"),
         SlottedProof::Alpha { proof, .. } => {
             let p = premise(proof);
             if !program.alpha_eq(dag, p.proposition.rhs, claimed.rhs) {
@@ -484,14 +506,6 @@ fn check_rule(
         variable,
     };
 
-    if premise_proofs.len() != rule.rule.body.len() {
-        return Err(SlottedCheckError::PremiseCount {
-            proof: id,
-            name: name.clone(),
-            expected: rule.rule.body.len(),
-            actual: premise_proofs.len(),
-        });
-    }
     let (lhs_expr, rhs_expr) = rule.endpoints();
     let lhs_pattern = pattern_term(dag, lhs_expr);
     let rhs_pattern = pattern_term(dag, rhs_expr);
@@ -568,82 +582,78 @@ fn check_rule(
         }
     }
 
-    // Expand primitive evidence only for checking. The source rule and printed
-    // substitution retain their original clauses and variable names.
+    let (facts, auxiliary) = proof_body(rule, dag, &bindings).map_err(&fail)?;
+    if premise_proofs.len() != facts.len() {
+        return Err(SlottedCheckError::PremiseCount {
+            proof: id,
+            name: name.clone(),
+            expected: facts.len(),
+            actual: premise_proofs.len(),
+        });
+    }
+    let mut substitution = substitution.clone();
+    substitution.extend(rule.globals.clone());
+    substitution.extend(auxiliary);
     let mut prefix = format!("{INTERNAL_SYMBOL_PREFIX}slotted-guard-");
-    while bindings.keys().any(|name| name.starts_with(&prefix)) {
+    while substitution.keys().any(|name| name.starts_with(&prefix)) {
         prefix.push('-');
     }
     let mut symbols = SymbolGen::new(prefix);
-    let mut substitution = substitution.clone();
-    substitution.extend(rule.globals.clone());
     let mut body = Vec::new();
     let mut premises = Vec::new();
     let equality = |p: ProofId| {
         checked[&p]
             .as_ref()
-            .ok_or_else(|| fail(format!("primitive proof #{p} is not an equality")))
+            .ok_or_else(|| fail(format!("renaming-equality proof #{p} is not an equality")))
     };
-    for (fact, &premise_id) in rule.rule.body.iter().zip(premise_proofs) {
+    for (fact, &premise_id) in facts.iter().zip(premise_proofs) {
         if let ResolvedFact::Fact(ResolvedExpr::Call(
             span,
             egglog::ResolvedCall::Primitive(head),
             args,
         )) = fact
         {
-            let SlottedProof::Primitive {
-                name: predicate,
-                arguments,
-            } = store.get(premise_id)
-            else {
-                return Err(fail(format!(
-                    "{} requires primitive operand evidence",
-                    head.name()
-                )));
-            };
-            if predicate != head.name() || arguments.len() != args.len() {
-                return Err(fail(format!("primitive evidence does not match {fact}")));
-            }
-            let mut variables = Vec::new();
-            for (arg, &p) in args.iter().zip(arguments) {
-                let checked = equality(p)?;
-                let p = &checked.proposition;
-                if predicate != "renaming-=" && p.lhs != p.rhs {
-                    return Err(fail(format!(
-                        "{predicate} requires reflexive operand evidence"
-                    )));
+            let (arguments, result) = if head.name() == "renaming-=" {
+                let SlottedProof::RenamingEq { left, right } = store.get(premise_id) else {
+                    return Err(fail("renaming-= requires a RenamingEq proof".into()));
+                };
+                let mut variables = Vec::new();
+                for (arg, &p) in args.iter().zip([left, right]) {
+                    let checked = equality(p)?;
+                    let p = &checked.proposition;
+                    check_term_sort(program, dag, p.rhs, Some(arg.output_type().name()))
+                        .map_err(&fail)?;
+                    join_sorts(
+                        Some(arg.output_type().name().to_owned()),
+                        checked.sort.clone(),
+                    )
+                    .map_err(|(a, b)| fail(format!("condition is in {a}, its premise in {b}")))?;
+                    let variable = symbols.fresh("argument");
+                    substitution.insert(variable.clone(), p.rhs);
+                    let var = ResolvedExpr::Var(
+                        arg.span(),
+                        ResolvedVar {
+                            name: variable,
+                            sort: arg.output_type().clone(),
+                            is_global_ref: false,
+                        },
+                    );
+                    body.push(ResolvedFact::Eq(arg.span(), arg.clone(), var.clone()));
+                    premises.push(p.clone());
+                    variables.push(var);
                 }
-                check_term_sort(program, dag, p.rhs, Some(arg.output_type().name()))
-                    .map_err(&fail)?;
-                join_sorts(
-                    Some(arg.output_type().name().to_owned()),
-                    checked.sort.clone(),
-                )
-                .map_err(|(a, b)| fail(format!("condition is in {a}, its premise in {b}")))?;
-                let variable = symbols.fresh("argument");
-                substitution.insert(variable.clone(), p.rhs);
-                let var = ResolvedExpr::Var(
-                    arg.span(),
-                    ResolvedVar {
-                        name: variable,
-                        sort: arg.output_type().clone(),
-                        is_global_ref: false,
-                    },
-                );
-                body.push(ResolvedFact::Eq(arg.span(), arg.clone(), var.clone()));
-                premises.push(p.clone());
-                variables.push(var);
-            }
+                let unit = dag.lit(Literal::Unit);
+                (variables, Proposition::new(unit, unit))
+            } else {
+                (args.clone(), equality(premise_id)?.proposition.clone())
+            };
             let head = validators.resolve(head.name(), args).map_err(&fail)?;
             body.push(ResolvedFact::Fact(ResolvedExpr::Call(
                 span.clone(),
                 head,
-                variables,
+                arguments,
             )));
-            // Literal reflexivity is an ordinary Fiat; the predicate is checked
-            // by its validator when the ordinary checker reaches this fact.
-            let unit = dag.lit(Literal::Unit);
-            premises.push(Proposition::new(unit, unit));
+            premises.push(result);
         } else {
             let checked = equality(premise_id)?;
             let condition_sort = match fact {

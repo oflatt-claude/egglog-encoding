@@ -65,6 +65,7 @@ pub mod proof {
     pub use crate::proofs::proof_format::{
         Justification, Proof, ProofId, ProofStore, Proposition, proof_term_to_string,
     };
+    pub use crate::proofs::proof_normal_form::proof_form_fact;
 }
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};

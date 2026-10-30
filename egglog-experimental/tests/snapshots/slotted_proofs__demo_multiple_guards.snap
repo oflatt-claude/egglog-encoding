@@ -11,14 +11,13 @@ Source:
 (check (= input (Hit)))
 
 Proof:
-(let prf0 (Fiat (= $a $a)))
-(let prf1 (Fiat (= $b $b)))
+(let prf0 (Fiat (= () ())))
 (Rule
   (= (Pair $a $b) (Hit))
   (name "guards")
   (premises
     (Fiat (= (Pair $a $b) (Pair $a $b)))
-    (Primitive (renaming-= $a $b) prf0 prf1)
-    (Primitive (not-free $a $b) prf0 prf1)
-    (Primitive (!= $a $b) prf0 prf1))
+    (RenamingEq (renaming-= $a $b) (Fiat (= $a $a)) (Fiat (= $b $b)))
+    prf0
+    prf0)
   (substitution ($x $a) ($y $b)))

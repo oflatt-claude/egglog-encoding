@@ -3,7 +3,7 @@
 ## [Unreleased] - ReleaseDate
 - Expose proof-step rendering and premise traversal; proofs support equality and hashing.
 - Let extension commands opt into proof support with `UserDefinedCommand::supports_proofs` and expose unsimplified proofs for external translation. Add map and ordering validators.
-- Expose single-step checking, proof construction, and the resolved proof-checking program for checkers that extend the ordinary proof format. Allow rule type resolution with additional typed local bindings.
+- Expose single-step checking, fact normalization, proof construction, and the resolved proof-checking program for checkers that extend the ordinary proof format. Allow rule type resolution with additional typed local bindings.
 
 
 - Free-join plans with 65 to 128 stages now use constant-time tail metadata (128-bit stage masks) instead of rescanning the remaining stages; smaller plans keep their 64-bit masks. `paged_llama` runs about 17% faster.

@@ -54,7 +54,7 @@ The explicit Equivariance rule applies this operation to both endpoints of a pro
 # Justifications
 
 `SlottedProof` wraps `Ordinary(egglog::proof::Proof)` and adds `Alpha`,
-`Equivariance`, and `Primitive` evidence for guards. All premises use egglog's
+`Equivariance`, and `RenamingEq`. All premises use egglog's
 `ProofId` in the same slotted proof store. Ordinary steps use egglog's
 justifications and printer.
 
@@ -71,31 +71,38 @@ either direction. Reflexivity is not assumed for terms the program never built.
 Pattern variables take terms of their declared sorts; slot literals take distinct
 slots, as required by the [language](LANGUAGE.md#fresh-slots).
 
-Premises are ordered: first a proof `t = L[σ]`, then one proof node per original
-`:when` fact in source order. An equality `(= a b)` requires a proof with
-endpoints `a[σ]` and `b[σ]` exactly. An Alpha step may establish the required spelling.
+Premises are ordered: first a proof `t = L[σ]`, then evidence for the
+`:when` facts in source order, after ordinary guard normalization. An equality
+`(= a b)` requires a proof with endpoints `a[σ]` and `b[σ]` exactly. An Alpha step may establish the required spelling.
 A constructor fact requires an existence proof ending at its instantiated term.
-Each guard requires a `Primitive` node as described below. Nested terms stay
-nested; generated pattern variables do not appear in source rule substitutions.
-Globals retain their bindings at rule declaration.
+A `renaming-=` condition requires a `RenamingEq` node. Other guards use egglog's
+proof normal form: constructor operands are lifted to equality facts, followed
+by the primitive call. For example, `(not-free s (F x))` requires a proof of
+`(F x) = (F x)` and the ordinary result premise `(Fiat (= () ()))`. A guard
+whose operands are variables or literals needs only the result premise. The
+primitive validator checks the condition when the rule is checked.
+
+Generated variables are reconstructed from the source rule and its substitution;
+they do not appear in printed substitutions. Globals retain their bindings at
+rule declaration.
 
 RHS-only slot literals must be fresh for every other binding and the globals
 in scope at the rule declaration. The conclusion is
 `L[σ] = R[σ]`, its reverse, or reflexivity of a subterm of either side. A
 right-hand side using `subst` is unsupported.
 
-**Primitive.** A guard node contains the predicate name and one ordinary equality
-proof per operand. For `(renaming-= a b)`, the proofs establish `a[σ] = ar` and
+**RenamingEq.** This node contains exactly two ordinary equality proof references,
+`left` and `right`. For `(renaming-= a b)`, they establish `a[σ] = ar` and
 `b[σ] = br`. A primitive validator checks that a slot permutation takes `ar` to
 an alpha-equivalent spelling of `br`. Mere existence does not establish this
 relation. The printed form is:
 
 ```lisp
-(Primitive (renaming-= a b) proof-of-a=ar proof-of-b=br)
+(RenamingEq (renaming-= a b) proof-of-a=ar proof-of-b=br)
 ```
 
-Other guards use the same node with reflexive operand proofs. Primitive evidence
-is checked in its enclosing rule and cannot be used as an equality proof.
+Renaming equality is checked in its enclosing rule and cannot be used as an
+ordinary equality proof.
 
 Guards are evaluated on σ with the constructors' binding scopes. `free` tests
 membership in the union of the listed terms' free slots; `not-free` tests absence
@@ -104,13 +111,11 @@ from that union. `free-names-are` requires exactly the listed free slots.
 convention, and rejects alpha-equivalent terms. `(renaming-!= a b)` additionally
 rejects terms that differ only by a bijection of their free slots.
 
-During checking, a guard is expanded into operand equalities and a primitive
-call on their representatives. For example, `(renaming-= a b)` becomes
+During checking, `(renaming-= a b)` becomes
 `(= a ar)`, `(= b br)`, and `(renaming-= ar br)` with fresh witness variables.
 The ordinary checker verifies the expanded rule using the supplied operand
-proofs and the primitive validator. These temporary facts and variables appear
-only during checking; the source rule and printed proof retain their original
-clauses and substitutions.
+proofs and the primitive validator. This expansion appears only during checking;
+the printed proof retains one `RenamingEq` premise for the source condition.
 
 **Sym.** From `a = b`, derive `b = a`.
 

@@ -12,8 +12,8 @@ checking with egglog, and minimal compilation metadata.
   original `:when` conditions in the body. Preserve nested expressions, binder
   semantics, declaration-scoped globals, sorts, and source names. Do not add
   generated matching conditions or replacement axioms to the source theory.
-  Expand primitive guard evidence only in a temporary rule during checking, as
-  accepted in the guard-node design below.
+  Ordinary guards use egglog's proof normal form. Keep one dedicated RenamingEq
+  node for each renaming-= condition, expanding it only during checking.
 - Do not change the normal proof checker's semantics. Refactoring and exposing
   existing checking code are allowed.
 - Ordinary propositions are exact equalities. Equivariance applies a finite
@@ -41,7 +41,7 @@ checking with egglog, and minimal compilation metadata.
    and Command types and type resolution. Share constructor/binder information
    with the slotted frontend. Remove the remaining Condition/Rewrite/Rhs model.
 4. **Extend the ordinary proof format.** Use an enum with `Ordinary(egglog::proof::Proof)`,
-   `Alpha`, `Equivariance`, and primitive guard evidence. Reuse ordinary equality
+   `Alpha`, `Equivariance`, and `RenamingEq`. Reuse ordinary equality
    propositions, justifications, IDs, and printing. Keep claims and the store in
    format.rs, the checker in its own
    file, and tests in separate files.
@@ -62,9 +62,10 @@ checking with egglog, and minimal compilation metadata.
   uses it with the same premise order and success-only cache as before.
 - The production slotted checker delegates Sym, Trans, Congr, and Proj to this
   API. It retains carrier and well-formedness checks locally.
-- Rule applications delegate to the ordinary checker after expanding primitive
-  evidence into operand equalities and a validated primitive call. Source scopes,
-  sorts, and RHS freshness remain local.
+- Rule applications delegate to the ordinary checker. Ordinary guards use its
+  fact-normalization routine and Unit-result premises. RenamingEq expands into
+  operand equalities and a validated primitive call only during checking. Source
+  scopes, sorts, and RHS freshness remain local.
 - Alpha is implemented in the format, checker, printer, normalizer, and lifting.
   Source axioms retain their original binder spellings. Refreshed spellings are
   derived from those axioms using Alpha and ordinary proof steps.
@@ -74,45 +75,52 @@ checking with egglog, and minimal compilation metadata.
   S-expression reader; structural AST conversion preserves slotted identifiers.
 - Source rules now use native type resolution, as described below.
 
-### Primitive guard nodes: implemented and validated
+### RenamingEq and ordinary guard normal form: implemented and validated
 
-Keep one premise per original rule-body fact. `SlottedProof::Primitive` carries
-its source predicate name and ordinary equality proofs for its operands.
-`renaming-=` permits `a = ar` and `b = br`; the primitive validator compares
-`ar` and `br` modulo alpha-equivalence and an injective free-slot renaming.
-Other guards require reflexive operand proofs, preserving their existing term
-validation. Primitive evidence cannot be used as an equality.
+The only guard-specific extension is `RenamingEq { left, right }`. Its two
+ordinary equality proofs establish `a = ar` and `b = br`; the primitive validator
+compares `ar` and `br` modulo alpha-equivalence and a bijection of free slots.
+RenamingEq evidence cannot be used as an ordinary equality.
 
-Only during checking, expand a guard into operand equality facts and a primitive
-call on fresh witness variables. Add those witnesses to a temporary substitution,
-then delegate the complete Rule step to `ProofStore::check_step`. The primitive
-call's result is Unit, justified by ordinary literal reflexivity. Original source
-rules, printed clauses, and substitutions retain their source form. Ordinary
-checker semantics are unchanged. Restore its fact/action helpers to their original
-private methods; only the single-step API is needed by the slotted checker.
+Other guards use egglog's existing `proof_form_fact` normalization. Constructor
+operands become equality facts with ordinary proofs; the guard's result premise
+is the usual `Fiat (= () ())`. Variable/literal operands stay in the primitive
+call. These guards may have more than one premise per original source line,
+as explicitly accepted by the user. Do not add a generic primitive proof node.
+
+Lifting and checking share this normalization. Generated constructor bindings
+are reconstructed at their source spelling from the original rule and
+substitution; no generated names or new metadata are serialized in the proof.
+Keep source guards subject to the ordinary normal-form restrictions, rather
+than complicating the checker to accept arbitrary primitive expressions.
+
+Only during checking, expand RenamingEq into operand equality facts and a
+primitive call on fresh witness variables, then delegate the complete Rule step
+to `ProofStore::check_step`. Ordinary checker semantics are unchanged. The normal
+fact-normalization routine is exposed without changing its behavior.
 
 Validators use the complete constructor binding information, including later
-declarations. Captured globals cannot be overridden. Generated witness variables
-must avoid all source and captured names; freshness of RHS slots is checked
-against the original substitution before guard expansion.
+declarations. Captured globals cannot be overridden. Generated variables avoid
+all substitution and captured names. RHS slot freshness is checked against the
+original substitution before guard normalization or representative expansion.
 
 Root `make check` passed in an isolated worktree excluding the unrelated nested
-checkout. It covered 295 Python tests, the full Rust workspace, 43 compatible
-slotted fixtures, 31 runtime/differential checks, 24 generated benchmark proofs,
-and all seven default proof-fuzz profiles (200 cases). After the final printer
-and review cleanups, `make nits`, all 100 experimental unit tests, 23 proof
-integration tests, and the 43-fixture proof corpus passed again.
+checkout. It covered 295 Python tests, the full Rust workspace (including 101
+experimental unit tests and 23 proof integration tests), 43 compatible slotted
+proof fixtures, 31 runtime checks, 24 generated benchmark proofs, and seven
+default proof-fuzz profiles (200 cases total). New regression coverage checks
+nested guard operands, missing or altered evidence, and generated-name collisions.
+Snapshots show both RenamingEq and ordinary expanded guard premises.
 
-Claude Fable's read-only review found no correctness blocker. Follow-up cleanup
-shares the guard-name table, removes the obsolete fact/action API changelog claim,
-and tests rejection of bare equality evidence for a guard. Regression coverage
-also includes both nonreflexive representatives, captured globals, later binder
-declarations, witness-name collisions, wrong carrier sorts, and guard evidence
-misused as equality. Snapshots show one premise per original guard line.
+Claude Fable's read-only review found no correctness blockers. Its premise-count
+diagnostic suggestion is applied. Keep ordinary primitive-result validation in
+the native checker and avoid a new abstraction for the short fresh-prefix loops.
 
-Validation logs: `/tmp/slotted-guard-node-check.log` and
-`/tmp/slotted-guard-node-review-check.log`. Review:
-`/tmp/slotted-guard-node-fable-review.txt`.
+Final `make nits` and all 28 checker unit tests passed after the diagnostic and
+documentation edits. Validation logs: `/tmp/slotted-renaming-eq-check.log`,
+`/tmp/slotted-renaming-eq-final-nits.log`, and
+`/tmp/slotted-renaming-eq-final-tests.log`. Review:
+`/tmp/slotted-renaming-eq-fable-review.txt`.
 
 ## Source cleanup: implemented
 
@@ -132,8 +140,8 @@ Validation logs: `/tmp/slotted-guard-node-check.log` and
 - Preserve the slotted frontend's identifiers, including `_`, keyword-like
   variables, and `$`-prefixed payload variables. Resolve payload locals and
   captured globals separately when their spellings overlap.
-- Guard nodes group ordinary equality proof references, one per operand. The
-  ordinary checker invokes their primitive validators after temporary expansion.
+- RenamingEq groups its two operand equality proofs. Other guards use ordinary
+  normalized premises. The ordinary checker invokes their primitive validators.
 - The format, claims, and witnesses are in format.rs; checking is in checker.rs.
   Encoded names and flattening compensation stay in lifting. Ordinary checker
   semantics remain unchanged.
@@ -185,7 +193,7 @@ Validation log: `/tmp/slotted-native-proof-final-check.log`.
 The earlier completion report overstated format reuse: checking was shared, but
 ordinary proof variants were still duplicated. That stage introduced an enum
 wrapping the original `Proof`, with Alpha and Equivariance. The subsequent guard
-node stage adds primitive evidence without introducing a separate equality type.
+node stage adds RenamingEq without introducing a separate equality type.
 
 - Reuse `Proposition`, `ProofId`, ordinary justifications, dependency traversal,
   and printing. Ordinary checker semantics remain unchanged.

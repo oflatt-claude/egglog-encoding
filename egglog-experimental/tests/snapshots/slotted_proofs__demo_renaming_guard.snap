@@ -17,7 +17,7 @@ Proof:
   (name "guard")
   (premises
     (Fiat (= (Pair $a $b) (Pair $a $b)))
-    (Primitive
+    (RenamingEq
       (renaming-= (F $a) (G $b))
       (Fiat (= (F $a) (G $a)))
       (Fiat (= (G $b) (G $b)))))
