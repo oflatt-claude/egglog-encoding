@@ -2,14 +2,14 @@ use super::*;
 use crate::slotted::proofs::terms::slot_term;
 
 #[test]
-fn shared_primitive_evidence_prints_as_a_proof() {
+fn shared_renaming_equality_prints_as_a_proof() {
     let mut dag = TermDag::default();
     let a = slot_term(&mut dag, 0);
     let b = slot_term(&mut dag, 1);
     let mut store = SlottedProofStore::new(dag);
     let left = store.fiat(a, a);
     let right = store.fiat(b, b);
-    let guard = store.primitive("renaming-=", vec![left, right]);
+    let guard = store.renaming_eq(left, right);
     let proof = store.ordinary(
         Proposition::new(a, b),
         Justification::Rule {
@@ -19,7 +19,7 @@ fn shared_primitive_evidence_prints_as_a_proof() {
         },
     );
     let text = store.proof_to_string(proof);
-    assert!(text.contains("(let prf0 (Primitive"), "{text}");
+    assert!(text.contains("(let prf0 (RenamingEq"), "{text}");
     assert!(text.contains("(premises prf0 prf0)"), "{text}");
 }
 

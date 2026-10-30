@@ -385,8 +385,8 @@ fn rule_instances_and_minted_slots() {
     check_proof(&mut store, &program, wrap).unwrap();
 
     // eta on the wrapped term: (Lam $4 (App t $4)) = t, with $4 not free in t
-    let slot = store.fiat(s4, s4);
-    let guard = store.primitive("not-free", vec![slot, root]);
+    let unit = store.term_dag.lit(egglog::ast::Literal::Unit);
+    let guard = store.fiat(unit, unit);
     let eta = store.ordinary(
         Proposition::new(wrapped, t),
         Justification::Rule {

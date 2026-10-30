@@ -1,4 +1,4 @@
-//! Equality proofs and primitive guard evidence over slotted surface terms.
+//! Equality proofs and renaming-equality evidence over slotted surface terms.
 
 use super::HashMap;
 use super::terms::{Renaming, all_slots, rename, slot_of};
@@ -42,7 +42,7 @@ pub struct SlottedConclusion {
     pub renaming: Renaming,
 }
 
-/// An ordinary egglog proof step, a slotted equality extension, or primitive evidence.
+/// An ordinary egglog proof step, a slotted equality extension, or renaming equality.
 /// Every premise ID refers to the same [`SlottedProofStore`].
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum SlottedProof {
@@ -64,26 +64,26 @@ pub enum SlottedProof {
         /// The permutation applied to both endpoints.
         renaming: Renaming,
     },
-    /// Evidence for one primitive fact, checked in the enclosing source rule.
-    /// Each argument proves `operand = representative`. Only `renaming-=` may
-    /// use a different representative; other guards require reflexive arguments.
-    Primitive {
-        /// The source predicate's name.
-        name: String,
-        /// Ordinary equality proofs for the operands, in source order.
-        arguments: Vec<ProofId>,
+    /// Evidence for `(renaming-= a b)`, checked in the enclosing source rule.
+    /// The operand proofs establish `a = ar` and `b = br`; the validator checks
+    /// that the representatives agree up to alpha-equivalence and slot renaming.
+    RenamingEq {
+        /// Equality from the left operand to its representative.
+        left: ProofId,
+        /// Equality from the right operand to its representative.
+        right: ProofId,
     },
 }
 
 impl SlottedProof {
-    /// The equality stated by this step; primitive evidence is not an equality.
+    /// The equality stated by this step; renaming equality is not an ordinary equality.
     pub fn proposition(&self) -> Option<&Proposition> {
         match self {
             Self::Ordinary(proof) => Some(proof.proposition()),
             Self::Alpha { proposition, .. } | Self::Equivariance { proposition, .. } => {
                 Some(proposition)
             }
-            Self::Primitive { .. } => None,
+            Self::RenamingEq { .. } => None,
         }
     }
 
@@ -92,7 +92,7 @@ impl SlottedProof {
         match self {
             Self::Ordinary(proof) => proof.justification().premises(),
             Self::Alpha { proof, .. } | Self::Equivariance { proof, .. } => vec![*proof],
-            Self::Primitive { arguments, .. } => arguments.clone(),
+            Self::RenamingEq { left, right } => vec![*left, *right],
         }
     }
 }
@@ -176,7 +176,7 @@ impl SlottedProofStore {
         &self.proofs[id.index()]
     }
 
-    /// The equality stated by a stored step. Panics for primitive evidence.
+    /// The equality stated by a stored step. Panics for renaming equality.
     pub fn proposition(&self, id: ProofId) -> &Proposition {
         self.proofs[id.index()]
             .proposition()
@@ -202,12 +202,9 @@ impl SlottedProofStore {
         )))
     }
 
-    /// Record operand evidence for one source primitive condition.
-    pub fn primitive(&mut self, name: impl Into<String>, arguments: Vec<ProofId>) -> ProofId {
-        self.add(SlottedProof::Primitive {
-            name: name.into(),
-            arguments,
-        })
+    /// Record the two operand equality proofs for a `renaming-=` condition.
+    pub fn renaming_eq(&mut self, left: ProofId, right: ProofId) -> ProofId {
+        self.add(SlottedProof::RenamingEq { left, right })
     }
 
     /// State a source union or a built term's reflexivity; the checker validates it.
@@ -395,7 +392,7 @@ impl SlottedProofStore {
                         terms.extend(substitution.values().rev().copied());
                     }
                 }
-                SlottedProof::Alpha { .. } | SlottedProof::Primitive { .. } => {}
+                SlottedProof::Alpha { .. } | SlottedProof::RenamingEq { .. } => {}
             }
             while let Some(term) = terms.pop() {
                 if let Some(slot) = slot_of(&self.term_dag, term) {
@@ -486,7 +483,7 @@ impl SlottedProofStore {
     }
 
     /// Print a proof in egglog's S-expression format, with source slot names.
-    /// Requires acyclic dependencies and equality steps as primitive operands.
+    /// Requires acyclic dependencies and equality steps as renaming-equality operands.
     pub fn proof_to_string(&self, root: ProofId) -> String {
         let names = self.display_names(Some(root), []);
         let (mut dag, terms) = self.named_dag(&names);
@@ -523,16 +520,12 @@ impl SlottedProofStore {
                         vec![equality.unwrap(), proofs[proof], renaming],
                     )
                 }
-                SlottedProof::Primitive { name, arguments } => {
-                    let operands = arguments
-                        .iter()
-                        .map(|&p| terms[self.proposition(p).lhs])
-                        .collect();
-                    let fact = dag.app(name.clone(), operands);
-                    let arguments = std::iter::once(fact)
-                        .chain(arguments.iter().map(|p| proofs[p]))
-                        .collect();
-                    dag.app("Primitive".into(), arguments)
+                SlottedProof::RenamingEq { left, right } => {
+                    let operands = [*left, *right]
+                        .map(|p| terms[self.proposition(p).lhs])
+                        .to_vec();
+                    let fact = dag.app("renaming-=".into(), operands);
+                    dag.app("RenamingEq".into(), vec![fact, proofs[left], proofs[right]])
                 }
             };
             proofs.insert(id, term);

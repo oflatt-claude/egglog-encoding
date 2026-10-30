@@ -2,8 +2,57 @@ use super::check_proof;
 use crate::slotted::proofs::format::{SlottedProof, SlottedProofStore};
 use crate::slotted::proofs::source::{ColumnKind, SlottedProgram};
 use crate::slotted::proofs::terms::{Renaming, slot_term};
+use egglog::ast::Literal;
 use egglog::proof::{Justification, Proposition};
 use egglog::{Term, TermDag};
+
+#[test]
+fn ordinary_guard_normal_form_requires_nested_operand_evidence() {
+    for local in ["x", "@slotted-proof-v"] {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+        program.add_constructor("F", vec![ColumnKind::Child]);
+        program.add_constructor("G", vec![ColumnKind::Child]);
+        program.add_constructor("Hit", vec![]);
+        program.add_let(&mut dag, "input", "(Pair $0 $1)").unwrap();
+        program
+            .add_union(&mut dag, "(F $1)", "(G $1)", "U")
+            .unwrap();
+        program
+            .add_rewrite(&mut dag, &format!(r#"(rewrite (Pair $s {local}) (Hit) :when ((not-free $s (F {local}))) :name "r")"#))
+            .unwrap();
+        let input = program.lets["input"];
+        let a = slot_term(&mut dag, 0);
+        let b = slot_term(&mut dag, 1);
+        let hit = dag.app("Hit".into(), vec![]);
+        let unit = dag.lit(Literal::Unit);
+        let mut store = SlottedProofStore::new(dag);
+        let root = store.fiat(input, input);
+        let operand = program.unions[0].lhs;
+        let existence = store.fiat(operand, operand);
+        let changed = store.fiat(operand, program.unions[0].rhs);
+        let result = store.fiat(unit, unit);
+        let wrong_result = store.fiat(a, a);
+        for (premises, valid) in [
+            (vec![root, existence, result], true),
+            (vec![root, result], false),
+            (vec![root, root, result], false),
+            (vec![root, changed, result], false),
+            (vec![root, existence, wrong_result], false),
+        ] {
+            let proof = store.ordinary(
+                Proposition::new(input, hit),
+                Justification::Rule {
+                    name: "r".into(),
+                    substitution: [("$s".into(), a), (local.into(), b)].into_iter().collect(),
+                    premise_proofs: premises,
+                },
+            );
+            assert_eq!(check_proof(&mut store, &program, proof).is_ok(), valid);
+        }
+    }
+}
 
 #[test]
 fn guard_captures_are_independent_of_a_constructor_with_the_same_name() {
@@ -27,11 +76,10 @@ fn guard_captures_are_independent_of_a_constructor_with_the_same_name() {
     let one = slot_term(&mut dag, 1);
     let two = slot_term(&mut dag, 2);
     let hit = dag.app("Hit".into(), vec![]);
-    let captured = program.lets["n"];
     let mut store = SlottedProofStore::new(dag);
     let root = store.fiat(input, input);
-    let slot = store.fiat(captured, captured);
-    let guard = store.primitive("free", vec![slot, root]);
+    let unit = store.term_dag.lit(Literal::Unit);
+    let guard = store.fiat(unit, unit);
     for override_global in [false, true] {
         let mut substitution = vec![("x".into(), one), ("y".into(), two)];
         if override_global {
@@ -42,7 +90,7 @@ fn guard_captures_are_independent_of_a_constructor_with_the_same_name() {
             Justification::Rule {
                 name: "guard".into(),
                 substitution: substitution.into_iter().collect(),
-                premise_proofs: vec![root, guard],
+                premise_proofs: vec![root, root, guard],
             },
         );
         let error = check_proof(&mut store, &program, proof)
@@ -96,7 +144,7 @@ fn renaming_guard_checks_an_equality_witness() {
         ("renaming-=", wrong_left, false),
     ] {
         let evidence = if predicate == "renaming-=" {
-            store.primitive(predicate, vec![evidence, right])
+            store.renaming_eq(evidence, right)
         } else {
             evidence
         };
@@ -112,26 +160,16 @@ fn renaming_guard_checks_an_equality_witness() {
     }
 
     for (predicate, guard, error) in [
-        ("renaming-=", union, "requires primitive operand evidence"),
+        ("renaming-=", union, "requires a RenamingEq proof"),
         (
             "renaming-=",
-            store.primitive("renaming-=", vec![union]),
-            "does not match",
-        ),
-        (
-            "renaming-=",
-            store.primitive("renaming-=", vec![right, union]),
+            store.renaming_eq(right, union),
             "equality fact mismatch",
         ),
         (
-            "renaming-=",
-            store.primitive("!=", vec![union, right]),
-            "does not match",
-        ),
-        (
             "renaming-!=",
-            store.primitive("renaming-!=", vec![union, right]),
-            "requires reflexive",
+            store.renaming_eq(union, right),
+            "is not an equality",
         ),
     ] {
         let proof = store.ordinary(
@@ -174,10 +212,9 @@ fn renaming_disequality_rejects_different_spellings_of_the_same_term() {
     let hit = dag.app("Hit".into(), vec![]);
     let mut store = SlottedProofStore::new(dag);
     let root = store.fiat(input, input);
-    let x = store.project(root, 0).unwrap();
-    let y = store.project(root, 1).unwrap();
+    let unit = store.term_dag.lit(Literal::Unit);
+    let guard = store.fiat(unit, unit);
     for (predicate, valid) in [("!=", true), ("renaming-!=", false)] {
-        let guard = store.primitive(predicate, vec![x, y]);
         let proof = store.ordinary(
             Proposition::new(input, hit),
             Justification::Rule {
@@ -218,17 +255,9 @@ fn free_name_guards_check_the_instantiated_terms() {
     let zero = slot_term(&mut store.term_dag, 0);
     let one = slot_term(&mut store.term_dag, 1);
     let root = store.fiat(input, input);
-    let x = store.project(root, 1).unwrap();
-    let y = store.project(root, 2).unwrap();
-    let slot = store.fiat(zero, zero);
+    let unit = store.term_dag.lit(Literal::Unit);
+    let guard = store.fiat(unit, unit);
     for (i, (condition, valid)) in cases.iter().enumerate() {
-        let arguments = match i {
-            0 | 1 => vec![slot, x, y],
-            2 => vec![x, slot],
-            3 => vec![y, slot],
-            _ => vec![y],
-        };
-        let guard = store.primitive(condition.split_whitespace().next().unwrap(), arguments);
         let proof = store.ordinary(
             Proposition::new(input, zero),
             Justification::Rule {
@@ -279,7 +308,7 @@ fn renaming_guards_preserve_binding_scopes_and_injectivity() {
         let root = store.fiat(input, input);
         let witness = store.fiat(a, program.unions[0].rhs);
         let right = store.fiat(b, b);
-        let guard = store.primitive("renaming-=", vec![witness, right]);
+        let guard = store.renaming_eq(witness, right);
         let proof = store.ordinary(
             Proposition::new(input, hit),
             Justification::Rule {
@@ -310,7 +339,7 @@ fn guard_evidence_cannot_be_used_as_an_equality() {
     let mut store = SlottedProofStore::new(dag);
     let root = store.fiat(input, input);
     let refl = store.fiat(slot, slot);
-    let guard = store.primitive("renaming-=", vec![refl, refl]);
+    let guard = store.renaming_eq(refl, refl);
     assert!(check_proof(&mut store, &program, guard).is_err());
 
     for step in [
@@ -345,9 +374,9 @@ fn guard_evidence_cannot_be_used_as_an_equality() {
             proof: guard,
             renaming: Renaming::identity(),
         },
-        SlottedProof::Primitive {
-            name: "renaming-=".into(),
-            arguments: vec![guard, refl],
+        SlottedProof::RenamingEq {
+            left: guard,
+            right: refl,
         },
     ] {
         let proof = store.add(step);
@@ -403,7 +432,7 @@ fn guard_representatives_preserve_captured_operands_and_later_binder_declaration
         let root = store.fiat(input, input);
         let left = store.fiat(a, program.unions[0].rhs);
         let right = store.fiat(b, program.unions[1].rhs);
-        let guard = store.primitive("renaming-=", vec![left, right]);
+        let guard = store.renaming_eq(left, right);
         let proof = store.ordinary(
             Proposition::new(input, hit),
             Justification::Rule {
@@ -439,7 +468,7 @@ fn guard_operand_equalities_keep_their_carrier_sort() {
         let root = store.fiat(input, input);
         let left = store.fiat(a, b);
         let right = store.fiat(b, b);
-        let guard = store.primitive("renaming-=", vec![left, right]);
+        let guard = store.renaming_eq(left, right);
         let proof = store.ordinary(
             Proposition::new(input, a),
             Justification::Rule {

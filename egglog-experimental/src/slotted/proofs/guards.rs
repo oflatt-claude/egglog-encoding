@@ -1,10 +1,12 @@
-//! Primitive validators for source guards, using the program's binding scopes.
+//! Proof normal form and primitive validators for slotted source guards.
 
-use super::source::SlottedProgram;
-use super::terms::slot_of;
-use egglog::ast::{Literal, ResolvedExpr, ResolvedExprExt, Span};
+use super::HashMap;
+use super::source::{SlottedProgram, SourceRule, pattern_term};
+use super::terms::{instantiate, slot_of};
+use egglog::ast::{Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact, Span};
 use egglog::prelude::BaseSort;
 use egglog::sort::UnitSort;
+use egglog::util::{INTERNAL_SYMBOL_PREFIX, IndexMap, SymbolGen};
 use egglog::{
     Context, EGraph, Primitive, PurePrim, PureState, ResolvedCall, TermDag, TermId, TypeInfo, Value,
 };
@@ -19,6 +21,43 @@ pub(super) const GUARDS: [(&str, &str); 6] = [
     ("not-free", "slotted-proof-not-free"),
     ("free-names-are", "slotted-proof-free-names-are"),
 ];
+
+/// Normalize ordinary guard operands and bind the lifted terms at their source spelling.
+/// `renaming-=` retains one fact, with its representatives supplied by `RenamingEq`.
+pub(super) fn proof_body(
+    rule: &SourceRule,
+    dag: &mut TermDag,
+    bindings: &HashMap<String, TermId>,
+) -> Result<(Vec<ResolvedFact>, IndexMap<String, TermId>), String> {
+    let mut prefix = format!("{INTERNAL_SYMBOL_PREFIX}slotted-proof-");
+    while bindings.keys().any(|name| name.starts_with(&prefix)) {
+        prefix.push('-');
+    }
+    let mut symbols = SymbolGen::new(prefix);
+    let mut bindings = bindings.clone();
+    let mut auxiliary = IndexMap::default();
+    let mut body = Vec::new();
+    for fact in &rule.rule.body {
+        if matches!(fact, ResolvedFact::Fact(ResolvedExpr::Call(_, ResolvedCall::Primitive(head), _)) if head.name() == "renaming-=")
+        {
+            body.push(fact.clone());
+            continue;
+        }
+        let start = body.len();
+        let fact = egglog::proof::proof_form_fact(fact.clone(), &mut body, &mut symbols);
+        for binding in &body[start..] {
+            let ResolvedFact::Eq(_, expr, ResolvedExpr::Var(_, var)) = binding else {
+                unreachable!("normalizing slotted guards only lifts constructor operands")
+            };
+            let pattern = pattern_term(dag, expr);
+            let term = instantiate(dag, pattern, &bindings)?;
+            auxiliary.insert(var.name.clone(), term);
+            bindings.insert(var.name.clone(), term);
+        }
+        body.push(fact);
+    }
+    Ok((body, auxiliary))
+}
 
 pub(super) struct GuardValidators(TypeInfo);
 

@@ -68,6 +68,15 @@ fn demo_proof_snapshots() {
 (check (= input (Hit)))"#,
         ),
         (
+            "demo_nested_guard",
+            r#"(datatype U (Pair U U) (F U) (Hit))
+(let input (Pair $a $b))
+(let side (F $b))
+(rewrite (Pair $x $y) (Hit) :when ((not-free $x (F $y))) :name "guard")
+(run 1)
+(check (= input (Hit)))"#,
+        ),
+        (
             "demo_multiple_guards",
             r#"(datatype U (Pair U U) (Hit))
 (let input (Pair $a $b))

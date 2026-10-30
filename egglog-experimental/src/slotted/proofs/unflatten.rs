@@ -1,10 +1,11 @@
 //! Lift proofs of flattened rewrites back to the original source rules.
 use super::coordinates::Coordinates;
 use super::format::{ProofId, SlottedConclusion, SlottedProof, SlottedProofStore};
+use super::guards::proof_body;
 use super::source::{SlottedProgram, pattern_term};
 use super::terms::{Renaming, term_renaming};
 use super::{HashMap, HashSet};
-use egglog::ast::{ResolvedExpr, ResolvedFact};
+use egglog::ast::{Literal, ResolvedExpr, ResolvedFact};
 use egglog::proof::{Justification as Step, Proposition};
 use egglog::{Term, TermId};
 use std::collections::VecDeque;
@@ -27,9 +28,11 @@ pub(super) fn lift(
         let proposition = proof
             .proposition()
             .cloned()
-            .ok_or("primitive evidence occurs before source rule reconstruction")?;
+            .ok_or("renaming equality occurs before source rule reconstruction")?;
         let result = match &proof {
-            SlottedProof::Primitive { .. } => unreachable!("primitive evidence has no equality"),
+            SlottedProof::RenamingEq { .. } => {
+                unreachable!("renaming equality is not an ordinary equality")
+            }
             SlottedProof::Alpha { proof, .. } => {
                 let premise = out.proof(lifted[proof]);
                 let proof = out.alpha(premise, proposition.rhs);
@@ -180,7 +183,13 @@ fn lift_rule(
         .rewrites
         .get(name)
         .ok_or_else(|| format!("missing original rewrite {name}"))?;
-    let sigma: HashMap<_, _> = substitution.iter().cloned().collect();
+    let mut sigma: HashMap<_, _> = substitution
+        .iter()
+        .cloned()
+        .chain(rule.globals.iter().map(|(v, &t)| (v.clone(), t)))
+        .collect();
+    let (body, auxiliary) = proof_body(rule, &mut store.term_dag, &sigma)?;
+    sigma.extend(auxiliary);
     let instance = |store: &mut SlottedProofStore, expr| -> Result<TermId> {
         let term = pattern_term(&mut store.term_dag, expr);
         rule.instantiate(&mut store.term_dag, term, &sigma)
@@ -201,7 +210,7 @@ fn lift_rule(
     let mut witnesses = Witnesses::new(store, program, premises);
     let root = witnesses.exists(lhs)?;
     let mut source_premises = vec![root];
-    for fact in rule.conditions() {
+    for fact in &body[1..] {
         let proof = match fact {
             ResolvedFact::Eq(_, a, b) => {
                 let a = instance(witnesses.store, a)?;
@@ -213,22 +222,16 @@ fn lift_rule(
                 egglog::ResolvedCall::Primitive(head),
                 args,
             )) => {
-                let terms = args
-                    .iter()
-                    .map(|arg| instance(witnesses.store, arg))
-                    .collect::<Result<Vec<_>>>()?;
-                let arguments = if head.name() == "renaming-=" {
-                    vec![
-                        witnesses.renaming_equality(terms[0], terms[1])?,
-                        witnesses.reflexive(terms[1])?,
-                    ]
+                if head.name() == "renaming-=" {
+                    let a = instance(witnesses.store, &args[0])?;
+                    let b = instance(witnesses.store, &args[1])?;
+                    let left = witnesses.renaming_equality(a, b)?;
+                    let right = witnesses.reflexive(b)?;
+                    witnesses.store.renaming_eq(left, right)
                 } else {
-                    terms
-                        .into_iter()
-                        .map(|term| witnesses.reflexive(term))
-                        .collect::<Result<Vec<_>>>()?
-                };
-                witnesses.store.primitive(head.name(), arguments)
+                    let unit = witnesses.store.term_dag.lit(Literal::Unit);
+                    witnesses.store.fiat(unit, unit)
+                }
             }
             ResolvedFact::Fact(expr) => {
                 let term = instance(witnesses.store, expr)?;
