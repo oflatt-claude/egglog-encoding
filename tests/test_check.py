@@ -43,13 +43,25 @@ def test_default_check_runs_all_hygiene_before_tests(commands: list[Command]) ->
     assert any("mypy" in command.args for command in commands[:first_test])
     assert any(command.args[:2] == ("cargo", "doc") for command in commands[:first_test])
     rust_tests = [command.args for command in commands if command.args[:2] == ("cargo", "test")]
-    assert rust_tests == [("cargo", "test", "--workspace", "--")]
+    assert rust_tests == [
+        ("cargo", "test", "--workspace", "--"),
+        ("cargo", "test", "--manifest-path", "slotted/xmulti/Cargo.toml", "--"),
+    ]
 
 
 def test_overlapping_targets_do_not_repeat_completed_checks(commands: list[Command]) -> None:
     assert check.main(["python-nits", "check"]) == 0
     assert sum(command.args[:3] == ("uv", "lock", "--check") for command in commands) == 1
     assert sum("pytest" in command.args for command in commands) == 1
+
+
+def test_ci_suites_preserve_full_test_coverage(commands: list[Command]) -> None:
+    assert check.main(["test"]) == 0
+    full_suite = commands.copy()
+    commands.clear()
+    for target in ("python-test", "rust-test", "slotted-test"):
+        assert check.main([target]) == 0
+    assert commands == full_suite
 
 
 def test_failure_stops_immediately_and_preserves_exit_status(monkeypatch: pytest.MonkeyPatch) -> None:

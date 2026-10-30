@@ -19,6 +19,8 @@
 //!
 //! ## Language and values
 //!
+//! - [`slotted`] documents the slotted source language and its [`slotted::Compiler`].
+//!   Evaluate lowered programs with [`slotted::new_egraph`], or use the CLI's `--slotted` flag.
 //! - [`RationalSort`] adds exact `Rational` values and numeric primitives.
 //! - [`For`] implements `(for (fact...) (action...))`, a rule that runs once
 //!   over the current matches.
@@ -32,6 +34,19 @@
 //! - [`Subst`] implements `(unstable-subst root map)`, which copies the affected
 //!   portion of the constructor sub-e-graph reachable from `root` with each key
 //!   e-class replaced by its mapped value.
+//!
+//! Mark a constructor or datatype variant with `:injective` to infer equality
+//! of its arguments from equality of its results. Run the shared `injectivity`
+//! ruleset explicitly with `(run-schedule (saturate injectivity))`. Equality-sort
+//! arguments are unioned; unequal primitive arguments panic. Container arguments
+//! are rejected. These rules also support term encoding and proof testing.
+//!
+//! `(known-disequal? left right)` reads known disequality without storing derived
+//! pairs. For marked constructors, it follows explicit equality-sort argument
+//! disequalities and native primitive differences forward at any arity, and
+//! result disequalities backward at unary constructors. Both operands must have
+//! the same equality sort. Use `:naive` in rules with this read predicate. The
+//! query currently supports ordinary execution only, without term/proof encoding.
 //!
 //! ## Generic containers and callbacks
 //!
@@ -100,7 +115,9 @@ mod dag_print;
 mod disequality;
 mod f64;
 mod fresh_macro;
+mod injectivity;
 mod map_fold;
+pub mod slotted;
 mod subst;
 mod type_constraints;
 pub use subst::Subst;
@@ -179,6 +196,7 @@ fn add_experimental_extensions(egraph: &mut EGraph, extended_run_schedule: bool)
 
     // Support for set cost
     add_set_cost(egraph);
+    injectivity::add_injectivity_support(egraph);
     egraph.add_read_primitive(GetSizePrimitive, None);
     maybe::add_maybe(egraph);
     egraph.add_read_primitive(GetNodeSizePrimitive, None);

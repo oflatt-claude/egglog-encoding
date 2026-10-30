@@ -217,7 +217,7 @@ fn rebuild_with_leaders(
 /// a uniform per-child rule: an eq-sort element maps to its union-find leader
 /// (via the single `UF_<E>` row), a
 /// container element is recursively rebuilt, and anything else is unchanged.
-fn rebuild_container_value_rec(
+pub(super) fn rebuild_container_value_rec(
     state: &mut ReadState,
     sort: &ArcSort,
     value: Value,
@@ -383,7 +383,7 @@ fn rebuild_container_proof(
     // Bridge the (possibly non-canonical) `raw` term to the canonical `rebuilt`
     // term with the container normalization: `ContainerNormalize(current)` proves
     // `value = normalize(raw)`, which the checker recomputes to match
-    // `reconstruct_termdag(rebuilt)`. Conversion synthesizes the matching step for
+    // `reconstruct_termdag(rebuilt)`. Lifting synthesizes the matching step for
     // each nested container it rewrites inside. We mint this one unconditionally;
     // for order/arity-preserving containers (Vec/Pair) the normalization is the
     // identity, so it is a no-op the proof simplifier removes.

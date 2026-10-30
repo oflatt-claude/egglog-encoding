@@ -265,6 +265,18 @@ pub struct ExtractedTermVariants<C> {
     pub variants: Vec<Vec<ExtractedTerm<C>>>,
 }
 
+struct CommandCostModel;
+
+impl DagCostModel<DefaultCost> for CommandCostModel {
+    fn base_value_cost(&self, _: &EGraph, _: &ArcSort, _: Value) -> DefaultCost {
+        1
+    }
+
+    fn enode_cost(&self, egraph: &EGraph, func: &Function, enode: &Enode<'_>) -> DefaultCost {
+        (egraph.extraction_cost)(egraph, func, enode)
+    }
+}
+
 /// Bellman-Ford-like tree extraction with reusable cost preparation.
 ///
 /// The prepared state borrows the e-graph because reconstruction still needs
@@ -315,7 +327,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             if !unextractable
                 && !hidden
                 && (func.1.decl.subtype == FunctionSubtype::Constructor
-                    || func.1.decl.internal_view.is_some())
+                    || func.1.decl.role.is_view())
             {
                 let func_name = func.0.clone();
                 let (output_sort, _) = func.1.extraction_layout();
@@ -819,28 +831,22 @@ impl Function {
     pub(crate) fn rows_are_enodes(&self) -> bool {
         match self.decl.subtype {
             FunctionSubtype::Constructor => true,
-            FunctionSubtype::Custom => self.decl.internal_view == Some(ViewKind::Constructor),
+            FunctionSubtype::Custom => self.decl.role.is_constructor_view(),
         }
     }
 
     /// Whether this is the functional-dependency view `(children) -> (eclass, {Unit|Proof})`,
     /// where the e-class is the first output column rather than the last input column.
     pub(crate) fn is_fd_view(&self) -> bool {
-        self.decl.internal_view.is_some() && self.func_type.outputs.len() > 1
+        self.decl.role.is_view() && self.func_type.outputs.len() > 1
     }
 
-    /// A proof-node relation created by the proof encoding, marked
-    /// `:internal-term-node`. Its rows are reconstructed during extraction with
-    /// the minted id as the last input column and the earlier inputs as the
-    /// proof's children. Views and plain bookkeeping relations such as the
-    /// subsumption markers are unmarked, so extraction never reads them.
+    /// Whether this is a term/proof relation with its id in the last input column.
     pub(crate) fn is_proof_node_relation(&self) -> bool {
-        self.decl.internal_term_node
+        self.decl.role.is_term_node()
     }
 
-    /// Whether this relation's rows are the proof encoding's own, which is what
-    /// puts them on append-and-scan storage: a proof node marked
-    /// `:internal-term-node` whose minted last input is a `Proof`.
+    /// Whether this term node's id belongs to `proof_sort`.
     #[cfg(test)]
     pub(crate) fn is_proof_node_of(&self, proof_sort: &str) -> bool {
         self.is_proof_node_relation()
@@ -854,7 +860,7 @@ impl Function {
     /// True when the id is the last input column (old-form views and encoding
     /// relations), rather than a real output column.
     fn id_is_last_input(&self) -> bool {
-        (self.decl.internal_view.is_some() && !self.is_fd_view()) || self.is_proof_node_relation()
+        (self.decl.role.is_view() && !self.is_fd_view()) || self.is_proof_node_relation()
     }
 
     /// Returns the extracted output sort and its row index. The index is also
@@ -968,6 +974,43 @@ impl EGraph {
         Ok((extracted.termdag, root.term, root.cost))
     }
 
+    /// Run command tree extraction with the configured constructor costs.
+    pub(crate) fn extract_command(
+        &self,
+        sort: ArcSort,
+        value: Value,
+        variants: usize,
+    ) -> Result<CommandOutput, Error> {
+        let extractor = TreeExtractor::compute_costs_from_rootsorts(
+            Some(vec![sort.clone()]),
+            self,
+            TreeCostModelFromDag(CommandCostModel),
+        );
+        let mut dag = TermDag::default();
+        if variants == 0 {
+            let extracted = extractor
+                .extract_best_with_sort(&mut dag, value, sort.clone())
+                .ok_or_else(|| {
+                    Error::ExtractError(format!(
+                        "Unable to find any valid extraction for sort {}",
+                        sort.name()
+                    ))
+                })?;
+            Ok(CommandOutput::ExtractBest(
+                dag,
+                extracted.cost,
+                extracted.term,
+            ))
+        } else {
+            let terms = extractor
+                .extract_variants_with_sort(&mut dag, value, variants, sort)
+                .into_iter()
+                .map(|extracted| extracted.term)
+                .collect();
+            Ok(CommandOutput::ExtractVariants(dag, terms))
+        }
+    }
+
     /// For constructors and relations, the output column can be ignored
     pub fn function_to_dag(
         &self,
@@ -975,12 +1018,15 @@ impl EGraph {
         n: usize,
         include_output: bool,
     ) -> Result<(Vec<TermId>, Option<Vec<TermId>>, TermDag), Error> {
+        let global = (!self.functions.contains_key(sym))
+            .then(|| self.backend.base_values().get::<S>(sym.to_owned().into()));
         let func = self
             .functions
             .get(sym)
+            .or_else(|| self.global_table(sym))
             .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
         let (_, input_arity, output_arity) = func.table_read_projection();
-        let input_sorts = &func.func_type.input[..input_arity];
+        let input_sorts = &func.func_type.input[usize::from(global.is_some())..input_arity];
         // Logical columns are a prefix of the physical inputs-then-outputs row.
         let output_sorts = if input_arity < func.func_type.input.len() {
             &func.func_type.input[input_arity..input_arity + output_arity]
@@ -1003,6 +1049,9 @@ impl EGraph {
         };
 
         let extract_row = |row: egglog_bridge::ScanEntry| {
+            if global.is_some_and(|key| row.vals[0] != key) {
+                return true;
+            }
             if inputs.len() < n {
                 // include subsumed rows
                 let mut children: Vec<TermId> = Vec::new();

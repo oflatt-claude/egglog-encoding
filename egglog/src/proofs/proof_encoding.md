@@ -22,7 +22,7 @@ This document has two parts.
 queries, and maintenance rules; its snippets are all shown with proofs off.
 [**Proofs**](#proofs) is what fills the proof column. A proof row records how an
 equality was derived and what it was derived from, never the equality itself;
-proof conversion computes that afterwards. For a rule head the row records less
+proof lifting computes that afterwards. For a rule head the row records less
 still — a *skeleton* naming the firing — which is the second of the two layers
 that part is told in.
 
@@ -76,7 +76,7 @@ A constructor becomes an e-node table — its **view** — plus a rebuild index:
 (function Add (Math Math) (Math Unit)
     :merge ((set (@UF_Math (ordering-max old0 new0)) (values (ordering-min old0 new0) ()))
             (values (ordering-min old0 new0) ()))
-    :internal-view constructor :internal-identity-vals 1)
+    :internal-role constructor-view :internal-identity-vals 1)
 (index @AddOcc_Math Add (any 0 1 2))
 ```
 
@@ -86,6 +86,18 @@ dependency `children -> (eclass, proof)` over a term's *canonicalized* children.
 Two rows that collide on the same children are congruent, so the `:merge`
 resolves congruence directly: it keeps the smaller e-class and unions the two in
 `@UF_<Sort>`, and no separate congruence rule is needed.
+
+## Global bindings
+
+`remove_globals` stores global bindings in one table per sort, keyed by the
+binding's name. For `(let $x (Num 1))`, the row for `$x` stores the id of
+`(Num 1)`. An eq-sort row also carries a proof, and the same rebuild machinery
+as a constructor view updates the row when unions change its representative.
+Primitive-valued rows keep their plain values because unions cannot change them.
+
+These tables support execution. [Proof lifting](#proof-lifting) evaluates the
+source bindings when reconstructing propositions; the storage table and its key
+are absent from the resulting proof.
 
 ## Building a term
 
@@ -191,7 +203,7 @@ constructors it has covered in the e-graph's own state, where `push`/`pop` roll
 the memo back together with the declarations it tracks.
 
 The marker is a plain `Unit` relation keyed on the children, with no minted id
-and no `:internal-term-node`, so extraction never reads it as a term.
+and no `:internal-role term-node`, so extraction never reads it as a term.
 
 # Queries
 
@@ -303,25 +315,43 @@ per-column rules, so a subsumed row stays subsumed after its children move.
 
 # Globals
 
-*Before the term encoding*, [`crate::ast::remove_globals`] desugars every global
-variable to a nullary function, so execution need not treat them specially:
+[`crate::ast::remove_globals`] is used by both native execution and term/proof
+encoding. It stores globals in one table per sort, keyed by their source names:
 
 ```text
-(let g1 (Add (Num 1) (Num 2)))
+(let $g1 (Add (Num 1) (Num 2)))
+(let $g2 (Num 3))
 ```
 
 becomes
 
 ```text
-(function g1 () Math :internal-let)
-(set (g1) (Add (Num 1) (Num 2)))
+(function @Globals_Math (String) Math :no-merge :internal-role global)
+(set (@Globals_Math "$g1") (Add (Num 1) (Num 2)))
+(set (@Globals_Math "$g2") (Num 3))
 ```
 
-and references to `g1` become the lookup `(g1)`. The encoding then treats
-`:internal-let` like a nullary constructor: it gets an FD view
-`g1 : () -> (Math, proof)` with the congruence `:merge`, a rebuild index, and
-rebuild rules like any other function. Because the definition is a `set` and not
-a `union`, a global adds no e-class merge of its own.
+References to `$g1` become `(@Globals_Math "$g1")`. For an eq-sort, the encoder
+adds a proof column to the shared table: `String -> (Math, proof)`. The table's
+merge, rebuild index, and rebuild rules serve all globals of that sort.
+A definition stores its value without adding an e-class merge.
+
+The storage key is not part of the source expression. Proof-node numbering
+therefore treats a global read as one node, and proof checking evaluates the
+original binding. Native and encoded execution each keep their own desugaring
+state, so temporaries introduced by the encoder do not reuse source tables
+whose output schema has acquired a proof column.
+
+Primitive globals, such as `(let $two 2)`, keep the function emitted by
+`remove_globals`. Their values never change under union, so the encoding adds
+no proof column or rebuild rule. A query reading one uses a reflexive proof over the
+value; the checker evaluates global references from the program's own bindings.
+Merge bodies read globals and carry the proof from their written value to its
+canonical representative. That proof also updates the merge's output row when
+the result has been canonicalized. A container built in a merge uses the same
+element proofs and rebuilding as one built in an action. Proof checking supplies
+global bindings alongside `old` and `new`. Container-valued globals remain
+unsupported.
 
 The pass also appends a lookup fact to the body of every rule whose *head*
 mentions a global, so the head can read the global's current value. Those facts
@@ -366,19 +396,26 @@ See [`crate::proofs::proof_container_rebuild`] for the rebuild primitives, and
 
 # Proofs
 
+## Proof lifting
+
 A proof in the e-graph is a *raw proof*: a justification, plus references to the
 proofs it is built from. It does not carry the equality it proves. Proof
-conversion turns each one into a
+lifting turns each one into a
 [`Proof`](crate::proofs::proof_format::Proof) — the same justification paired
 with the [`Proposition`](crate::proofs::proof_format::Proposition) `t1 = t2` it
 proves (see [`crate::proofs::proof_format`]). The checker reads propositions;
 the e-graph never stores one.
 
-Conversion computes each proposition from what the raw node references. A node
-references other proofs, or a *position* in the program that conversion can
+[`lift_proof`](crate::proofs::proof_format::lift_proof) runs after extraction and
+before checking and simplification. It reconstructs propositions and rule
+substitutions against the source program, evaluating global references from
+their bindings as it goes.
+
+Lifting computes each proposition from what the raw node references. A node
+references other proofs, or a *position* in the program that lifting can
 evaluate:
 
-| Raw node | Names | Conversion computes the equality by |
+| Raw node | Names | Lifting computes the equality by |
 | --- | --- | --- |
 | `@Rule_<k>` / `@RuleLink` | the rule, and which of the head's proofs this is | replaying the head — see the two layers below |
 | `@FiatUnion` | a global action | evaluating that action's two operands |
@@ -399,7 +436,7 @@ does not currently support `output`, whether or not it is inside `fail`.
 The separate top-level `(extract e)` case for a term not already present remains
 open ([issue #80](https://github.com/saulshanabrook/egglog-encoding/issues/80)).
 
-Two raw nodes are desugared during conversion rather than kept as proof nodes of
+Two raw nodes are desugared during lifting rather than kept as proof nodes of
 their own. `@ProjPrim_<k>` becomes a chain of one or more `@Proj` steps from the
 resolved call's unique typed container argument to the position its validator's
 result occupies, and `@CongrAll` becomes the positional `@Congr` steps it stands
@@ -434,7 +471,7 @@ layers, which are how a *rule head* uses the reference-and-convert split above.
 [**Layer 1**](#layer-1-building-the-proof-as-the-rule-runs) is a rule that builds
 each proof as it goes; it is the specification.
 [**Layer 2**](#layer-2-proof-skeletons) is what the encoder actually emits: a
-skeleton naming the firing, from which conversion recovers layer 1's proof.
+skeleton naming the firing, from which lifting recovers layer 1's proof.
 Everything after those two — body premises, rebuild rows, merge collisions,
 containers — is stated against layer 1.
 
@@ -451,7 +488,7 @@ row's proof states an equality whose right-hand side is the row's term, so:
 * a term the row mentions as a child is `@Proj(row, i)`;
 * an element a body call read out of a container, whose position in the term
   form is not known at the site, is `@ProjPrim_<k>(rule, body index, arg
-  proofs…)`, which conversion resolves by finding that specialized call's unique
+  proofs…)`, which lifting resolves by finding that specialized call's unique
   typed container argument, running its validator, and projecting the result
   from that argument through one or more positional steps.
 
@@ -634,7 +671,7 @@ such row is a **skeleton**: it names the rule that fired, the premise proofs it
 fired on, and *which* proof of that head it is.
 
 The original rule head is then the **format** of the proof. Given the skeleton,
-proof conversion replays the head under the firing's substitution, applies the
+proof lifting replays the head under the firing's substitution, applies the
 same four operations, and arrives at exactly the proof layer 1 would have
 written. Layer 2 is correct because of that: same proof, computed later.
 
@@ -661,11 +698,11 @@ into a `HeadLayout`: the encoder claims a position's run as it lowers, and
 straight into the result.
 
 The column and the premises are the whole conclusion: they fix the firing, and
-conversion replays the head from there.
+lifting replays the head from there.
 
 ### Bridges
 
-The bridge — which e-class a subterm interned into — is the one thing conversion
+The bridge — which e-class a subterm interned into — is the one thing lifting
 cannot recompute, so the skeleton carries it. A row written before the head
 interns anything carries the body premises inline as `@Rule_<k>`, `k` counting
 only the premises the encoding records (see [Body premises](#body-premises)).
@@ -746,7 +783,7 @@ Layer 2 needs a rule head to use as the format. Where there is none, the encoder
 applies the same four operations itself and writes the composition out. The
 operations are written once, over the `ProofAlgebra` trait in
 [`crate::proofs::proof_head`], and implemented twice: for the encoder, where a
-"proof" is the name of an emitted variable, and for proof conversion, where it is
+"proof" is the name of an emitted variable, and for proof lifting, where it is
 a node in the proof store. Those are one algebra run at two times — while
 lowering, or while replaying a skeleton — which is exactly the difference between
 the layers.
@@ -795,11 +832,11 @@ A **base-value fact** is stated by no column at all. Its premise is a reflexive
 `@Fiat_<Sort>` over a literal — a guard like `(> n 0)`, or an equality between two base
 values such as the `(= len n)` a custom function's output leaves behind — and the
 value is a function of the fact and the bindings the body already made, so
-conversion re-evaluates it rather than reading a row. The `@Rule_<k>` a firing
+lifting re-evaluates it rather than reading a row. The `@Rule_<k>` a firing
 writes then has one fewer column, and the row it would have named is never
 minted. This is one gate over the body, taken in order (a fact is only
 recomputable once one of its sides reads nothing but already-bound variables),
-shared by the encoder and proof conversion.
+shared by the encoder and proof lifting.
 
 A value read *out of* a container keeps a real premise, stated from the
 container's own [anchor](#reflexive-anchors): `(= e (vec-get v 1))` and
@@ -869,7 +906,7 @@ view's their right, spelling `trans_p0_sym_p1`.
 **A custom function's view merge** writes one `@MergeRow` naming the function and
 the two colliding rows' proofs; the conclusion is recovered by running the merge
 body on the premise outputs. Constructor subterms inside the merge body get
-`@MergeIdx` rows, indexed pre-order over the body so conversion can evaluate the
+`@MergeIdx` rows, indexed pre-order over the body so lifting can evaluate the
 matching subexpression.
 
 ## Container proofs
@@ -884,10 +921,10 @@ eq-sort child's `@UF` proof.
 The chain uses `@CongrAll` — replace every child equal to `a` by `b` — rather
 than positional `@Congr`, because the enclosing term's child order is not the
 order the primitive sees elements in. A *nested* container needs no anchor of
-its own: `@CongrAll` is expanded against the term during conversion, which
+its own: `@CongrAll` is expanded against the term during lifting, which
 follows container children to the same depth the value rebuild does and knows
 each child's position there. So the primitive folds one `@CongrAll` per changed
-eq-sort element, at any depth, onto the outer anchor. Conversion desugars each
+eq-sort element, at any depth, onto the outer anchor. Lifting desugars each
 into positional `@Congr` steps against the actual term, canonicalizing a
 rewritten child before the step that puts it back.
 
@@ -904,3 +941,113 @@ break the rule-head check for the container's proof. Each element's
 `@UF_<E>`, so the standard rebuild and path compression canonicalize the natural
 like any other stale term. That edge's proof column is the element's connector,
 which is therefore one of the few connectors a rule head does write a row for.
+
+
+## Certifying extraction
+
+`(prove-extract e)` looks up `e`, extracts its cheapest representative, and
+returns both the extraction and a proof of equality to `e`. An optional positive
+variant count requests several extractions and a proof for each. Lookup never
+inserts either endpoint; an absent term reports `Could not find term … in the
+e-graph`. Container roots are unsupported; containers may occur within a term
+whose root has a non-container sort. Proof-testing mode rewrites ordinary
+`extract` commands to `prove-extract`, checking the equality proof for every result.
+
+The same certification is available independently of the extractor through
+[`EGraph::prove_extracted_terms`]: supply a
+`TermDag`, an input root, result roots, and their sort. A single proof store
+shares dependencies across all results. Primitive expressions have their
+validated, evaluated meaning in proof endpoints, and globals retain the term
+in their original source definition.
+
+### Ground-term typing
+
+A well-typed term need not exist in the e-graph. Typing only resolves the
+operations and sorts; lookup must separately find their values and evidence.
+
+[`TypeInfoView::typecheck_term_dag`] starts from an untyped `TermDag`. Shared
+syntax can have several typings: one `(vec-empty)` node may occur beneath both
+`WrapInts` and `WrapStrings`. The checker retains candidates by result sort,
+letting each parent's signature select the appropriate child typing. An expected
+root sort can make the same selection. If two typings have the same result sort
+but differ in an argument, knowing the root sort does not resolve that ambiguity;
+the checker retains the error until that candidate is selected.
+
+The returned `TypedTermDag` contains only selected typings, with separate nodes
+for different specializations of shared syntax. Root IDs refer to this new DAG
+and preserve the requested order. Typing performs no evaluation or table access.
+
+[`EGraph::typecheck_term_dag`] also resolves zero-argument global references to
+their binding tables and uses source signatures. It works with or without proof
+encoding; only the global bindings need to exist. Extraction certification uses
+this API and translates typing errors into extraction errors.
+
+[`TypeInfo::source_types`] supplies source signatures when checking against an
+encoded program. A view's first output is the source result; the evidence output
+is omitted, and `FunctionRole` restores whether the operation is a constructor,
+custom function, or global. The printed `:internal-role` annotation preserves
+this distinction during desugared replay. Sorts and primitives come from the same
+environment.
+
+### Looking up values and decoding evidence
+
+`ground.rs` looks up each typed node's canonical value and any view or union-find
+proof. The returned vector has one entry per typed-DAG node, indexed by its
+`TermId`, including non-root children. Missing rows and roots with different
+values are errors. Lookup adds no e-graph rows.
+
+The ordinary lifter then decodes the imported proofs and their dependencies.
+Their conclusions identify the evidence available for composition, including
+containers appearing before a row was rebuilt. A rule-derived container can
+have elements determined by the rule substitution, so its raw proof alone does
+not spell out that witness. This decoding uses the existing lifter; evidence
+search and ground-term construction remain in `ground.rs` and `ground_evidence.rs`.
+
+### Constructing raw proofs
+
+A memoized recursive traversal returns either an ordinary raw proof or a deferred
+container recipe. Constructor proofs combine existing row evidence and child
+certificates using symmetry, transitivity, and congruence. Custom function
+results use raw projections. Globals recover their source connector from the
+imported evidence.
+
+For a constructor `F(b)`, suppose the child certificate is `b = a`, the view
+proof is `r = F(a)`, and the union-find proof is `r = leader`. The composition is
+`Trans(Sym(Congr(view, 0, Sym(child))), union_find)`. Finally, `e = leader` and
+the reverse of `t = leader` produce `e = t`.
+
+Resolved primitive validators compute the endpoint terms used during
+construction. For example, `vec-get(root(), 0)` selects an element from the
+decoded function output; its certificate comes from existing evidence and
+projections. A temporary container can also be evaluated without asserting its
+existence: `vec-length(vec-of(a))` needs a proof of the resulting literal.
+Container-producing operations retain their argument certificates until an
+enclosing row provides an existence witness.
+
+### Resolving deferred containers
+
+Containers have no constructor view of their own. For `Wrap(vec-of(b))`, the
+builder supplies the deferred vector with a projection of the `Wrap` row's
+proof. The recipe is resolved inside ground-term construction, and shared uses
+of that node reuse the completed certificate. The argument certificates remain
+available when another primitive consumes that same container.
+
+A witness may name either the requested container or its canonical form.
+Historical witnesses are sought in the supplied evidence's dependencies. With
+a witness of the requested container, construction uses the same raw operations
+as runtime rebuilding: `CongrAll` applies element equalities throughout nested
+containers, and `ContainerNormalize` canonicalizes the result. With a witness
+of the canonical container, positional congruence restores the requested
+elements. Equal vector elements retain their separate positions.
+
+For example, rebuilding `set-of(A, B)` to `set-of(A)` retains the original
+container witness and its equality to the rebuilt value. That evidence can
+certify the original expression. A smaller canonical container alone cannot
+supply the discarded occurrences. Missing evidence produces an extraction
+error; constructing an interned container value is not an existence proof.
+
+Container roots are rejected, including calls with an empty output list. Every
+accepted root therefore produces an ordinary raw proof. The completed roots
+are passed to the ordinary lifter, then checked before and after simplification.
+Neither the raw proof operations nor the public proof format gains a deferred
+container or primitive case.

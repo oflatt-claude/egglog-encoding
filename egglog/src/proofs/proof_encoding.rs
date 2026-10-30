@@ -192,7 +192,7 @@ struct Natural {
     /// The natural node's id.
     fv_nat: String,
     /// `fv_nat = f(deduped children)`: one `Congr` per canonicalized child.
-    /// `None` in a rule head, where proof conversion folds it instead.
+    /// `None` in a rule head, where proof lifting folds it instead.
     to_dedup: Option<String>,
 }
 
@@ -327,7 +327,7 @@ struct Element {
     rule_name: String,
     /// The call's index in the rule body's
     /// [`body_exprs`](crate::proofs::proof_encoding_helpers::body_exprs), which
-    /// is how proof conversion recovers the resolved primitive — a name alone
+    /// is how proof lifting recovers the resolved primitive — a name alone
     /// could not, since primitives are overloaded.
     body_index: usize,
     /// One proof per argument, in order. The container's is empty: the anchor
@@ -546,7 +546,7 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Mint the rule proof row the emit's justification names. Proof conversion
+    /// Mint the rule proof row the emit's justification names. Proof lifting
     /// derives the proposition from the column alone, so the row stores no terms.
     ///
     /// A head's first row carries the body premises inline; every row after the
@@ -897,11 +897,11 @@ impl<'a> ProofInstrumentor<'a> {
         self.parse_program(&code)
     }
 
-    /// A global is a `:internal-let` function; in the encoding it is treated like a
-    /// nullary constructor (FD view, congruence merge, readable value+proof) rather
-    /// than a `:no-merge` custom function.
+    /// An eq-sort global needs a view that follows unions, like a constructor.
+    /// Primitive globals keep the function emitted by `remove_globals`: their values
+    /// never need rebuilding and can be justified directly in a proof.
     pub(super) fn is_encoded_global(&self, fdecl: &ResolvedFunctionDecl) -> bool {
-        fdecl.internal_let
+        fdecl.role.is_global() && self.sort_by_name(fdecl.schema.output()).is_eq_sort()
     }
 
     /// Whether the function's output value *is* its e-class,
@@ -917,7 +917,8 @@ impl<'a> ProofInstrumentor<'a> {
     /// no `@UF` union): `old`/`new` bind to the two colliding output columns
     /// (`old0`/`new0`) and the carried view proofs to `old1`/`new1`. The result is
     /// `(values merged rowproof)`, where `merged` is the (canonically-minted) merge
-    /// body and `rowproof` is a children-free `MergeRow` (`()` in term mode).
+    /// body and `rowproof` is a children-free `MergeRow`, composed with the
+    /// output's canonicalization proof when needed (`()` in term mode).
     ///
     /// Running the merge inside the view's `:merge` computes the body exactly
     /// once; computing it twice mints extra, over-merged rows.
@@ -942,24 +943,26 @@ impl<'a> ProofInstrumentor<'a> {
             justification: &row,
             at: ActionNodes::default(),
         };
-        let merged = self
-            .instrument_merge_body(&mut emit, &merge.result, &name, &mut idx)
-            .value;
-        // The merge body's outermost term records a connector nothing composes
-        // with; whatever is still deferred reached no statement.
-        self.drop_pending_lookups();
+        let merged = self.instrument_merge_body(&mut emit, &merge.result, &name, &mut idx);
         let row_proof = if self.egraph.proof_state.proofs_enabled {
-            let fresh = self.reflexive_for_justification(&mut emit);
+            let mut fresh = self.reflexive_for_justification(&mut emit);
+            if let Some(connector) = &merged.connector {
+                let step = self.connector_node(&mut emit, connector);
+                fresh = self.mint_congr(&fresh, fdecl.schema.input.len(), &step);
+                self.emit_pending_group(emit.stmts, &fresh);
+            }
             // Keep the proof column stable: when the merged output equals a
             // colliding premise's output (as with idempotent `min`/`max`/... merges
             // that keep one input), reuse that premise's existing proof so the row
-            // stays value-identical and the merge saturates. Otherwise the fresh
-            // `MergeRow` justifies the newly-computed output.
-            format!("(select-eq {merged} old0 old1 (select-eq {merged} new0 new1 {fresh}))")
+            // stays value-identical and the merge saturates. Otherwise the
+            // canonicalized `MergeRow` justifies the newly-computed output.
+            let value = &merged.value;
+            format!("(select-eq {value} old0 old1 (select-eq {value} new0 new1 {fresh}))")
         } else {
             "()".to_string()
         };
-        let value = format!("(values {merged} {row_proof})");
+        self.drop_pending_lookups();
+        let value = format!("(values {} {row_proof})", merged.value);
         if body_code.is_empty() {
             value
         } else {
@@ -1004,9 +1007,6 @@ impl<'a> ProofInstrumentor<'a> {
         if fdecl.internal_hidden {
             view_flags.push_str(" :internal-hidden");
         }
-        if fdecl.internal_let {
-            view_flags.push_str(" :internal-let");
-        }
         // The view carries the user operation's extraction cost; the extractor
         // reads it here.
         if let Some(cost) = fdecl.cost {
@@ -1017,6 +1017,11 @@ impl<'a> ProofInstrumentor<'a> {
         // differ in how the `:merge` resolves a children-key collision.
         let mut packed_decl = String::new();
         let view_decl = if output_is_eclass {
+            let role = if fdecl.role.is_global() {
+                FunctionRole::GlobalView
+            } else {
+                FunctionRole::ConstructorView
+            };
             // Two rows conflicting on the same children are congruent: keep the
             // smaller eclass and union the two eclasses in the sort's `@UF`.
             let uf_name = self.uf_name(schema.output());
@@ -1027,14 +1032,14 @@ impl<'a> ProofInstrumentor<'a> {
                 .ordered_union_merge(&uf_name, Skeleton::Leaf(0).trans(Skeleton::Leaf(1).sym()));
             packed_decl = decl;
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {congruence_merge} :internal-view constructor{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {congruence_merge} :internal-role {role}{view_flags} :internal-identity-vals 1)"
             )
         } else if fdecl.merge.is_some() {
             // Custom function with a `:merge`: the view `:merge` runs the user
             // merge once (see `custom_view_merge`). No `@UF` union.
             let custom_merge = self.custom_view_merge(fdecl);
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {custom_merge} :internal-view function{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {custom_merge} :internal-role function-view{view_flags} :internal-identity-vals 1)"
             )
         } else {
             // Primitive/`Unit`-output `:no-merge` custom: the view is declared native
@@ -1048,7 +1053,7 @@ impl<'a> ProofInstrumentor<'a> {
                 "eq-sort `:no-merge` must be rejected by command_supports_proof_encoding"
             );
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :no-merge :internal-view function{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :no-merge :internal-role function-view{view_flags} :internal-identity-vals 1)"
             )
         };
         // `fresh_sort` is the term's e-class sort only for a custom function whose
@@ -1100,19 +1105,35 @@ impl<'a> ProofInstrumentor<'a> {
                 );
                 let run = emit.head.claim(HeadPosition::Set);
 
-                // Global definition `(set (x) e)`: x is a nullary `:internal-let`
-                // function aliasing e. Store e's value+proof directly in x's FD view
-                // (x's e-class *is* e's), so it takes no e-class of its own.
-                if generic_exprs.is_empty() && self.egraph.type_info.is_global(&func_type.name) {
+                // For `(let $x (Num 1))`, store the id of `(Num 1)` in `$x`'s
+                // row. Eq-sort rows also carry the proof needed when a union
+                // replaces that id with its representative.
+                if func_type.role.is_global() {
                     let e_value = exprs.pop().expect("a set has a value");
+                    let keys = ids(&exprs);
+                    if !func_type.output().is_eq_sort() {
+                        emit.stmts.push(format!(
+                            "(set ({} {}) {})",
+                            func_type.name,
+                            ListDisplay(&keys, " "),
+                            e_value.value
+                        ));
+                        return;
+                    }
                     let proof = if self.proofs_enabled() {
-                        self.global_value_proof(emit, &e_value)
+                        match &e_value.connector {
+                            Some(connector) => {
+                                let connector = self.connector_node(emit, connector);
+                                self.reflexive(connector)
+                            }
+                            None => self.reflexive_for_justification(emit),
+                        }
                     } else {
                         "()".to_string()
                     };
-                    // The FD view `() -> (val, proof)` records `x`'s e-class.
+                    self.emit_pending_group(emit.stmts, &proof);
                     let e_value = e_value.value;
-                    let update = self.update_fd_view(&func_type.name, &[], &e_value, &proof);
+                    let update = self.update_fd_view(&func_type.name, &keys, &e_value, &proof);
                     emit.stmts.push(update);
                     return;
                 }
@@ -1123,7 +1144,7 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
                 if let ResolvedCall::Func(func_type) = h {
                     // `change` concludes nothing, so its arguments hold no column
-                    // for conversion to read back: they compose like a top-level
+                    // for lifting to read back: they compose like a top-level
                     // action, and the head's numbering resumes after them.
                     let children = emit.composing(|emit| {
                         generic_exprs
@@ -1256,39 +1277,6 @@ impl<'a> ProofInstrumentor<'a> {
         proof
     }
 
-    /// Proof stored in a global's FD view for the value `e` it aliases.
-    ///
-    /// When `e` is a built term (e.g. `(Plus …)`), the encoding has already proved
-    /// its *natural* form — the literal term the checker reconstructs from the
-    /// global's `(let x e)` — and holds a `connector : natural = e`. Anchor the
-    /// global's proof on that natural form (a reflexive `e = e` routed through it)
-    /// instead of fiat-ing the canonical value directly: the value's shape may be a
-    /// rewritten (canonicalized) child the checker cannot establish, whereas the
-    /// natural form is exactly the global definition it can. An atomic value (a
-    /// literal, or a bare reference to another global) has no connector and is
-    /// fiat-ed directly — a literal is self-justifying and a global alias is
-    /// already established.
-    ///
-    /// A global is only ever set by a top-level action — a rule head that names
-    /// one reads it as a query variable — so the connector here is always a proof
-    /// node the encoder minted, never a rule head's column.
-    fn global_value_proof(&mut self, emit: &mut Emit, e_value: &Operand) -> String {
-        match &e_value.connector {
-            Some(Connector::Node(connector)) => {
-                let connector = connector.clone();
-                let sym = self.proof_names().eq_sym_constructor.clone();
-                let trans = self.proof_names().eq_trans_constructor.clone();
-                let sym_conn = self.mint(emit.stmts, &sym, &connector);
-                let row = format!("{sym_conn} {connector}");
-                self.mint(emit.stmts, &trans, &row)
-            }
-            Some(Connector::Column(column)) => {
-                panic!("a global's value cannot be named by rule head column {column}")
-            }
-            None => self.reflexive_for_justification(emit),
-        }
-    }
-
     /// Write a row into a source-named functional-dependency view:
     /// `(set (F children) (values value proof))`. Re-setting an existing
     /// `children` key is handled by the view's declared collision policy.
@@ -1399,7 +1387,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// container: nothing in the query names it as a term, but it is a child of
     /// the container it came out of, and the body anchors that.
     ///
-    /// `rule_name` and `body_index` locate the call so proof conversion can
+    /// `rule_name` and `body_index` locate the call so proof lifting can
     /// recover the resolved primitive and run its validator on the argument
     /// terms. Outside a rule body there is nothing to locate it by, so the
     /// anchor is left unsupplied — every such context drops its anchors unread.
@@ -1606,7 +1594,7 @@ impl<'a> ProofInstrumentor<'a> {
         {
             let proof = self.proof_sort();
             self.pending_decls.push(format!(
-                "(function {name} ({sort} {sort} {proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
+                "(function {name} ({sort} {sort} {proof}) Unit :no-merge :internal-hidden :internal-role term-node)\n"
             ));
         }
         name
@@ -1632,7 +1620,7 @@ impl<'a> ProofInstrumentor<'a> {
         let proof = self.proof_sort();
         let columns: String = std::iter::repeat_n(format!("{proof} "), args).collect();
         self.pending_decls.push(format!(
-            "(function {name} (String i64 {columns}{proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
+            "(function {name} (String i64 {columns}{proof}) Unit :no-merge :internal-hidden :internal-role term-node)\n"
         ));
         name
     }
@@ -1750,15 +1738,23 @@ impl<'a> ProofInstrumentor<'a> {
         v
     }
 
-    /// Read an encoded global's value from its FD view `() -> (val, proof)`, for a
-    /// global reference `(x)` appearing in an action. `set-if-empty` returns the
+    /// Read a global's value in an action or merge body. Primitive globals use
+    /// the function emitted by `remove_globals`. For an eq-sort global, `set-if-empty` on
+    /// its FD view `(key) -> (val, proof)` returns the
     /// stored e-class (a global is `set` before it is used, so the fresh fallback is
     /// dead code that only fires on a malformed program). The value read is already
     /// the view's canonical e-class, so no natural/deduped connector is recorded.
     ///
     /// The signature requires the fallback pair, so both are bare fresh ids: no
     /// row says anything about either, since nothing ever reads them.
-    fn lookup_global(&mut self, name: &str, res: &mut Vec<String>) -> String {
+    fn lookup_global(&mut self, func: &FuncType, keys: &[String], res: &mut Vec<String>) -> String {
+        let name = &func.name;
+        let keys = ListDisplay(keys, " ");
+        if !func.output().is_eq_sort() {
+            let value = self.fresh_var();
+            res.push(format!("(let {value} ({name} {keys}))"));
+            return value;
+        }
         let view = name.to_string();
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
         let view_sort = self.term_sort(name);
@@ -1771,7 +1767,7 @@ impl<'a> ProofInstrumentor<'a> {
         };
         let vx = self.fresh_var();
         res.push(format!(
-            "(let {vx} ({set_if_empty} {fresh_e} {fallback_proof}))"
+            "(let {vx} ({set_if_empty} {keys} {fresh_e} {fallback_proof}))"
         ));
         vx
     }
@@ -1867,7 +1863,7 @@ impl<'a> ProofInstrumentor<'a> {
         let fv_nat = self.fresh_term_id(emit.stmts, fname);
         // The head's own conclusion here is only ever read by the congruence
         // chain below, so a head that numbers its proofs instead of composing
-        // them writes no row for it: conversion recovers it from the column.
+        // them writes no row for it: lifting recovers it from the column.
         let to_dedup = emit.head.composes().then(|| {
             let nat_prf = self.reflexive_for_justification(emit);
             let mut steps = vec![];
@@ -1916,7 +1912,7 @@ impl<'a> ProofInstrumentor<'a> {
         let fv_can = self.fresh_term_id(emit.stmts, &func_type.name);
         let can_prf = match &to_dedup {
             Some(chain) => self.reflexive(chain.clone()),
-            // One row records the composition proof conversion rebuilds.
+            // One row records the composition proof lifting rebuilds.
             None => {
                 let canonical = emit
                     .justification
@@ -1941,7 +1937,7 @@ impl<'a> ProofInstrumentor<'a> {
         ));
         // The read misses on a row this action just seeded, returning the fallback:
         // a proof about the term as written rather than about the canonical one,
-        // which is how conversion tells "no bridge" from a real one.
+        // which is how lifting tells "no bridge" from a real one.
         emit.head.record_bridge(&vprf);
 
         let connector = match &to_dedup {
@@ -2086,6 +2082,28 @@ impl<'a> ProofInstrumentor<'a> {
                 })
             }
             ResolvedExpr::Call(_, ResolvedCall::Func(func_type), args) => {
+                if func_type.role.is_global() {
+                    let keys = args.iter().map(ToString::to_string).collect::<Vec<_>>();
+                    let value = self.lookup_global(func_type, &keys, emit.stmts);
+                    let mut global = Operand::plain(value);
+                    if self.proofs_enabled() && func_type.output().is_eq_sort() {
+                        // The merge is evaluated under the written global's value,
+                        // while execution reads its canonical representative. The
+                        // view proof connects those two, including after a union.
+                        global.natural = self.fresh_term_id(emit.stmts, &func_type.name);
+                        let fallback =
+                            self.reflexive_for_justification(&mut emit.justified_by(&node));
+                        let read =
+                            crate::proofs::proof_fresh::view_proof_prim_name(&func_type.name);
+                        let proof = self.fresh_var();
+                        emit.stmts.push(format!(
+                            "(let {proof} ({read} {} {fallback}))",
+                            ListDisplay(&keys, " ")
+                        ));
+                        global.connector = Some(Connector::Node(self.mint_sym(&proof)));
+                    }
+                    return global;
+                }
                 let arg_vars = args
                     .iter()
                     .map(|a| self.instrument_merge_body(emit, a, fname, idx))
@@ -2099,13 +2117,7 @@ impl<'a> ProofInstrumentor<'a> {
                     .iter()
                     .map(|a| self.instrument_merge_body(emit, a, fname, idx))
                     .collect::<Vec<_>>();
-                let prim_name = sp.name().to_string();
-                let fv = self.fresh_var();
-                emit.stmts.push(format!(
-                    "(let {fv} ({prim_name} {}))",
-                    ListDisplay(ids(&arg_vars), " ")
-                ));
-                Operand::plain(fv)
+                self.instrument_primitive(emit, sp, &arg_vars)
             }
             ResolvedExpr::Call(_, _, _) => {
                 panic!("proof-mode merge body for `{fname}` contains an unsupported call form")
@@ -2162,13 +2174,14 @@ impl<'a> ProofInstrumentor<'a> {
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         if func_type.subtype == FunctionSubtype::Custom {
-                            // Proof normal form bans looking up custom functions in
-                            // actions, except encoded globals: a nullary
-                            // `:internal-let` function whose value is read from its
-                            // FD view (see `lookup_global`). This is the only custom
-                            // lookup allowed here.
-                            if self.egraph.type_info.is_global(&func_type.name) {
-                                Operand::plain(self.lookup_global(&func_type.name, emit.stmts))
+                            // Global reads introduced by lowering are the only
+                            // custom-function lookups allowed in these actions.
+                            if func_type.role.is_global() {
+                                Operand::plain(self.lookup_global(
+                                    func_type,
+                                    &ids(&args),
+                                    emit.stmts,
+                                ))
                             } else {
                                 panic!(
                                     "Found a function lookup in actions, should have been prevented by typechecking"
@@ -2179,41 +2192,7 @@ impl<'a> ProofInstrumentor<'a> {
                         }
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
-                        let prim_name = specialized_primitive.name().to_string();
-                        let out = specialized_primitive.output();
-                        let container_proof =
-                            self.egraph.proof_state.proofs_enabled && out.is_eq_container_sort();
-                        // Build a container over *natural* element ids where we have
-                        // them (an eq-sort arg with a connector), recording each
-                        // `natural -> (deduped, connector)` edge in the element's
-                        // union-find. The container then extracts the syntactic
-                        // shape the rule wrote, and the ordinary container rebuild
-                        // canonicalizes the element (see "Containers" in
-                        // proof_encoding.md).
-                        let mut build_args = Vec::with_capacity(args.len());
-                        for (arg, asort) in args.iter().zip(specialized_primitive.input()) {
-                            match &arg.connector {
-                                Some(connector) if container_proof && asort.is_eq_sort() => {
-                                    let (value, natural) = (&arg.value, &arg.natural);
-                                    let uf = self.uf_name(asort.name());
-                                    let conn = self.connector_node(emit, connector);
-                                    // The `@UF` row reads the connector directly,
-                                    // not through a mint.
-                                    self.emit_pending_group(emit.stmts, &conn);
-                                    emit.stmts.push(format!(
-                                        "(set ({uf} {natural}) (values {value} {conn}))"
-                                    ));
-                                    build_args.push(natural.clone());
-                                }
-                                _ => build_args.push(arg.value.clone()),
-                            }
-                        }
-                        let fv = self.fresh_var();
-                        emit.stmts.push(format!(
-                            "(let {fv} ({prim_name} {}))",
-                            ListDisplay(&build_args, " ")
-                        ));
-                        Operand::plain(fv)
+                        self.instrument_primitive(emit, specialized_primitive, &args)
                     }
                     ResolvedCall::Values(_) => {
                         panic!("tuple-output (`values`) functions are not supported in proofs")
@@ -2221,6 +2200,43 @@ impl<'a> ProofInstrumentor<'a> {
                 }
             }
         }
+    }
+
+    fn instrument_primitive(
+        &mut self,
+        emit: &mut Emit,
+        primitive: &SpecializedPrimitive,
+        args: &[Operand],
+    ) -> Operand {
+        let container_proof = self.proofs_enabled() && primitive.output().is_eq_container_sort();
+        // Build a container over *natural* element ids where we have them (an
+        // eq-sort arg with a connector), recording each natural -> canonical
+        // edge in the element's union-find. The container then extracts the
+        // written shape, and ordinary container rebuilding canonicalizes its
+        // elements (see "Containers" in proof_encoding.md).
+        let mut build_args = Vec::with_capacity(args.len());
+        for (arg, asort) in args.iter().zip(primitive.input()) {
+            match &arg.connector {
+                Some(connector) if container_proof && asort.is_eq_sort() => {
+                    let (value, natural) = (&arg.value, &arg.natural);
+                    let uf = self.uf_name(asort.name());
+                    let conn = self.connector_node(emit, connector);
+                    // The `@UF` row reads the connector directly, not through a mint.
+                    self.emit_pending_group(emit.stmts, &conn);
+                    emit.stmts
+                        .push(format!("(set ({uf} {natural}) (values {value} {conn}))"));
+                    build_args.push(natural.clone());
+                }
+                _ => build_args.push(arg.value.clone()),
+            }
+        }
+        let fv = self.fresh_var();
+        emit.stmts.push(format!(
+            "(let {fv} ({} {}))",
+            primitive.name(),
+            ListDisplay(&build_args, " ")
+        ));
+        Operand::plain(fv)
     }
 
     /// In proof mode, rule_proof justifies the actions taken.
@@ -2237,7 +2253,7 @@ impl<'a> ProofInstrumentor<'a> {
         let plan = HeadPlan::new(actions, &mut fresh);
         // Numbered over the planned actions, not the written ones: normalization
         // lifts a union's constructor operands into fresh `let`s, so the two do
-        // not have the same nodes. Conversion plans the same source the same way
+        // not have the same nodes. Lifting plans the same source the same way
         // to get the same numbering (see `ProofStore::action_term`).
         self.action_expr_index = HashMap::default();
         let mut rows: Vec<Option<usize>> = vec![];
@@ -2256,7 +2272,7 @@ impl<'a> ProofInstrumentor<'a> {
             }
             rows.push(row);
         }
-        // A rule head is a format proof conversion can replay, so its proofs are
+        // A rule head is a format proof lifting can replay, so its proofs are
         // named by column; everywhere else the encoder composes them itself.
         let mut head = match justification {
             Justification::Rule(..) => Head::skeleton(plan.layout.clone()),
@@ -2351,11 +2367,16 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             ""
         };
+        let subsumed_opt = if rule.include_subsumed {
+            ":internal-include-subsumed"
+        } else {
+            ""
+        };
         let instrumented = format!(
             "(rule ({})
                    ({proof_prelude}
                     {})
-                    {ruleset_opt} {eval_opt}
+                    {ruleset_opt} {eval_opt} {subsumed_opt}
                     :name \"{name}\")",
             ListDisplay(facts, " "),
             ListDisplay(actions, " "),
@@ -2531,8 +2552,12 @@ impl<'a> ProofInstrumentor<'a> {
                 res.extend(self.declare_sort(name, is_container));
             }
             ResolvedNCommand::Function(fdecl) => {
-                res.extend(self.term_and_view(fdecl));
-                res.extend(self.rebuilding_rules(fdecl));
+                if fdecl.role.is_global() && !self.is_encoded_global(fdecl) {
+                    res.push(command.to_command().make_unresolved());
+                } else {
+                    res.extend(self.term_and_view(fdecl));
+                    res.extend(self.rebuilding_rules(fdecl));
+                }
             }
             ResolvedNCommand::NormRule { rule } => {
                 res.extend(self.instrument_rule(rule));
@@ -2612,7 +2637,20 @@ impl<'a> ProofInstrumentor<'a> {
                     justification: &fiat,
                     at: ActionNodes::default(),
                 };
-                let instrumented_expr = self.instrument_action_expr(expr, &mut emit, &scope).value;
+                let instrumented_expr = match expr {
+                    ResolvedExpr::Call(_, ResolvedCall::Func(func), args)
+                        if func.subtype == FunctionSubtype::Custom
+                            && !func.role.is_global()
+                            && args.is_empty() =>
+                    {
+                        // Capture the existing output before count actions run.
+                        let value = self.fresh_var();
+                        emit.stmts
+                            .push(format!("(let {value} (view-root-{}))", func.name));
+                        value
+                    }
+                    _ => self.instrument_action_expr(expr, &mut emit, &scope).value,
+                };
                 let instrumented_variants = self
                     .instrument_action_expr(variants, &mut emit, &scope)
                     .value;
@@ -2653,7 +2691,8 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::UnstableCombinedRuleset(..)
             | ResolvedNCommand::PrintOverallStatistics(..)
             | ResolvedNCommand::PrintFunction(..)
-            | ResolvedNCommand::ProveExists(..) => {
+            | ResolvedNCommand::ProveExists(..)
+            | ResolvedNCommand::ProveExtract(..) => {
                 res.push(command.to_command().make_unresolved());
             }
 

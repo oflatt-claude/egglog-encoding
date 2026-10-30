@@ -16,6 +16,7 @@ mod serialize;
 pub mod sort;
 mod termdag;
 mod typechecking;
+mod typed_termdag;
 pub mod util;
 pub use command_macro::{CommandMacro, CommandMacroRegistry};
 
@@ -42,9 +43,9 @@ use egglog_ast::util::ListDisplay;
 use egglog_bridge::{ColumnTy, QueryEntry, TableKind};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
-use egglog_reports::{
-    OverallReport, ReportLevel, RulesetTimingRole, RunReport, TimingSummary, TimingSummaryError,
-};
+use egglog_reports::{OverallReport, ReportLevel, RulesetTimingRole, RunReport};
+#[cfg(feature = "bin")]
+use egglog_reports::{TimingSummary, TimingSummaryError};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
 };
@@ -76,12 +77,15 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-pub use termdag::{OrdTerm, Term, TermDag, TermId};
+pub use termdag::{
+    GenericTerm, GenericTermDag, OrdTerm, Term, TermDag, TermId, TypedTerm, TypedTermDag,
+};
 use thiserror::Error;
 pub use typechecking::FuncType;
 pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
-pub use typechecking::TypeInfo;
+pub use typechecking::{TypeInfo, TypeInfoView};
+pub use typed_termdag::GroundTypeError;
 use util::*;
 
 use crate::ast::desugar::desugar_command;
@@ -180,6 +184,11 @@ pub enum CommandOutput {
         proof_store: ProofStore,
         proof_id: ProofId,
     },
+    /// Equality proofs for extraction results, sharing one proof store.
+    ProveExtract {
+        proof_store: ProofStore,
+        proof_ids: Vec<ProofId>,
+    },
     /// The report from all runs
     OverallStatistics(RunReport),
     /// A printed function and all its values
@@ -205,7 +214,9 @@ impl CommandOutput {
         outputs
             .iter()
             .filter_map(|output| match output {
-                CommandOutput::ProveExists { .. } => Some(output.to_string()),
+                CommandOutput::ProveExists { .. } | CommandOutput::ProveExtract { .. } => {
+                    Some(output.to_string())
+                }
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -213,7 +224,7 @@ impl CommandOutput {
     }
 
     /// Render the non-proof outputs that should still match the normal-mode
-    /// shared snapshot when proof-testing rewrites checks into prove commands.
+    /// shared snapshot when proof-testing rewrites checks and extracts into proof commands.
     pub fn snapshot_non_proof_stable_under_proof_encoding(outputs: &[CommandOutput]) -> String {
         Self::snapshot_stable(outputs, false)
     }
@@ -228,7 +239,11 @@ impl CommandOutput {
                     Some(format!("(extraction-costs {cost})\n"))
                 }
                 CommandOutput::ExtractVariants(..) => None,
-                CommandOutput::ProveExists { .. } if !include_proofs => None,
+                CommandOutput::ProveExists { .. } | CommandOutput::ProveExtract { .. }
+                    if !include_proofs =>
+                {
+                    None
+                }
                 other => Some(other.to_string()),
             })
             .collect::<Vec<_>>()
@@ -271,6 +286,15 @@ impl std::fmt::Display for CommandOutput {
                 proof_store,
                 proof_id,
             } => writeln!(f, "{}", proof_store.proof_to_string(*proof_id)),
+            CommandOutput::ProveExtract {
+                proof_store,
+                proof_ids,
+            } => {
+                for proof in proof_ids {
+                    writeln!(f, "{}", proof_store.proof_to_string(*proof))?;
+                }
+                Ok(())
+            }
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{run_report}")
             }
@@ -348,12 +372,18 @@ pub struct EGraph {
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+    /// Skip tree decomposition during query planning (the default).
+    /// Set to `false` to opt in; a rule's `:no-decomp` option still overrides it.
     pub no_decomp: bool,
     type_info: TypeInfo,
     /// Cumulative run and process reporting state.
     overall_report: OverallReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
+    /// Marginal constructor costs used by ordinary and certified extraction
+    /// commands. Primitive values retain unit cost; the generic extraction APIs
+    /// accept other cost models and algorithms independently.
+    pub extraction_cost: fn(&EGraph, &Function, &Enode<'_>) -> DefaultCost,
     extension_state: HashMap<TypeId, Box<dyn ExtensionStateValue>>,
     strict_mode: bool,
     warned_about_global_prefix: bool,
@@ -409,7 +439,7 @@ impl Function {
 
     /// Whether this is a let binding
     pub fn is_let_binding(&self) -> bool {
-        self.decl.internal_let
+        self.decl.role.is_global()
     }
 
     /// Whether this function is internally hidden (e.g., compiler-generated
@@ -421,7 +451,7 @@ impl Function {
     /// Whether this table is a view created by the term/proof encoding: the
     /// function's own rows, keyed on canonicalized children.
     pub fn is_view(&self) -> bool {
-        self.decl.internal_view.is_some()
+        self.decl.role.is_view()
     }
 
     /// The source-level row layout exposed by the Rust APIs. Encoded views use
@@ -483,11 +513,12 @@ impl EGraph {
             rulesets: Default::default(),
             fact_directory: None,
             seminaive: true,
-            no_decomp: false,
+            no_decomp: true,
             overall_report: Default::default(),
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
+            extraction_cost: |egraph, func, _| func.extraction_head_cost(egraph).unwrap_or(1),
             extension_state: Default::default(),
             strict_mode: false,
             warned_about_global_prefix: false,
@@ -565,7 +596,7 @@ impl EGraph {
         });
         // Whether `ordering-min`/`ordering-max` swap their arguments: 0 when `a`
         // is the max, 1 when `b` is. A top-level `union`'s fiat records this so
-        // proof conversion can orient the action's two operands the way the
+        // proof lifting can orient the action's two operands the way the
         // encoding did, without the row naming either of them.
         add_primitive!(&mut eg, "ordering-swapped" = |a: #, b: #| -> i64 {
             if a > b { 0 } else { 1 }
@@ -706,8 +737,8 @@ impl EGraph {
         self
     }
 
-    /// Enable testing of getting proofs for every `check` outside `fail`.
-    /// Checks inside `fail` remain negative assertions.
+    /// Prove every `check` and certify every `extract` outside `fail`.
+    /// Commands inside `fail` retain their ordinary behavior.
     pub fn with_proof_testing(mut self) -> Self {
         self.proof_state.proof_testing = true;
         self
@@ -1105,6 +1136,7 @@ impl EGraph {
             Some(func_type) => {
                 debug_assert!(
                     func_type.subtype == decl.subtype
+                        && func_type.role == decl.role
                         && func_type.input.len() == decl.schema.input.len()
                         && func_type
                             .input
@@ -1133,6 +1165,7 @@ impl EGraph {
                 let func_type = Arc::new(FuncType {
                     name: decl.name.clone(),
                     subtype: decl.subtype,
+                    role: decl.role,
                     input: decl
                         .schema
                         .input
@@ -1157,7 +1190,7 @@ impl EGraph {
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
             // View tables need subsumption support
-            FunctionSubtype::Custom => decl.internal_view.is_some(),
+            FunctionSubtype::Custom => decl.role.is_view(),
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
@@ -1177,7 +1210,7 @@ impl EGraph {
         };
         // Proof-node relations are write-once records identified by a freshly
         // minted final id; extraction only scans them.
-        let is_proof_node = decl.internal_term_node
+        let is_proof_node = decl.role.is_term_node()
             && input
                 .last()
                 .is_some_and(|sort| sort.name() == self.proof_state.proof_names.proof_datatype);
@@ -1191,11 +1224,6 @@ impl EGraph {
             assert!(
                 decl.merge.is_none(),
                 "proof-node relation `{}` cannot declare merge behavior",
-                decl.name
-            );
-            assert!(
-                decl.internal_view.is_none(),
-                "proof-node relation `{}` cannot be an FD view",
                 decl.name
             );
             assert!(
@@ -1256,6 +1284,32 @@ impl EGraph {
         Ok(())
     }
 
+    /// Find the storage for a global, including in a replayed desugared program.
+    fn global_table(&self, name: &str) -> Option<&Function> {
+        let binding = self.type_info.global_tables.bindings.get(name).or_else(|| {
+            self.proof_state
+                .original_typechecking
+                .as_ref()?
+                .type_info
+                .global_tables
+                .bindings
+                .get(name)
+        });
+        if let Some(table) = binding {
+            return self.functions.get(&table.name);
+        }
+        let key = self.backend.base_values().get::<S>(name.to_owned().into());
+        self.functions.values().find(|function| {
+            function.decl.role.is_global()
+                && function.func_type.input.len() == 1
+                && function.func_type.input[0].name() == StringSort.name()
+                && self
+                    .backend
+                    .lookup_id(function.backend_id, &[key])
+                    .is_some()
+        })
+    }
+
     /// Print up to `n` of a function's tuples, or all of them when `n` is
     /// `None`.
     pub fn print_function(
@@ -1281,6 +1335,7 @@ impl EGraph {
         let f = self
             .functions
             .get(sym)
+            .or_else(|| self.global_table(sym))
             // function_to_dag resolved the same name, so this cannot miss
             .unwrap();
         let terms_and_outputs: Vec<_> = terms.into_iter().zip(outputs.unwrap()).collect();
@@ -1298,8 +1353,8 @@ impl EGraph {
 
     /// Provide a program for use in proof checking.
     /// This enables testing of a desugared egglog proof program outside of proof mode.
-    /// When proof_testing is true, turns every `check` outside `fail` into a `prove` command.
-    /// Checks inside `fail` remain negative assertions.
+    /// When proof_testing is true, rewrites checks and extracts outside `fail` into proof commands.
+    /// Commands inside `fail` retain their ordinary behavior.
     /// Not intended for general use but needed in files.rs, so public but hidden.
     #[doc(hidden)]
     pub fn set_proof_checking_program(
@@ -1331,7 +1386,7 @@ impl EGraph {
                 .get(sym)
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
             // Skip hidden and let_binding functions
-            if f.decl.internal_hidden || f.decl.internal_let {
+            if f.decl.internal_hidden || f.decl.role.is_global() {
                 return Err(TypeError::UnboundFunction(sym.to_owned(), span!()).into());
             }
             let size = self.backend.table_size(f.backend_id);
@@ -1342,7 +1397,7 @@ impl EGraph {
             let mut lens = self
                 .functions
                 .iter()
-                .filter(|(_, f)| !f.decl.internal_hidden && !f.decl.internal_let)
+                .filter(|(_, f)| !f.decl.internal_hidden && !f.decl.role.is_global())
                 .map(|(sym, f)| (sym.clone(), self.backend.table_size(f.backend_id)))
                 .collect::<Vec<_>>();
 
@@ -1530,9 +1585,8 @@ impl EGraph {
         // Pure/Write to Read/Full, so primitives that read or write the
         // database can run inside this rule.
         let seminaive = self.seminaive && !rule.eval_mode.is_naive();
-        // The `:no-decomp` rule option (and the global `--no-decomp`
-        // flag) skips tree-decomposition in query planning, forcing
-        // the single-bag fast path.
+        // Tree decomposition is opt-in. A rule's `:no-decomp` option
+        // keeps the single-bag fast path even when enabled globally.
         let no_decomp = self.no_decomp || rule.no_decomp;
         let requires_read_context = !seminaive
             || matches!(
@@ -1840,7 +1894,9 @@ impl EGraph {
     /// Each tuple is `(name, span, sort)`, where `span` is used for diagnostics
     /// tied to that binding. `output_sort` constrains overload resolution and
     /// output-type inference for the expression. Global references are rewritten
-    /// into the same zero-argument function calls used during command execution.
+    /// into the same shared-table reads used during command execution.
+    /// This shares the command pipeline's source typechecking and global lowering;
+    /// it does not instrument the expression with terms or proofs.
     /// `context` should match the runtime context where the resolved expression
     /// will be evaluated.
     pub fn typecheck_expr_with_bindings_and_output(
@@ -1860,14 +1916,24 @@ impl EGraph {
                 return Err(TypeError::AlreadyDefined(name.clone(), span.clone()));
             }
         }
-        let resolved = self.type_info.typecheck_expr_with_output(
-            &mut self.parser.symbol_gen,
-            expr,
-            &binding_map,
-            output_sort,
-            context,
-        )?;
-        Ok(remove_globals::remove_globals_expr(resolved))
+        let resolved = self.typecheck_source(|source| {
+            source.type_info.typecheck_expr_with_output(
+                &mut source.parser.symbol_gen,
+                expr,
+                &binding_map,
+                output_sort,
+                context,
+            )
+        })?;
+        let commands = self.lower_source_globals(vec![ResolvedNCommand::CoreAction(
+            ResolvedAction::Expr(expr.span(), resolved),
+        )]);
+        let ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved)) =
+            commands.into_iter().next().unwrap()
+        else {
+            unreachable!("lowering an expression does not introduce global bindings")
+        };
+        Ok(resolved)
     }
 
     /// Replace literal `(unstable-fn "...")` targets with hidden evaluator bindings.
@@ -2087,7 +2153,7 @@ impl EGraph {
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
             eval_mode: RuleEvalMode::default(),
-            no_decomp: false,
+            no_decomp: self.no_decomp,
             include_subsumed: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
@@ -2121,7 +2187,7 @@ impl EGraph {
             &[],
             egglog_bridge::ColumnTy::Id,
         );
-        let id = translator.build(false);
+        let id = translator.build(rule.no_decomp);
         let run_result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
@@ -2288,6 +2354,9 @@ impl EGraph {
             ResolvedNCommand::LetBegin(..) => {
                 unreachable!("LetBegin is removed by remove_globals")
             }
+            ResolvedNCommand::ProveExtract(_, expr, variants) => {
+                return self.run_prove_extract(&expr, &variants);
+            }
             ResolvedNCommand::Extract(span, expr, variants) => {
                 let sort = expr.output_type();
 
@@ -2295,37 +2364,26 @@ impl EGraph {
                 let n = self.eval_resolved_expr(span, &variants)?;
                 let n: i64 = self.backend.base_values().unwrap(n);
 
-                return if n == 0 {
-                    let (termdag, term, cost) = self.extract_value(&sort, x)?;
-                    // dont turn termdag into a string if we have messages disabled for performance reasons
-                    if log_enabled!(Level::Info) {
-                        log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
+                if n < 0 {
+                    return Err(Error::ExtractError(
+                        "cannot extract a negative number of variants".to_string(),
+                    ));
+                }
+                let output = self.extract_command(sort, x, n as usize)?;
+                // Avoid rendering terms when messages are disabled.
+                if log_enabled!(Level::Info) {
+                    match &output {
+                        CommandOutput::ExtractBest(termdag, cost, term) => {
+                            log::info!("extracted with cost {cost}: {}", termdag.to_string(*term));
+                        }
+                        CommandOutput::ExtractVariants(_, terms) => {
+                            let expr_str = expr.to_string();
+                            log::info!("extracted {} variants for {expr_str}", terms.len());
+                        }
+                        _ => unreachable!(),
                     }
-                    Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
-                } else {
-                    if n < 0 {
-                        return Err(Error::ExtractError(
-                            "cannot extract a negative number of variants".to_string(),
-                        ));
-                    }
-                    let extracted = self.extract_variants(vec![(sort, x)], n as usize)?;
-                    let terms: Vec<TermId> = extracted
-                        .variants
-                        .into_iter()
-                        .next()
-                        .expect("extract_variants returns one result for one root")
-                        .into_iter()
-                        .map(|extracted| extracted.term)
-                        .collect();
-                    if log_enabled!(Level::Info) {
-                        let expr_str = expr.to_string();
-                        log::info!("extracted {} variants for {expr_str}", terms.len());
-                    }
-                    Ok(vec![CommandOutput::ExtractVariants(
-                        extracted.termdag,
-                        terms,
-                    )])
-                };
+                }
+                return Ok(vec![output]);
             }
             ResolvedNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
@@ -2751,19 +2809,43 @@ impl EGraph {
         self.proof_state.proofs_enabled
     }
 
+    /// Commands and expression APIs resolve names in the source environment,
+    /// before term encoding changes function signatures and global storage.
+    fn typecheck_source<T>(
+        &mut self,
+        typecheck: impl FnOnce(&mut EGraph) -> Result<T, TypeError>,
+    ) -> Result<T, TypeError> {
+        let timer = Instant::now();
+        let result = match self.proof_state.original_typechecking.as_mut() {
+            Some(source) => typecheck(source),
+            None => typecheck(self),
+        };
+        self.overall_report.typecheck += timer.elapsed();
+        result
+    }
+
+    fn lower_source_globals(&mut self, commands: Vec<ResolvedNCommand>) -> Vec<ResolvedNCommand> {
+        let source_types = self
+            .proof_state
+            .original_typechecking
+            .as_mut()
+            .map(|source| &mut source.type_info)
+            .unwrap_or(&mut self.type_info);
+        remove_globals::remove_globals(
+            commands,
+            &mut self.parser.symbol_gen,
+            &mut source_types.global_tables,
+        )
+    }
+
     fn resolve_command_before_proofs(
         &mut self,
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
+        let typechecked = self.typecheck_source(|source| source.typecheck_program(&desugared))?;
         let proofs_enabled = self.proof_state.proofs_enabled;
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
-            // Typecheck using the original egraph
-            // TODO this is ugly- we don't need an entire e-graph just for type information.
-            let typecheck_timer = Instant::now();
-            let typechecked = original_typechecking.typecheck_program(&desugared)?;
-            self.overall_report.typecheck += typecheck_timer.elapsed();
-
             for command in &typechecked {
                 if let Err(reason) = command_supports_proof_encoding(
                     &command.to_command(),
@@ -2780,15 +2862,10 @@ impl EGraph {
 
             Ok(proof_form(typechecked, &mut self.parser.symbol_gen))
         } else {
-            let typecheck_timer = Instant::now();
-            let mut typechecked = self.typecheck_program(&desugared)?;
-            self.overall_report.typecheck += typecheck_timer.elapsed();
-
-            typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
                 self.names.check_shadowing(command)?;
             }
-            Ok(typechecked)
+            Ok(self.lower_source_globals(typechecked))
         }
     }
 
@@ -2820,30 +2897,12 @@ impl EGraph {
             // The proof checker consumes the per-row top-level fiat actions.
             let per_row_before_proofs =
                 ProofInstrumentor::lower_inputs(self, resolved_before_proofs.clone())?;
-            // Execution keeps every `(input …)` as an `Input` command, loaded
-            // natively at run time by `EGraph::native_input` straight into the
-            // encoded tables. Globals get the same function-style desugaring
-            // (`remove_globals`) as the non-encoding path.
-            let typechecked_no_globals =
-                remove_globals::remove_globals(resolved_before_proofs, &mut self.parser.symbol_gen);
-            // The term encoder runs before the encoded program is typechecked, so it
-            // can't rely on the later typecheck to populate `global_sorts`. Register
-            // the new global functions' sorts eagerly so `is_global` recognizes them
-            // while encoding.
-            for command in &typechecked_no_globals {
-                if let GenericNCommand::Function(fdecl) = command
-                    && fdecl.internal_let
-                    && let Some(output_sort) = self.type_info.sorts.get(fdecl.schema.output())
-                {
-                    self.type_info
-                        .global_sorts
-                        .insert(fdecl.name.clone(), output_sort.clone());
-                }
-            }
-            for command in &typechecked_no_globals {
+            // Execution keeps `(input …)` for native loading. Globals use the
+            // same desugaring as native execution, on the source type information.
+            for command in &resolved_before_proofs {
                 self.names.check_shadowing(command)?;
             }
-
+            let typechecked_no_globals = self.lower_source_globals(resolved_before_proofs);
             let numbered_before = self.proof_state.global_actions_numbered;
             let term_encoding_added =
                 ProofInstrumentor::add_term_encoding(self, typechecked_no_globals)?;
@@ -2875,6 +2934,7 @@ impl EGraph {
                 let desugared_typechecked = remove_globals::remove_globals(
                     desugared_typechecked,
                     &mut self.parser.symbol_gen,
+                    &mut self.type_info.global_tables,
                 );
 
                 new_typechecked.extend(desugared_typechecked);
@@ -2980,7 +3040,7 @@ impl EGraph {
 
     /// Resolves an egglog program by parsing, typechecking, and desugaring each command.
     /// Outputs a new egglog program without any syntactic sugar, either user provided ([`CommandMacro`]) or built-in (e.g., `rewrite` commands).
-    /// Also removes globals from the program by replacing with new constructors.
+    /// Also lowers global bindings to rows in a shared table per sort.
     pub fn resolve_program(
         &mut self,
         filename: Option<String>,
@@ -3081,6 +3141,7 @@ impl EGraph {
         &self.overall_report.run
     }
 
+    #[cfg(feature = "bin")]
     pub(crate) fn timing_summary(&self) -> Result<TimingSummary, TimingSummaryError> {
         TimingSummary::from_report(&self.overall_report)
     }
@@ -3120,8 +3181,13 @@ impl EGraph {
     ///
     /// `panics` if the function does not exist.
     pub fn get_size(&self, func: &str) -> usize {
-        let function_id = self.functions.get(func).unwrap().backend_id;
-        self.backend.table_size(function_id)
+        if let Some(function) = self.functions.get(func) {
+            self.backend.table_size(function.backend_id)
+        } else {
+            let table = self.global_table(func).expect("unknown function or global");
+            let key = self.backend.base_values().get::<S>(func.to_owned().into());
+            usize::from(self.backend.lookup_id(table.backend_id, &[key]).is_some())
+        }
     }
 
     /// The total number of rows across all non-hidden functions, including
@@ -4010,6 +4076,37 @@ mod tests {
     use crate::PureState;
 
     #[test]
+    fn tree_decomposition_is_opt_in_with_a_per_rule_override() {
+        for no_decomp in [true, false] {
+            let mut egraph = EGraph::default();
+            assert!(egraph.no_decomp);
+            egraph.no_decomp = no_decomp;
+            egraph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                    (relation Edge (i64 i64))
+                    (relation Reach (i64 i64))
+                    (rule ((Edge a b) (Edge b c)) ((Reach a c)) :name "normal")
+                    (rule ((Edge a b) (Edge b c)) ((Reach a c))
+                          :name "single-bag" :no-decomp)
+                    (Edge 1 2)
+                    (Edge 2 3)
+                    (run 1)
+                    (check (Reach 1 3))
+                    (fail (check (Reach 3 1)))
+                    "#,
+                )
+                .unwrap();
+            let RulesetKind::Rules(rules) = &egraph.rulesets[""].kind else {
+                panic!("expected a plain ruleset");
+            };
+            assert_eq!(rules["normal"].no_decomp, no_decomp);
+            assert!(rules["single-bag"].no_decomp);
+        }
+    }
+
+    #[test]
     fn execution_drops_resolved_commands_but_keeps_proof_history() {
         let source = "(datatype T (A) (B)) (union (A) (B)) (check (= (A) (B)))";
         for proofs in [false, true] {
@@ -4077,6 +4174,7 @@ mod tests {
             iterations_before
         );
         assert!(egraph.overall_report.commands_check > check_time_before);
+        #[cfg(feature = "bin")]
         assert!(
             egraph
                 .timing_summary()
@@ -4376,32 +4474,37 @@ mod tests {
 
     #[test]
     fn test_typecheck_expr_with_bindings_and_output_uses_context() {
-        let mut egraph = EGraph::default();
-        egraph.add_full_primitive(FullOnly, None);
-        let mut parser = crate::ast::Parser::default();
-        let expr = parser.get_expr_from_string(None, "(full-only)").unwrap();
+        for mut egraph in [
+            EGraph::default(),
+            EGraph::new_with_term_encoding(),
+            EGraph::new_with_proofs(),
+        ] {
+            egraph.add_full_primitive(FullOnly, None);
+            let mut parser = crate::ast::Parser::default();
+            let expr = parser.get_expr_from_string(None, "(full-only)").unwrap();
 
-        let resolved = egraph
-            .typecheck_expr_with_bindings_and_output(
-                &expr,
-                &[],
-                I64Sort.to_arcsort(),
-                Context::Full,
-            )
-            .unwrap();
-        assert_eq!(resolved.output_type().name(), I64Sort.name());
+            let resolved = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Full,
+                )
+                .unwrap();
+            assert_eq!(resolved.output_type().name(), I64Sort.name());
 
-        let err = egraph
-            .typecheck_expr_with_bindings_and_output(
-                &expr,
-                &[],
-                I64Sort.to_arcsort(),
-                Context::Pure,
-            )
-            .unwrap_err();
-        match err {
-            TypeError::UnboundFunction(name, _) => assert_eq!(name, "full-only"),
-            other => panic!("expected unbound function, got {other:?}"),
+            let err = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Pure,
+                )
+                .unwrap_err();
+            match err {
+                TypeError::UnboundFunction(name, _) => assert_eq!(name, "full-only"),
+                other => panic!("expected unbound function, got {other:?}"),
+            }
         }
     }
 
@@ -4432,27 +4535,88 @@ mod tests {
 
     #[test]
     fn test_typecheck_expr_with_bindings_and_output_rewrites_globals() {
-        let mut egraph = EGraph::default();
-        egraph.parse_and_run_program(None, "(let $x 1)").unwrap();
-        let mut parser = crate::ast::Parser::default();
-        let expr = parser.get_expr_from_string(None, "$x").unwrap();
+        for mut egraph in [
+            EGraph::default(),
+            EGraph::new_with_term_encoding(),
+            EGraph::new_with_proofs(),
+        ] {
+            egraph
+                .parse_and_run_program(None, "(let $x 1) (let $y (+ $x 1))")
+                .unwrap();
+            let mut parser = crate::ast::Parser::default();
+            for (text, expected) in [("$x", 1), ("(+ $x $y)", 3)] {
+                let expr = parser.get_expr_from_string(None, text).unwrap();
+                let resolved = egraph
+                    .typecheck_expr_with_bindings_and_output(
+                        &expr,
+                        &[],
+                        I64Sort.to_arcsort(),
+                        Context::Read,
+                    )
+                    .unwrap();
 
-        let resolved = egraph
-            .typecheck_expr_with_bindings_and_output(
-                &expr,
-                &[],
-                I64Sort.to_arcsort(),
-                Context::Read,
-            )
-            .unwrap();
-
-        match resolved {
-            ResolvedExpr::Call(_, ResolvedCall::Func(func), children) => {
-                assert_eq!(func.name, "$x");
-                assert!(children.is_empty());
-                assert_eq!(func.output().name(), I64Sort.name());
+                let value = egraph.eval_resolved_expr(span!(), &resolved).unwrap();
+                assert_eq!(egraph.value_to_base::<i64>(value), expected);
             }
-            other => panic!("expected global function call rewrite, got {other:?}"),
+
+            let expr = parser.get_expr_from_string(None, "(+ $x local)").unwrap();
+            let resolved = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[("local".into(), span!(), I64Sort.to_arcsort())],
+                    I64Sort.to_arcsort(),
+                    Context::Read,
+                )
+                .unwrap();
+            assert_eq!(resolved.output_type().name(), I64Sort.name());
+        }
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_restores_global_scope() {
+        for mut egraph in [
+            EGraph::default(),
+            EGraph::new_with_term_encoding(),
+            EGraph::new_with_proofs(),
+        ] {
+            let mut parser = crate::ast::Parser::default();
+            let expr = parser.get_expr_from_string(None, "$scoped").unwrap();
+            egraph
+                .parse_and_run_program(None, "(push) (let $scoped 1)")
+                .unwrap();
+            egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Read,
+                )
+                .unwrap();
+
+            egraph.parse_and_run_program(None, "(pop)").unwrap();
+            assert!(matches!(
+                egraph.typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Read,
+                ),
+                Err(TypeError::Unbound(name, _)) if name == "$scoped"
+            ));
+
+            egraph
+                .parse_and_run_program(None, "(let $scoped true)")
+                .unwrap();
+            let resolved = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    BoolSort.to_arcsort(),
+                    Context::Read,
+                )
+                .unwrap();
+            let value = egraph.eval_resolved_expr(span!(), &resolved).unwrap();
+            assert!(egraph.value_to_base::<bool>(value));
         }
     }
 

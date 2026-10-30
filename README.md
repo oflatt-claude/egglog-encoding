@@ -22,7 +22,7 @@ Hygiene checks and tests can be run independently. `nits` never runs tests:
 
 ```bash
 make nits           # lockfile, formatting checks, linting, and type checking
-make test           # Python and Rust tests
+make test           # Python, Rust, and slotted reference/differential tests
 make python-check   # complete Python validation
 make rust-check     # complete Rust validation
 make python-nits    # Python hygiene only
@@ -38,8 +38,43 @@ make format         # apply Ruff and rustfmt formatting
 `make benchmark-smoke` uses a one-round comparison on small Math and disequality
 fixtures, not the full benchmark suite, and writes its disposable
 JSONL report to `/tmp/egglog-encoding-bench-smoke.jsonl`. Override
-`BENCHMARK_SMOKE_REPORT` to choose another path. `make update-snapshots` is the
-explicit review action for accepting intentional Markdown report changes.
+`BENCHMARK_SMOKE_REPORT` to choose another path. `make update-snapshots` accepts
+intentional changes to Markdown reports and slotted compiler snapshots; review
+the resulting diff before committing it.
+
+Slotted case studies have standalone runners:
+
+```bash
+python3 slotted/eval.py array   # fresh timings; no cache or graph checks
+python3 slotted/check.py array  # all treatments, counts, and exact isomorphism
+```
+
+Both use the same workload selectors and [treatment definitions](slotted/treatments.py).
+`array` runs Figure 8's fixed sweep of 0–10 extra function parameters;
+`sdql` runs Table 1's ten kernel/phase combinations. Omit the study to run all
+case studies. See
+[the reference comparison documentation](egglog-experimental/src/slotted/ENCODING.md#against-the-reference)
+for substitution policies and comparison requirements.
+
+Case-study programs live in `egglog-experimental/benches/slotted/`; regression
+fixtures, shared languages, and compiler snapshots live in
+`egglog-experimental/tests/slotted/`. Artifact inputs and generators live in
+[`slotted/benchmarks/`](slotted/benchmarks/). `make test` (also part of `make check`)
+runs the Rust regressions, reference comparisons, and differential fuzz tests,
+including the benchmarks' shared generators. The
+[source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also
+included in the Rust documentation for `egglog_experimental::slotted`.
+
+The reusable Rust checker accepts `egraph-serialize` JSON from either engine,
+with optional annotations for slotted graphs:
+
+```bash
+cargo run -p egraph-isomorphism -- left.json right.json
+```
+
+It prints a JSON verdict and a verified isomorphism witness.
+See the crate's [API documentation](egraph-isomorphism/src/lib.rs) for the format
+and comparison policy. `slotted/check.py` builds and invokes this checker.
 
 The root workspace includes both `egglog` and `egglog-experimental`.
 `egglog-experimental` depends on the workspace `egglog` crate, keeping proof
@@ -48,9 +83,10 @@ changes and downstream behavior in one reviewable unit.
 Proof-specific file tests use the `proofs/` filter: explicit `(prove ...)`
 fixtures under `tests/proofs` plus every proof-compatible file under
 proof-testing mode. Proof testing turns checks outside `fail` into proof queries
-and snapshots the generated proofs; checks inside `fail` remain negative
-assertions. Use `make proof-tests` for focused iteration and
-`make rust-check` or `make check` for the final compatibility gate.
+and extracts into `prove-extract` commands, verifies each proof, and snapshots
+the certificates. Commands inside `fail` retain their ordinary behavior. Use
+`make proof-tests` for focused iteration and `make rust-check` or `make check`
+for complete validation.
 
 ## Benchmarking
 
@@ -64,15 +100,15 @@ Every benchmark invocation compares exactly two endpoints over the same ordered
 files: a candidate and a baseline. An endpoint is one target and treatment.
 There are no implicit matrices or multi-way comparisons.
 
-The default command compares proof mode with ordinary mode in the current
-checkout:
+The default command compares proof recording, extraction and checking with
+ordinary mode in the current checkout:
 
 ```bash
 ./bench.py
 
 # Equivalent endpoint selection:
 ./bench.py \
-  --target . --treatment proofs \
+  --target . --treatment proof-testing \
   --compare-target . --compare-treatment off
 ```
 
@@ -80,7 +116,7 @@ The endpoint defaults are:
 
 | Endpoint | Target | Treatment |
 | --- | --- | --- |
-| Candidate | `.` | `proofs` |
+| Candidate | `.` | `proof-testing` |
 | Baseline | candidate target | `off` |
 
 `--compare-target` defaults to the candidate target. Every rendered report
@@ -94,8 +130,8 @@ Treatments map directly to engine modes:
 | `off` | egglog without term or proof encoding |
 | `term` | egglog with `--term-encoding` |
 | `proofs` | egglog with `--proofs` |
-| `proof-extraction` | egglog with `--proof-extraction`; rewrite checks, then extract, materialize, clean, and simplify proofs without verifying them |
-| `proof-testing` | egglog with `--proof-testing`; extract and verify proofs for checks |
+| `proof-extraction` | egglog with `--proof-extraction`; rewrite checks and extracts, then extract, materialize, clean, and simplify proofs without verifying them |
+| `proof-testing` | egglog with `--proof-testing`; extract and verify proofs for checks and extraction results |
 | `egg` | current egg without explanation recording |
 | `egg-proofs` | current egg with explanation recording enabled |
 | `egg-proof-extraction` | current egg with explanation recording and extraction |
@@ -110,10 +146,16 @@ the corresponding proof-testing treatment provides the strict validity check.
 
 ### Common comparisons
 
-Proof overhead in the current checkout is the default:
+Checked proof overhead in the current checkout is the default:
 
 ```bash
 ./bench.py
+```
+
+Measure proof recording alone:
+
+```bash
+./bench.py --treatment proofs
 ```
 
 Measure non-validating proof-extraction overhead explicitly:
@@ -122,10 +164,10 @@ Measure non-validating proof-extraction overhead explicitly:
 ./bench.py --treatment proof-extraction
 ```
 
-Compare the current proof implementation with proof mode on `origin/main`:
+Compare checked proofs with checked proofs on `origin/main`:
 
 ```bash
-./bench.py --compare-target @origin/main --compare-treatment proofs
+./bench.py --compare-target @origin/main --compare-treatment proof-testing
 ```
 
 Compare term encoding with ordinary mode:
@@ -288,6 +330,12 @@ preserves its Rational constants but uses current egg and egglog's ordinary
 simple/seminaive schedulers without the artifact's backoff scheduler or match
 cap, so this is a controlled current-engine comparison rather than an exact
 reproduction of the paper's historical scheduler results.
+
+The native Math runner uses a pinned revision of upstream Egg main with
+`std::time::Instant`, avoiding Quanta's startup calibration in whole-process
+timings. Its Git revision and dependency versions are recorded in `Cargo.lock`.
+Proof modes disable Egg's explanation-length optimization: extraction and
+checking do not include a separate proof-minimization pass.
 
 The pointer input is the complete `initdb.bc` input for the 23 relations read by
 this adaptation, not the artifact's full 30-program pointer-analysis matrix.
@@ -507,6 +555,11 @@ then by physical JSONL order. Without `--force-run`, it appends only missing
 rows. With `--force-run`, it appends a full fresh set and then selects the
 newest rows.
 
+A failed or timed-out attempt ends the remaining repetitions of that exact
+workload and endpoint; independent conditions continue. A compatible selected
+cached failure also prevents automatic retries. Use `--force-run` to explicitly
+retry failed conditions; earlier observations remain in the append-only cache.
+
 Before any measured row is appended, all targets needing collection are built.
 Fresh collection is serial; one untimed `<binary> --help` capability preflight
 per engine verifies the timing-summary interface when supported. Unmodified
@@ -700,7 +753,10 @@ CI runs on pull requests, manual dispatches, and pushes to `main`:
 
 - `python`: `make python-nits`, then `make python-test`.
 - `rust`: `make rust-nits`, then `make rust-test`.
-- `benchmark-smoke`: a one-round `off`/`proofs` runner check on small Math and
+- `slotted`: `make slotted-test` builds the reference runners and runs their
+  unit and differential tests, including both fixed fuzz seeds. This runs in
+  parallel with the workspace Rust tests; `make test` still runs all three suites.
+- `benchmark-smoke`: a one-round `off`/`proof-testing` runner check on small Math and
   disequality fixtures through `make benchmark-smoke`. The full parameter-analysis
   benchmark is not included in this CI job.
 - `codspeed`: an in-process, proofs-only benchmark over a smaller workload set

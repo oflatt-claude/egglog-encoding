@@ -1,13 +1,13 @@
 # Validation recipes live in scripts/check.py; these names remain public aliases.
 CHECK_TARGETS := \
-	check nits test python-check python-nits rust-check rust-nits proof-tests \
+	check nits test python-check python-nits rust-check rust-nits proof-tests slotted-test \
 	lean-check lean-difftest lean-compiled-difftest lean-congruence-test lean-provenance-test \
 	lean-resugar-test \
 	lean-certificate-test lean-update-fixtures lean-egg-test lean-update-egg-snapshots \
 	paper paper-check paper-extract paper-sync update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
-.PHONY: $(CHECK_TARGETS) benchmark-smoke nightly nightly-local nightly-uv nightly-rustup
+.PHONY: $(CHECK_TARGETS) slotted-eval benchmark-smoke nightly nightly-local nightly-uv nightly-rustup
 .DEFAULT_GOAL := check
 
 # Make command-line overrides reach the script without shell interpolation.
@@ -29,6 +29,12 @@ NIGHTLY_UV = $(shell command -v uv || echo $(UV_BOOTSTRAP_DIR)/uv)
 # Ubuntu's cargo predates rust-toolchain.toml's pin, so the nightly needs
 # rustup's shims; scripts/nightly_bench.py puts them first on PATH.
 CARGO_HOME_DIR ?= $(HOME)/.cargo
+
+# The paper's case studies -- the S4.1 array goal and the S4.2 SDQL workloads -- on the
+# encoding and on the reference through both of its matchers, at the artifact's budgets.
+# Release builds of both binaries, since these are the numbers a graph is drawn from.
+slotted-eval:
+	uv run --locked python slotted/eval.py
 
 # Use a disposable report path, keeping the default report cache untouched.
 benchmark-smoke:

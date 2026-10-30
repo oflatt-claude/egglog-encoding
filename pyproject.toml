@@ -22,11 +22,15 @@ files = ["."]
 exclude = [
     "^\\.bench-worktrees/",
     "^\\.venv/",
+    "^benchmarks/local/",
     "^build/",
     "^dist/",
     "^egglog/",
     "^egglog-experimental/",
     "^generated/",
+    # Unannotated by design, like egglog/ above: these are differential-testing and
+    # code-generation scripts. ruff does cover them, so they are linted and formatted.
+    "^slotted/",
     "^target/",
 ]
 check_untyped_defs = true
@@ -42,7 +46,7 @@ module = ["scipy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "benchmarks/reproduction/tests"]
 pythonpath = ["."]
 
 [tool.ruff]
@@ -51,6 +55,7 @@ line-length = 120
 extend-exclude = [
     ".bench-worktrees",
     ".venv",
+    "benchmarks/local",
     "build",
     "dist",
     "egglog",

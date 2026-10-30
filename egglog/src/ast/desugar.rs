@@ -9,6 +9,35 @@ pub(crate) fn desugar_command(
     parser: &mut Parser,
     proof_testing: bool,
 ) -> Result<Vec<NCommand>, Error> {
+    // The experimental extension must consume this annotation before core lowering.
+    let injective_span = match &command {
+        Command::Constructor {
+            span,
+            injective: true,
+            ..
+        } => Some(span),
+        Command::Datatype { variants, .. } => {
+            variants.iter().find(|v| v.injective).map(|v| &v.span)
+        }
+        Command::Datatypes { datatypes, .. } => {
+            datatypes
+                .iter()
+                .find_map(|(_, _, datatype)| match datatype {
+                    Subdatatypes::Variants(variants) => {
+                        variants.iter().find(|v| v.injective).map(|v| &v.span)
+                    }
+                    Subdatatypes::NewSort(..) => None,
+                })
+        }
+        _ => None,
+    };
+    if let Some(span) = injective_span {
+        return Err(ParseError(
+            span.clone(),
+            ":injective requires egglog-experimental".into(),
+        )
+        .into());
+    }
     let res = match command {
         Command::Function {
             span,
@@ -16,22 +45,18 @@ pub(crate) fn desugar_command(
             schema,
             merge,
             hidden,
-            let_binding,
-            internal_view,
+            role,
             unextractable,
             identity_vals,
             cost,
-            term_node,
         } => {
             let mut fdecl = FunctionDecl::function(span, name, schema, merge);
             fdecl.internal_hidden = hidden;
-            fdecl.internal_let = let_binding;
-            fdecl.internal_view = internal_view;
+            fdecl.role = role;
             fdecl.identity_vals = identity_vals;
             fdecl.cost = cost;
-            fdecl.internal_term_node = term_node;
             // A view table is extractable unless explicitly marked unextractable
-            if fdecl.internal_view.is_some() {
+            if fdecl.role.is_view() {
                 fdecl.unextractable = unextractable;
             } else if unextractable {
                 fdecl.unextractable = true;
@@ -46,12 +71,13 @@ pub(crate) fn desugar_command(
             schema,
             cost,
             unextractable,
+            injective: _,
             hidden,
-            let_binding,
+            role,
         } => {
             let mut fdecl =
                 FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
-            fdecl.internal_let = let_binding;
+            fdecl.role = role;
             std::iter::once(NCommand::Function(fdecl)).collect()
         }
         Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),
@@ -113,7 +139,7 @@ pub(crate) fn desugar_command(
                             outputs: vec![datatype.clone()],
                         },
                         variant.cost,
-                        false,
+                        variant.unextractable,
                         false,
                     )));
                 }
@@ -177,7 +203,16 @@ pub(crate) fn desugar_command(
         Command::PrintOverallStatistics(span, file) => {
             vec![NCommand::PrintOverallStatistics(span, file.clone())]
         }
-        Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
+        Command::Extract(span, expr, variants) => {
+            if proof_testing {
+                vec![NCommand::ProveExtract(span, expr, variants)]
+            } else {
+                vec![NCommand::Extract(span, expr, variants)]
+            }
+        }
+        Command::ProveExtract(span, expr, variants) => {
+            vec![NCommand::ProveExtract(span, expr, variants)]
+        }
         Command::Check(span, facts) => {
             if proof_testing {
                 desugar_prove(parser, span.clone(), facts.clone())

@@ -82,7 +82,13 @@ class Checks:
         self._group("python-nits", "rust-nits")
 
     def test(self) -> None:
-        self._group("python-test", "rust-test")
+        self._group("python-test", "rust-test", "slotted-test")
+
+    def slotted_test(self) -> None:
+        self._run("cargo", "build", "-p", "egglog-experimental", "-p", "egraph-isomorphism", "--bins")
+        self._run("cargo", "build", "--manifest-path", "slotted/xmulti/Cargo.toml")
+        self._run("cargo", "test", "--manifest-path", "slotted/xmulti/Cargo.toml", "--", *self._rust_args)
+        self._python("python", "slotted/checks/check-slotted.py")
 
     def python_check(self) -> None:
         self._group("python-nits", "python-test")
@@ -229,6 +235,9 @@ class Checks:
 
     def update_snapshots(self) -> None:
         self._python("pytest", "-q", "--snapshot-update", "--snapshot-details")
+        self._run(
+            "cargo", "test", "-p", "egglog-experimental", "--test", "slotted_files", env={"INSTA_UPDATE": "always"}
+        )
 
     def format(self) -> None:
         self._python("ruff", "format", ".")

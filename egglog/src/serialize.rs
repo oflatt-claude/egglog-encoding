@@ -156,7 +156,13 @@ impl EGraph {
                 let inps = &row.vals[..n_keys];
                 let out = &row.vals[n_keys];
                 let class_id = self.value_to_class_id(function.func_type.output(), *out);
-                if function.decl.internal_let {
+                if function.decl.role.is_global() {
+                    let name =
+                        if n_keys == 1 && function.func_type.input[0].name() == StringSort.name() {
+                            self.value_to_base::<S>(inps[0]).0
+                        } else {
+                            name.clone()
+                        };
                     let_bindings
                         .entry(class_id.clone())
                         .or_insert_with(Vec::new)

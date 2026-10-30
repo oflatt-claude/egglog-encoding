@@ -2,6 +2,15 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Add `(prove-extract e [variants])` and `EGraph::prove_extracted_terms` to prove
+  equality between an existing input and extraction results without inserting
+  either endpoint. Proof-testing mode also checks ordinary extracts. Each printed
+  proof is enclosed in a parenthesized block.
+- Add ground-term typing through `TypeInfo::typecheck_term_dag`, with contextual
+  overload resolution and independent typings of shared polymorphic syntax.
+- Generated function declarations use `:internal-role` for globals, views, and
+  term nodes, replacing `:internal-let`, `:internal-view`, and `:internal-term-node`.
+
 - A `:merge` action block no longer runs on a collision that leaves every value column unchanged: re-setting a row to the value it already holds is not a conflict, so the block's `set`/`union` actions write nothing. Plain value merges are unaffected and still run (a merge may be deliberately non-idempotent). Relatedly, the "old and new already agree, so keep the old value" shortcut now applies only to a value column's own result expression, not to a function call nested inside a merge expression — nested, it returned the enclosing column's value, which has an unrelated sort, and an action block could write a row keyed on the resulting dangling e-class.
 - Free-join plans with 65 to 128 stages now use constant-time tail metadata (128-bit stage masks) instead of rescanning the remaining stages; smaller plans keep their 64-bit masks. `paged_llama` runs about 17% faster.
 - **Breaking reporting formats.** `--save-report` now stores each iteration with its ruleset name and timing responsibility, and no longer serializes the redundant `ruleset_timings` or `search_and_apply_time_per_rule` aggregates. `--timing-summary` now emits the typed version-4 timing partition used by the benchmark runner; the runner's JSONL schema is also version 4, so older disposable benchmark caches must be recomputed.
