@@ -7,17 +7,19 @@ use egglog::proof::{Justification, Proof, Proposition, proof_term_to_string};
 use egglog::{Term, TermDag, TermId};
 use egglog_numeric_id::NumericId;
 use std::collections::{BTreeMap, BTreeSet};
+use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Whether a claim fixes free slots or permits a renaming between its sides.
 pub enum ClaimKind {
-    /// `(= a b)`: the same invocation.
+    /// `(= a b)`: equality at the requested slot names.
     Eq,
-    /// `(renaming-= a b)`: the same class under some renaming.
+    /// `(renaming-= a b)`: equality under some slot permutation.
     RenamingEq,
 }
 
-/// A `prove-slotted`'s claim over source terms.
+/// A source query to verify. Its sort and equality kind are query context,
+/// not data carried by the proof steps.
 #[derive(Clone, Debug)]
 pub struct Claim {
     /// The requested notion of equality.
@@ -93,8 +95,39 @@ pub struct SlottedProofStore {
 }
 
 /// Why a derived step could not be formed from its inputs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MalformedStep(pub String);
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum MalformedStep {
+    /// Transitivity requires identical middle terms.
+    #[error("trans: middle terms differ: {left} vs {right}")]
+    MiddleTermMismatch {
+        /// The left proof's right endpoint.
+        left: String,
+        /// The right proof's left endpoint.
+        right: String,
+    },
+    /// Congruence and projection require an application.
+    #[error("expected an application, found {term}")]
+    ExpectedApplication {
+        /// The supplied parent term.
+        term: String,
+    },
+    /// The requested child is outside the application's arguments.
+    #[error("child index {index} is out of bounds for an application with {arity} children")]
+    ChildIndexOutOfBounds {
+        /// The requested child index.
+        index: usize,
+        /// The number of children in the parent.
+        arity: usize,
+    },
+    /// Congruence requires a proof starting at the selected child.
+    #[error("congr: child {child} is not the child proof's left side {premise_lhs}")]
+    ChildMismatch {
+        /// The selected child of the parent.
+        child: String,
+        /// The child proof's left endpoint.
+        premise_lhs: String,
+    },
+}
 
 impl SlottedProofStore {
     /// Start a proof store over an existing term dag.
@@ -181,11 +214,10 @@ impl SlottedProofStore {
             self.proposition(right).clone(),
         );
         if l.rhs != r.lhs {
-            return Err(MalformedStep(format!(
-                "trans: middle terms differ: {} vs {}",
-                self.term_dag.to_string(l.rhs),
-                self.term_dag.to_string(r.lhs)
-            )));
+            return Err(MalformedStep::MiddleTermMismatch {
+                left: self.term_dag.to_string(l.rhs),
+                right: self.term_dag.to_string(r.lhs),
+            });
         }
         Ok(self.ordinary(
             Proposition::new(l.lhs, r.rhs),
@@ -203,19 +235,21 @@ impl SlottedProofStore {
         let p = self.proposition(proof).clone();
         let c = self.proposition(child_proof).clone();
         let Term::App(head, children) = self.term_dag.get(p.rhs).clone() else {
-            return Err(MalformedStep(
-                "congr: right-hand side is not an application".into(),
-            ));
+            return Err(MalformedStep::ExpectedApplication {
+                term: self.term_dag.to_string(p.rhs),
+            });
         };
         let Some(&child) = children.get(child_index) else {
-            return Err(MalformedStep(format!("congr: no child {child_index}")));
+            return Err(MalformedStep::ChildIndexOutOfBounds {
+                index: child_index,
+                arity: children.len(),
+            });
         };
         if child != c.lhs {
-            return Err(MalformedStep(format!(
-                "congr: child {} is not the child proof's left side {}",
-                self.term_dag.to_string(child),
-                self.term_dag.to_string(c.lhs)
-            )));
+            return Err(MalformedStep::ChildMismatch {
+                child: self.term_dag.to_string(child),
+                premise_lhs: self.term_dag.to_string(c.lhs),
+            });
         }
         let mut children = children;
         children[child_index] = c.rhs;
@@ -251,12 +285,18 @@ impl SlottedProofStore {
         proof: ProofId,
         child_index: usize,
     ) -> Result<ProofId, MalformedStep> {
-        let Term::App(_, children) = self.term_dag.get(self.proposition(proof).rhs) else {
-            return Err(MalformedStep("projection needs an application".into()));
+        let rhs = self.proposition(proof).rhs;
+        let Term::App(_, children) = self.term_dag.get(rhs) else {
+            return Err(MalformedStep::ExpectedApplication {
+                term: self.term_dag.to_string(rhs),
+            });
         };
         let child = *children
             .get(child_index)
-            .ok_or_else(|| MalformedStep("projection index out of bounds".into()))?;
+            .ok_or(MalformedStep::ChildIndexOutOfBounds {
+                index: child_index,
+                arity: children.len(),
+            })?;
         Ok(self.ordinary(
             Proposition::new(child, child),
             Justification::Proj { proof, child_index },

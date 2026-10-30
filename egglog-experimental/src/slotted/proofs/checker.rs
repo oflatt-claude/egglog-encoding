@@ -94,7 +94,8 @@ pub enum SlottedCheckError {
 
 /// A verified equality and its carrier sort. Sort-independent equalities, such
 /// as slot reflexivity, may be used in any carrier; other equalities retain
-/// the sort of their source axiom or rewrite.
+/// the sort of their source axiom or rewrite. The checker derives the sort;
+/// the proof does not supply it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checked {
     /// The equality established by the derivation.

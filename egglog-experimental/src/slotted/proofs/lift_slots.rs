@@ -451,7 +451,7 @@ impl<'a> SlotLifter<'a> {
         }
         if let Some(&p) = self.known.get(&t) {
             let s = self.out.sym(p);
-            return self.out.trans(p, s).map_err(|e| e.0);
+            return self.out.trans(p, s).map_err(|e| e.to_string());
         }
         // a term the same as a built or known one up to a renaming of its slots:
         // its reflexivity follows by equivariance of the known equality
@@ -472,7 +472,7 @@ impl<'a> SlotLifter<'a> {
             let r = self.reflexive(other)?; // other = other
             let reframed = self.out.reframe(r, sigma); // other = σ⁻¹·t
             let s = self.out.sym(reframed); // t = σ·other
-            let back = self.out.trans(s, reframed).map_err(|e| e.0)?; // t = t
+            let back = self.out.trans(s, reframed).map_err(|e| e.to_string())?; // t = t
             return Ok(self.note(back));
         }
         Err(format!(
@@ -518,7 +518,7 @@ impl<'a> SlotLifter<'a> {
     }
 
     fn trans(&mut self, p: ViewId, q: ViewId) -> R<ViewId> {
-        let r = self.out.trans(p, q).map_err(|e| e.0)?;
+        let r = self.out.trans(p, q).map_err(|e| e.to_string())?;
         Ok(self.note(r))
     }
 
@@ -804,7 +804,7 @@ impl<'a> SlotLifter<'a> {
             ) {
                 renamed = self.rename_both(renamed, &renaming);
             }
-            let r = self.out.congr(p, j, renamed).map_err(|e| e.0)?;
+            let r = self.out.congr(p, j, renamed).map_err(|e| e.to_string())?;
             let aligned = self.align(r, target)?;
             // A congruence whose base is reflexive may be read in either
             // direction later; both endpoints are now known.
@@ -966,7 +966,10 @@ impl<'a> SlotLifter<'a> {
                     format!("no decoded edge for column {j} of {}", self.out_string(row))
                 })?;
                 let renamed = self.rename_both(edge, &completion);
-                let r = self.out.congr(node, j, renamed).map_err(|e| e.0)?;
+                let r = self
+                    .out
+                    .congr(node, j, renamed)
+                    .map_err(|e| e.to_string())?;
                 let r = self.note(r);
                 let node_egg = self.sub(subst, "_node")?;
                 self.finish_union(r, lhs, rhs, node_egg)
@@ -1134,7 +1137,7 @@ impl<'a> SlotLifter<'a> {
             let s = self.symmetry(classes[k], &g, gproof)?;
             let completion = self.edge_memo[&(row, j)].clone();
             let renamed = self.rename_both(s, &completion);
-            p = self.out.congr(p, j, renamed).map_err(|e| e.0)?;
+            p = self.out.congr(p, j, renamed).map_err(|e| e.to_string())?;
             p = self.note(p);
         }
         // the shape node: canonical edges over the same children
@@ -1658,7 +1661,7 @@ impl<'a> SlotLifter<'a> {
                 let s = self.symmetry(classes[k - 1], gi, gp)?;
                 let completion = self.edge_memo[&(row, j)].clone();
                 let renamed = self.rename_both(s, &completion);
-                p = self.out.congr(p, j, renamed).map_err(|e| e.0)?;
+                p = self.out.congr(p, j, renamed).map_err(|e| e.to_string())?;
                 p = self.note(p);
             }
             // the right-hand side is now σ·dec(row) up to fresh names: align its coordinates
@@ -2588,7 +2591,7 @@ impl<'a> SlotLifter<'a> {
                         if let Some(e) = bridged {
                             let completion = self.edge_memo[&(row, j)].clone();
                             let renamed = self.rename_both(e, &completion);
-                            p = self.out.congr(p, j, renamed).map_err(|e| e.0)?;
+                            p = self.out.congr(p, j, renamed).map_err(|e| e.to_string())?;
                             p = self.note(p);
                         }
                         variables.entry(v).or_insert(current);
@@ -2614,7 +2617,7 @@ impl<'a> SlotLifter<'a> {
                         occurrences.extend(nested);
                         let completion = self.edge_memo[&(row, j)].clone();
                         let renamed = self.rename_both(sub, &completion);
-                        p = self.out.congr(p, j, renamed).map_err(|e| e.0)?;
+                        p = self.out.congr(p, j, renamed).map_err(|e| e.to_string())?;
                         p = self.note(p);
                     }
                 }
@@ -3038,7 +3041,8 @@ impl<'a> SlotLifter<'a> {
                                 let lifted = self.out.reframe(lifted, completion.clone()); // occ = (s f)·occ
                                 let lifted = self.note(lifted);
                                 let refl = self.reflexive(prop.rhs)?;
-                                let r = self.out.congr(refl, j, lifted).map_err(|e| e.0)?; // row = ·row[s->f]
+                                let r =
+                                    self.out.congr(refl, j, lifted).map_err(|e| e.to_string())?; // row = ·row[s->f]
                                 let r = self.note(r);
                                 let r = self.out.reframe(
                                     r,
@@ -3395,10 +3399,13 @@ impl<'a> SlotLifter<'a> {
         let child = if rest.is_empty() {
             cert
         } else {
-            let refl = self.out.project(p, *first).map_err(|e| e.0)?;
+            let refl = self.out.project(p, *first).map_err(|e| e.to_string())?;
             self.congr_at(refl, rest, cert)?
         };
-        let r = self.out.congr(p, *first, child).map_err(|e| e.0)?;
+        let r = self
+            .out
+            .congr(p, *first, child)
+            .map_err(|e| e.to_string())?;
         Ok(self.note(r))
     }
 

@@ -149,9 +149,10 @@ impl Coordinates {
     pub fn trans(&mut self, left: ViewId, right: ViewId) -> Result<ViewId, MalformedStep> {
         let (l, r) = (self.edge(left).clone(), self.edge(right).clone());
         if l.rhs != r.lhs {
-            return Err(MalformedStep(
-                "trans: applied-class middle terms differ".into(),
-            ));
+            return Err(MalformedStep::MiddleTermMismatch {
+                left: self.term_dag.to_string(l.rhs),
+                right: self.term_dag.to_string(r.lhs),
+            });
         }
         let right_proof = self
             .store
