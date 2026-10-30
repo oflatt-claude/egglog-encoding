@@ -1,12 +1,14 @@
-//! Equality proofs and renaming-equality evidence over slotted surface terms.
+//! Equality proofs over slotted surface terms.
 
 use super::HashMap;
 use super::terms::{Renaming, all_slots, rename, slot_of};
 pub use egglog::proof::ProofId;
 use egglog::proof::{Justification, Proof, Proposition, proof_term_to_string};
+use egglog::util::IndexMap;
 use egglog::{Term, TermDag, TermId};
 use egglog_numeric_id::NumericId;
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,12 +44,14 @@ pub struct SlottedConclusion {
     pub renaming: Renaming,
 }
 
-/// An ordinary egglog proof step, a slotted equality extension, or renaming equality.
+/// An equality proof, with typed source-rule premises and slotted equality steps.
 /// Every premise ID refers to the same [`SlottedProofStore`].
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum SlottedProof {
     /// A step in egglog's ordinary proof format.
     Ordinary(Proof),
+    /// Apply a source rewrite with ordinary or renaming-equality premises.
+    Rule(RuleProof),
     /// Replace the right endpoint of a checked equality by an alpha-equivalent term.
     Alpha {
         /// The equality stated by this step.
@@ -64,7 +68,14 @@ pub enum SlottedProof {
         /// The permutation applied to both endpoints.
         renaming: Renaming,
     },
-    /// Evidence for `(renaming-= a b)`, checked in the enclosing source rule.
+}
+
+/// Evidence for one fact in a source rule's normalized body.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum RulePremise {
+    /// An ordinary equality or primitive-result proof.
+    Equality(ProofId),
+    /// Evidence for `(renaming-= a b)`.
     /// The operand proofs establish `a = ar` and `b = br`; the validator checks
     /// that the representatives agree up to alpha-equivalence and slot renaming.
     RenamingEq {
@@ -75,15 +86,50 @@ pub enum SlottedProof {
     },
 }
 
+impl RulePremise {
+    /// Equality proofs this premise depends on, in operand order.
+    pub fn proofs(&self) -> impl Iterator<Item = ProofId> {
+        match *self {
+            Self::Equality(proof) => [Some(proof), None],
+            Self::RenamingEq { left, right } => [Some(left), Some(right)],
+        }
+        .into_iter()
+        .flatten()
+    }
+}
+
+/// A source-rule application whose premises are expanded for ordinary checking.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RuleProof {
+    /// The equality stated by the rule application.
+    pub proposition: Proposition,
+    /// The source rewrite's name.
+    pub name: String,
+    /// Source variable bindings, in order of first occurrence.
+    pub substitution: IndexMap<String, TermId>,
+    /// Evidence in normalized source-body order.
+    pub premises: Vec<RulePremise>,
+}
+
+impl Hash for RuleProof {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.proposition.hash(state);
+        self.name.hash(state);
+        self.premises.hash(state);
+        // IndexMap equality ignores insertion order.
+        let mut bindings: Vec<_> = self.substitution.iter().collect();
+        bindings.sort_unstable_by_key(|(name, _)| *name);
+        bindings.hash(state);
+    }
+}
+
 impl SlottedProof {
-    /// The equality stated by this step; renaming equality is not an ordinary equality.
-    pub fn proposition(&self) -> Option<&Proposition> {
+    /// The equality stated by this step.
+    pub fn proposition(&self) -> &Proposition {
         match self {
-            Self::Ordinary(proof) => Some(proof.proposition()),
-            Self::Alpha { proposition, .. } | Self::Equivariance { proposition, .. } => {
-                Some(proposition)
-            }
-            Self::RenamingEq { .. } => None,
+            Self::Ordinary(proof) => proof.proposition(),
+            Self::Rule(proof) => &proof.proposition,
+            Self::Alpha { proposition, .. } | Self::Equivariance { proposition, .. } => proposition,
         }
     }
 
@@ -91,8 +137,12 @@ impl SlottedProof {
     pub fn premises(&self) -> Vec<ProofId> {
         match self {
             Self::Ordinary(proof) => proof.justification().premises(),
+            Self::Rule(proof) => proof
+                .premises
+                .iter()
+                .flat_map(RulePremise::proofs)
+                .collect(),
             Self::Alpha { proof, .. } | Self::Equivariance { proof, .. } => vec![*proof],
-            Self::RenamingEq { left, right } => vec![*left, *right],
         }
     }
 }
@@ -176,15 +226,33 @@ impl SlottedProofStore {
         &self.proofs[id.index()]
     }
 
-    /// The equality stated by a stored step. Panics for renaming equality.
+    /// The equality stated by a stored step.
     pub fn proposition(&self, id: ProofId) -> &Proposition {
-        self.proofs[id.index()]
-            .proposition()
-            .expect("expected an equality proof")
+        self.proofs[id.index()].proposition()
     }
 
-    /// Record a proof as stated. The checker decides whether it is valid.
+    /// Record an unchecked proof, converting ordinary rules to typed rule premises.
     pub fn add(&mut self, proof: SlottedProof) -> ProofId {
+        let proof = if let SlottedProof::Ordinary(p) = &proof
+            && let Justification::Rule {
+                name,
+                substitution,
+                premise_proofs,
+            } = p.justification()
+        {
+            SlottedProof::Rule(RuleProof {
+                proposition: p.proposition().clone(),
+                name: name.clone(),
+                substitution: substitution.clone(),
+                premises: premise_proofs
+                    .iter()
+                    .copied()
+                    .map(RulePremise::Equality)
+                    .collect(),
+            })
+        } else {
+            proof
+        };
         if let Some(&id) = self.index.get(&proof) {
             return id;
         }
@@ -202,9 +270,20 @@ impl SlottedProofStore {
         )))
     }
 
-    /// Record the two operand equality proofs for a `renaming-=` condition.
-    pub fn renaming_eq(&mut self, left: ProofId, right: ProofId) -> ProofId {
-        self.add(SlottedProof::RenamingEq { left, right })
+    /// Record a source-rule application with typed premises.
+    pub fn rule(
+        &mut self,
+        proposition: Proposition,
+        name: String,
+        substitution: IndexMap<String, TermId>,
+        premises: Vec<RulePremise>,
+    ) -> ProofId {
+        self.add(SlottedProof::Rule(RuleProof {
+            proposition,
+            name,
+            substitution,
+            premises,
+        }))
     }
 
     /// State a source union or a built term's reflexivity; the checker validates it.
@@ -373,26 +452,22 @@ impl SlottedProofStore {
             .unwrap_or_else(|| (0..self.len()).map(ProofId::from_usize).collect());
         for id in ids {
             let proof = self.get(id);
-            let mut terms: Vec<_> = proof
-                .proposition()
-                .into_iter()
-                .flat_map(|p| [p.rhs, p.lhs])
-                .collect();
+            let p = proof.proposition();
+            let mut terms = vec![p.rhs, p.lhs];
             match proof {
                 SlottedProof::Equivariance { renaming, .. } => {
                     slots.extend(renaming.entries().flat_map(|(a, b)| [a, b]));
                 }
-                SlottedProof::Ordinary(proof) => {
-                    if let Justification::Rule { substitution, .. } = proof.justification() {
-                        used.extend(
-                            substitution
-                                .keys()
-                                .map(|v| format!("${}", v.trim_start_matches('$'))),
-                        );
-                        terms.extend(substitution.values().rev().copied());
-                    }
+                SlottedProof::Rule(proof) => {
+                    used.extend(
+                        proof
+                            .substitution
+                            .keys()
+                            .map(|v| format!("${}", v.trim_start_matches('$'))),
+                    );
+                    terms.extend(proof.substitution.values().rev().copied());
                 }
-                SlottedProof::Alpha { .. } | SlottedProof::RenamingEq { .. } => {}
+                SlottedProof::Ordinary(_) | SlottedProof::Alpha { .. } => {}
             }
             while let Some(term) = terms.pop() {
                 if let Some(slot) = slot_of(&self.term_dag, term) {
@@ -483,7 +558,7 @@ impl SlottedProofStore {
     }
 
     /// Print a proof in egglog's S-expression format, with source slot names.
-    /// Requires acyclic dependencies and equality steps as renaming-equality operands.
+    /// Requires acyclic dependencies.
     pub fn proof_to_string(&self, root: ProofId) -> String {
         let names = self.display_names(Some(root), []);
         let (mut dag, terms) = self.named_dag(&names);
@@ -501,15 +576,14 @@ impl SlottedProofStore {
         let mut proofs = HashMap::default();
         for id in self.dependencies(root) {
             let proof = self.get(id);
-            let equality = proof
-                .proposition()
-                .map(|p| dag.app("=".into(), vec![terms[p.lhs], terms[p.rhs]]));
+            let p = proof.proposition();
+            let equality = dag.app("=".into(), vec![terms[p.lhs], terms[p.rhs]]);
             let term = match proof {
                 SlottedProof::Ordinary(proof) => {
                     proof.to_term(dag, |t| terms[t], |_, id| proofs[&id])
                 }
                 SlottedProof::Alpha { proof, .. } => {
-                    dag.app("Alpha".into(), vec![equality.unwrap(), proofs[proof]])
+                    dag.app("Alpha".into(), vec![equality, proofs[proof]])
                 }
                 SlottedProof::Equivariance {
                     proof, renaming, ..
@@ -517,15 +591,37 @@ impl SlottedProofStore {
                     let renaming = Self::renaming_term(dag, renaming, names);
                     dag.app(
                         "Equivariance".into(),
-                        vec![equality.unwrap(), proofs[proof], renaming],
+                        vec![equality, proofs[proof], renaming],
                     )
                 }
-                SlottedProof::RenamingEq { left, right } => {
-                    let operands = [*left, *right]
-                        .map(|p| terms[self.proposition(p).lhs])
-                        .to_vec();
-                    let fact = dag.app("renaming-=".into(), operands);
-                    dag.app("RenamingEq".into(), vec![fact, proofs[left], proofs[right]])
+                SlottedProof::Rule(rule) => {
+                    let proof = Proof::new(
+                        rule.proposition.clone(),
+                        Justification::Rule {
+                            name: rule.name.clone(),
+                            substitution: rule.substitution.clone(),
+                            premise_proofs: (0..rule.premises.len())
+                                .map(ProofId::from_usize)
+                                .collect(),
+                        },
+                    );
+                    proof.to_term(
+                        dag,
+                        |t| terms[t],
+                        |dag, id| match rule.premises[id.index()] {
+                            RulePremise::Equality(proof) => proofs[&proof],
+                            RulePremise::RenamingEq { left, right } => {
+                                let operands = [left, right]
+                                    .map(|p| terms[self.proposition(p).lhs])
+                                    .to_vec();
+                                let fact = dag.app("renaming-=".into(), operands);
+                                dag.app(
+                                    "RenamingEq".into(),
+                                    vec![fact, proofs[&left], proofs[&right]],
+                                )
+                            }
+                        },
+                    )
                 }
             };
             proofs.insert(id, term);

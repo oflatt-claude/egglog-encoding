@@ -13,7 +13,7 @@ checking with egglog, and minimal compilation metadata.
   semantics, declaration-scoped globals, sorts, and source names. Do not add
   generated matching conditions or replacement axioms to the source theory.
   Ordinary guards use egglog's proof normal form. Keep one dedicated RenamingEq
-  node for each renaming-= condition, expanding it only during checking.
+  premise for each renaming-= condition, expanding it only during checking.
 - Do not change the normal proof checker's semantics. Refactoring and exposing
   existing checking code are allowed.
 - Ordinary propositions are exact equalities. Equivariance applies a finite
@@ -41,10 +41,11 @@ checking with egglog, and minimal compilation metadata.
    and Command types and type resolution. Share constructor/binder information
    with the slotted frontend. Remove the remaining Condition/Rewrite/Rhs model.
 4. **Extend the ordinary proof format.** Use an enum with `Ordinary(egglog::proof::Proof)`,
-   `Alpha`, `Equivariance`, and `RenamingEq`. Reuse ordinary equality
-   propositions, justifications, IDs, and printing. Keep claims and the store in
-   format.rs, the checker in its own
-   file, and tests in separate files.
+   `Rule(RuleProof)`, `Alpha`, and `Equivariance`. Rule premises are typed as
+   `Equality(ProofId)` or `RenamingEq { left, right }`; every stored proof states
+   an ordinary equality. Reuse ordinary propositions, justifications, IDs, and
+   printing. Keep claims and the store in format.rs, the checker in its own file,
+   and tests in separate files.
 5. **Make renaming-guard evidence explicit.** Ordinary proof premises establish
    equalities to representatives; a slotted validator checks their permutation.
    Existence alone must never establish `renaming-=`.
@@ -75,9 +76,9 @@ checking with egglog, and minimal compilation metadata.
   S-expression reader; structural AST conversion preserves slotted identifiers.
 - Source rules now use native type resolution, as described below.
 
-### RenamingEq and ordinary guard normal form: implemented and validated
+### Ordinary guard normal form: implemented and validated
 
-The only guard-specific extension is `RenamingEq { left, right }`. Its two
+The only guard-specific premise is `RenamingEq { left, right }`. Its two
 ordinary equality proofs establish `a = ar` and `b = br`; the primitive validator
 compares `ar` and `br` modulo alpha-equivalence and a bijection of free slots.
 RenamingEq evidence cannot be used as an ordinary equality.
@@ -121,6 +122,39 @@ documentation edits. Validation logs: `/tmp/slotted-renaming-eq-check.log`,
 `/tmp/slotted-renaming-eq-final-nits.log`, and
 `/tmp/slotted-renaming-eq-final-tests.log`. Review:
 `/tmp/slotted-renaming-eq-fable-review.txt`.
+
+## Typed rule premises: implemented and validated
+
+`RulePremise` distinguishes an ordinary equality ID from inline RenamingEq
+operand evidence. `SlottedProof::Rule(RuleProof)` holds these typed premises;
+there is no standalone RenamingEq proof variant. The store converts native
+Rule steps to typed equality premises, so every stored node states an ordinary
+proposition. Checking no longer needs optional equality results or dynamic
+rejection of guard evidence in equality steps.
+
+The checker expands a slotted RuleProof to an ordinary rule proof and delegates
+to the native single-step checker. Lifting, normalization, dependency traversal,
+and rendering use the typed premises. Normalization keeps guard operands in
+source coordinates. The ordinary proof types and checker are unchanged.
+
+Tests retain malformed guard placement and operand validation, cover cycles
+through either RenamingEq operand, and verify rule interning ignores substitution
+insertion order. A transported-rule regression simplifies both guard operands
+while preserving their source coordinates and substitution, then rechecks the
+result. Printed proof snapshots are unchanged.
+
+Independent read-only review found no correctness blocker; its diagnostic and
+normalization-test suggestions are applied. Claude Fable was attempted first,
+but its CLI session limit prevented this review. The fallback review is recorded
+in `/tmp/slotted-typed-premises-review.txt`.
+
+Root `make check` passed in an isolated checkout excluding the unrelated nested
+repository: 295 Python tests, the full Rust workspace, 43 compatible slotted
+proof fixtures, 31 runtime checks, 24 benchmark proof runs, and seven proof-fuzz
+profiles (200 cases). After the review follow-ups, `make nits`, all 105
+experimental unit tests, and all 23 proof integration tests passed. Snapshots
+remain unchanged. Validation logs: `/tmp/slotted-typed-premises-check.log` and
+`/tmp/slotted-typed-premises-final-checks.log`.
 
 ## Source cleanup: implemented
 
