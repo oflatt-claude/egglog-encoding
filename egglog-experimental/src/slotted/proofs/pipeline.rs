@@ -3,9 +3,9 @@
 use super::HashMap;
 use super::checker::check_claim;
 use super::format::SlottedConclusion;
+use super::lift_slots::{self, matched_frame};
 use super::source::{SlottedProgram, SourceError};
 use super::terms::FreshSlots;
-use super::translate::{matched_frame, translate};
 use crate::slotted::Compiler;
 use crate::slotted::flatten::Rewrite as FlatRewrite;
 use crate::slotted::query::ProofNames;
@@ -361,7 +361,7 @@ impl SlottedProofState {
         Ok((program, flattened, dag))
     }
 
-    /// Translate the egglog proof `root` of a `prove-slotted` to a slotted proof
+    /// Lift the egglog proof `root` of a `prove-slotted` to a slotted proof
     /// of its claim and check it. Returns the slotted proof's text.
     fn prove(
         &self,
@@ -407,7 +407,7 @@ impl SlottedProofState {
             "egglog proof of claim {claim}:\n{}",
             egg.proof_to_string(root)
         );
-        let (store, proof) = translate(
+        let (store, proof) = lift_slots::lift(
             &flattened,
             dag,
             &self.names,
@@ -436,42 +436,5 @@ impl SlottedProofState {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::slotted::{Compiler, Options, ProofMode, new_egraph_with_proofs};
-
-    #[test]
-    fn restricted_group_elements_lift_to_checked_source_equalities() {
-        let mut compiler = Compiler::new(Options {
-            proof_mode: ProofMode::Prove,
-            ..Default::default()
-        });
-        let encoded = compiler
-            .compile(
-                None,
-                include_str!("../../../tests/slotted/proof-group-restriction.egg"),
-            )
-            .unwrap();
-        let mut graph = new_egraph_with_proofs();
-        graph.parse_and_run_program(None, &encoded).unwrap();
-        let outputs = graph
-            .parse_and_run_program(None, "(prove (= g (EclassGroup_0 c)) (> (set-length g) 1))")
-            .unwrap();
-        let egg = outputs
-            .into_iter()
-            .find_map(|output| match output {
-                CommandOutput::ProveExists { proof_store, .. } => Some(proof_store),
-                _ => None,
-            })
-            .unwrap();
-        let state = graph.extension_state::<SlottedProofState>().unwrap();
-        let (program, _, dag) = state.program(&BTreeMap::new()).unwrap();
-        let checked =
-            super::super::translate::check_restricted_symmetries(&program, dag, &state.names, &egg)
-                .unwrap();
-        assert!(
-            checked > 0,
-            "the proof must exercise a nonidentity restricted symmetry"
-        );
-    }
-}
+#[path = "pipeline_tests.rs"]
+mod tests;

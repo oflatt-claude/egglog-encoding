@@ -668,6 +668,7 @@ dependencies = [
  "codspeed-divan-compat",
  "egglog",
  "egglog-ast",
+ "egglog-numeric-id",
  "egglog-reports",
  "egraph-isomorphism",
  "fixedbitset",

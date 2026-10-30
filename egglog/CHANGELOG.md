@@ -1,6 +1,7 @@
 # Changes
 
 ## [Unreleased] - ReleaseDate
+- Expose proof-step rendering and premise traversal; proofs support equality and hashing.
 - Let extension commands opt into proof support with `UserDefinedCommand::supports_proofs` and expose unsimplified proofs for external translation. Add map and ordering validators.
 - Expose single-step checking, fact/action validation, proof construction, and the resolved proof-checking program for checkers that extend the ordinary proof format. Allow rule type resolution with additional typed local bindings.
 

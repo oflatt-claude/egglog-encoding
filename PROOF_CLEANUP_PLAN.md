@@ -38,8 +38,10 @@ checking with egglog, and minimal compilation metadata.
 3. **Remove the parallel source representation.** Use egglog's Expr, Fact, Rule,
    and Command types and type resolution. Share constructor/binder information
    with the slotted frontend. Remove the remaining Condition/Rewrite/Rhs model.
-4. **Make the format self-contained.** Put Claim, conclusions, witnesses, steps,
-   IDs, and store definitions in format.rs. Keep the checker separate.
+4. **Extend the ordinary proof format.** Use an enum with `Ordinary(egglog::proof::Proof)`,
+   `Alpha`, and `Equivariance`. Reuse ordinary propositions, justifications, IDs,
+   and printing. Keep claims and the store in format.rs, the checker in its own
+   file, and tests in separate files.
 5. **Make renaming-guard evidence explicit.** Ordinary proof premises establish
    equalities to representatives; a slotted validator checks their permutation.
    Existence alone must never establish `renaming-=`.
@@ -77,11 +79,11 @@ operands but leaves variable operands unchanged. Therefore the slotted checker
 must dispatch the original guard locally and share ordinary fact/action checks.
 No normal-checker semantic change is needed.
 
-Guard evidence is an ordinary proof `a = c` and an explicit permutation taking
-`b` to an alpha-equivalent spelling of `c`. Mere existence proofs of `a` and `b`
-are insufficient.
+Guard evidence is an ordinary proof `a = c`. The validator checks whether a slot
+permutation takes `b` to an alpha-equivalent spelling of `c`. Mere existence
+proofs of `a` and `b` are insufficient.
 
-## Source and format cleanup: implemented
+## Source cleanup: implemented
 
 - Retain native source declaration, let, union, and rewrite commands through
   structural `slotted-source` records. No rule strings or flattened-rule JSON
@@ -99,15 +101,14 @@ are insufficient.
 - Preserve the slotted frontend's identifiers, including `_`, keyword-like
   variables, and `$`-prefixed payload variables. Resolve payload locals and
   captured globals separately when their spellings overlap.
-- `SlottedPremise::Renaming` explicitly supplies an ordinary equality proof and
-  a permutation. Checking applies that permutation to the original guard's
-  right operand and compares up to Alpha; mere existence is insufficient.
+- Renaming guards use ordinary equality proof references. Their local validator
+  checks the representative's relation to the original guard's right operand;
+  there is no separate premise format.
 - The format, claims, and witnesses are in format.rs; checking is in checker.rs.
   Encoded names and flattening compensation stay in lifting. Ordinary checker
   semantics remain unchanged.
 - Production tests cover the former checker-adapter prototype; the duplicate
-  test-only checker has been removed. The renaming-guard demo snapshot shows its
-  explicit witness. LANGUAGE.md remains a usage reference.
+  test-only checker has been removed. LANGUAGE.md remains a usage reference.
 
 ## Previous-stage validation
 
@@ -130,9 +131,9 @@ sort-name regression also asserts that a proof is actually produced.
 Validation logs: `/tmp/slotted-production-alpha-final-check.log` and
 `/tmp/slotted-production-alpha-final-regression.log`.
 
-## Current-stage validation: complete
+## Source-cleanup validation
 
-All seven stages are implemented and validated. Root `make check` passed in an
+Root `make check` passed in an
 isolated worktree matching the working files, excluding the unrelated nested
 checkout from Python discovery. It covered formatting, linting, types, doc links,
 295 Python tests, the full Rust workspace, all 23 production proof integration
@@ -148,3 +149,36 @@ regression; restoring the frontend's existing option validation fixed it.
 Independent review found no remaining blocker in the source/checker boundary.
 
 Validation log: `/tmp/slotted-native-proof-final-check.log`.
+
+## Format correction: implemented and validated
+
+The earlier completion report overstated format reuse: checking was shared, but
+ordinary proof variants were still duplicated. The required format is an enum
+wrapping the original `Proof`, with only Alpha and Equivariance added.
+
+- Reuse `Proposition`, `ProofId`, ordinary justifications, dependency traversal,
+  and printing. Ordinary checker semantics remain unchanged.
+- Remove `SlottedPremise`; validate renaming guards using ordinary equality
+  evidence and structural slot correspondence.
+- Name the encoding pass `lift_slots`, retain `unflatten`, and name their shared
+  coordinate bookkeeping `coordinates`. Proof lifting names the whole pipeline.
+- Keep proof-module tests in separate files.
+
+Root `make check` passed on this representation: 295 Python tests, the full Rust
+workspace, 23 proof integration tests, 43 compatible source fixtures, 31 runtime
+checks, 24 generated benchmark proofs, and seven proof-fuzz profiles (200 cases).
+The isolated validation worktree matches the working files and excludes the
+unrelated nested checkout from Python discovery.
+
+Claude Fable reviewed the diff through the installed CLI and found no correctness
+blocker. Its recommendations are applied: check all premise references before
+dispatch, reject unsupported primitive guards, remove redundant helper and map
+layers, and use consistent module visibility and test-file placement. New
+checker-level cases cover binder scope and non-injective renaming guards. The
+final `make nits slotted-proof-tests` run passed, as did all 95 experimental unit
+tests and 23 proof integration tests after these refinements.
+
+Validation logs: `/tmp/slotted-proof-wrapper-final-check.log`,
+`/tmp/slotted-proof-wrapper-review-check.log`, and
+`/tmp/slotted-proof-wrapper-review-unit.log`. Review:
+`/tmp/slotted-proof-wrapper-fable-review.txt`.
