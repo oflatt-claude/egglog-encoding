@@ -39,7 +39,7 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
-use egglog_bridge::{ColumnTy, QueryEntry};
+use egglog_bridge::{ColumnTy, QueryEntry, TableKind};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{OverallReport, ReportLevel, RulesetTimingRole, RunReport};
@@ -48,7 +48,7 @@ use egglog_reports::{TimingSummary, TimingSummaryError};
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
 };
-use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
+use extract::DefaultCost;
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -76,7 +76,7 @@ use std::sync::Arc;
 use std::time::Instant;
 pub use termdag::{OrdTerm, Term, TermDag, TermId};
 use thiserror::Error;
-use typechecking::FuncType;
+pub use typechecking::FuncType;
 pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
@@ -134,9 +134,32 @@ pub trait FullPrim: Primitive {
     fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
-/// A user-defined command output trait.
-pub trait UserDefinedCommandOutput: Debug + std::fmt::Display + Send + Sync {}
-impl<T> UserDefinedCommandOutput for T where T: Debug + std::fmt::Display + Send + Sync {}
+/// A type-erased output from a user-defined command.
+pub trait UserDefinedCommandOutput: Debug + std::fmt::Display + Send + Sync {
+    /// Views a stored output as [`Any`] so consumers can safely downcast it.
+    ///
+    /// Call this on a `&dyn UserDefinedCommandOutput`; smart pointers that
+    /// themselves satisfy this trait should first be dereferenced with
+    /// `as_ref()`.
+    ///
+    /// [`CommandOutput::UserDefined`] owns its output, so values stored there
+    /// satisfy the required `'static` bound. Keeping the bound on this method
+    /// lets borrowed values continue to implement `UserDefinedCommandOutput`.
+    fn as_any(&self) -> &dyn Any
+    where
+        Self: 'static;
+}
+impl<T> UserDefinedCommandOutput for T
+where
+    T: Debug + std::fmt::Display + Send + Sync,
+{
+    fn as_any(&self) -> &dyn Any
+    where
+        Self: 'static,
+    {
+        self
+    }
+}
 
 /// Output from a command.
 #[derive(Clone, Debug)]
@@ -250,7 +273,7 @@ impl std::fmt::Display for CommandOutput {
                 write!(f, "Overall statistics:\n{run_report}")
             }
             CommandOutput::PrintFunction(function, termdag, terms_and_outputs, mode) => {
-                let out_is_unit = function.schema.output().name() == UnitSort.name();
+                let out_is_unit = function.func_type.output().name() == UnitSort.name();
                 if *mode == PrintFunctionMode::CSV {
                     let mut wtr = Writer::from_writer(vec![]);
                     for (term_id, output) in terms_and_outputs {
@@ -323,6 +346,8 @@ pub struct EGraph {
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+    /// Skip tree decomposition during query planning (the default).
+    /// Set to `false` to opt in; a rule's `:no-decomp` option still overrides it.
     pub no_decomp: bool,
     type_info: TypeInfo,
     /// Cumulative run and process reporting state.
@@ -356,7 +381,7 @@ pub trait UserDefinedCommand: Send + Sync {
 #[derive(Clone)]
 pub struct Function {
     decl: ResolvedFunctionDecl,
-    schema: ResolvedSchema,
+    func_type: Arc<FuncType>,
     can_subsume: bool,
     backend_id: egglog_bridge::FunctionId,
 }
@@ -367,9 +392,9 @@ impl Function {
         &self.decl.name
     }
 
-    /// Get the schema of the function.
-    pub fn schema(&self) -> &ResolvedSchema {
-        &self.schema
+    /// The function's resolved signature.
+    pub fn func_type(&self) -> &FuncType {
+        &self.func_type
     }
 
     /// Whether this function supports subsumption.
@@ -393,26 +418,40 @@ impl Function {
         self.decl.internal_hidden
     }
 
-    /// The term-constructor name associated with this function table, if
-    /// any. Set on view tables created by the term/proof encoding to refer
-    /// back to the user-visible constructor name.
-    pub fn term_constructor(&self) -> Option<&str> {
-        self.decl.term_constructor.as_deref()
+    /// Whether this table is a view created by the term/proof encoding: the
+    /// function's own rows, keyed on canonicalized children.
+    pub fn is_view(&self) -> bool {
+        self.decl.internal_view.is_some()
     }
-}
 
-#[derive(Clone, Debug)]
-pub struct ResolvedSchema {
-    pub input: Vec<ArcSort>,
-    /// The output (value-column) sorts, primary first. A tuple-output function has more than one;
-    /// ordinary functions have exactly one. Always non-empty.
-    pub outputs: Vec<ArcSort>,
-}
+    /// The source-level row layout exposed by the Rust APIs. Encoded views use
+    /// physical function tables with an internal row layout, but retain their
+    /// source constructor/function kind and select only the source output.
+    fn table_read_projection(&self) -> (TableKind, usize, usize) {
+        let rows_are_enodes = self.rows_are_enodes();
+        let input_arity = if rows_are_enodes {
+            self.extraction_layout().1
+        } else {
+            self.func_type.input.len()
+        };
+        (
+            if rows_are_enodes {
+                TableKind::Constructor
+            } else {
+                TableKind::Function
+            },
+            input_arity,
+            if rows_are_enodes {
+                1
+            } else {
+                self.func_type.outputs.len() - usize::from(self.is_fd_view())
+            },
+        )
+    }
 
-impl ResolvedSchema {
-    /// The primary (first) output sort.
-    pub fn output(&self) -> &ArcSort {
-        &self.outputs[0]
+    /// Whether this constructor is excluded from ordinary extraction.
+    pub fn is_unextractable(&self) -> bool {
+        self.decl.unextractable
     }
 }
 
@@ -420,7 +459,7 @@ impl Debug for Function {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Function")
             .field("decl", &self.decl)
-            .field("schema", &self.schema)
+            .field("func_type", &self.func_type)
             .finish()
     }
 }
@@ -444,7 +483,7 @@ impl EGraph {
             rulesets: Default::default(),
             fact_directory: None,
             seminaive: true,
-            no_decomp: false,
+            no_decomp: true,
             overall_report: Default::default(),
             type_info: Default::default(),
             schedulers: Default::default(),
@@ -523,6 +562,13 @@ impl EGraph {
         });
         add_primitive!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
             if a > b { a } else { b }
+        });
+        // Whether `ordering-min`/`ordering-max` swap their arguments: 0 when `a`
+        // is the max, 1 when `b` is. A top-level `union`'s fiat records this so
+        // proof lifting can orient the action's two operands the way the
+        // encoding did, without the row naming either of them.
+        add_primitive!(&mut eg, "ordering-swapped" = |a: #, b: #| -> i64 {
+            if a > b { 0 } else { 1 }
         });
 
         // Orientation helpers for the proof-encoding UF/view merges; see
@@ -613,7 +659,7 @@ impl EGraph {
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor
-    /// and function with auxiliary term tables, view tables, and per-sort
+    /// and function with source-named views and per-sort
     /// union-finds so that canonical representatives and their justifications are
     /// materialized explicitly.  This makes it possible to record and emit
     /// equality proofs while preserving the observable behaviour of supported
@@ -660,7 +706,8 @@ impl EGraph {
         self
     }
 
-    /// Enable testing of getting proofs for all `check` commands.
+    /// Enable testing of getting proofs for every `check` outside `fail`.
+    /// Checks inside `fail` remain negative assertions.
     pub fn with_proof_testing(mut self) -> Self {
         self.proof_state.proof_testing = true;
         self
@@ -852,6 +899,17 @@ impl EGraph {
                 // Preserve the symbol generator so that fresh symbols
                 // generated after pop don't collide with ones generated before pop.
                 std::mem::swap(&mut self.parser.symbol_gen, &mut e.parser.symbol_gen);
+                // Likewise the global-action numbering a fiat names: the program
+                // proof checking reads keeps what the popped scope contributed,
+                // so the count it is an index into must not go back either.
+                std::mem::swap(
+                    &mut self.proof_state.global_actions_numbered,
+                    &mut e.proof_state.global_actions_numbered,
+                );
+                // And the program itself, for the same reason: a command that
+                // ran is one proof checking has to know about, and dropping it
+                // would renumber everything a later fiat names.
+                std::mem::swap(&mut self.proof_check_program, &mut e.proof_check_program);
                 *self = *e;
                 Ok(())
             }
@@ -910,12 +968,7 @@ impl EGraph {
                             "expected string literal after `unstable-fn`".into(),
                         ));
                     };
-                    let panic_id = self
-                        .backend
-                        .action_registry()
-                        .read()
-                        .unwrap()
-                        .default_panic_id();
+                    let panic_id = self.backend.action_registry().read().default_panic_id();
                     let resolved = resolve_function_container_target_with_context(
                         &self.backend,
                         &self.functions,
@@ -1044,32 +1097,68 @@ impl EGraph {
     }
 
     fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
-        let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
-            Some(sort) => Ok(sort.clone()),
-            None => Err(Error::TypeError(TypeError::UndefinedSort(
-                name.to_owned(),
-                decl.span.clone(),
-            ))),
+        // Typechecking records the signatures it resolves, so reuse that.
+        // Desugaring also generates declarations (the functions global bindings
+        // lower to, proof tables) without typechecking them; resolving those
+        // here is what keeps every declared function reachable by name.
+        let func_type = match self.type_info.get_func_type(&decl.name) {
+            Some(func_type) => {
+                debug_assert!(
+                    func_type.subtype == decl.subtype
+                        && func_type.input.len() == decl.schema.input.len()
+                        && func_type
+                            .input
+                            .iter()
+                            .zip(&decl.schema.input)
+                            .all(|(sort, name)| sort.name() == name)
+                        && func_type.outputs.len() == decl.schema.outputs.len()
+                        && func_type
+                            .outputs
+                            .iter()
+                            .zip(&decl.schema.outputs)
+                            .all(|(sort, name)| sort.name() == name),
+                    "recorded signature for {} disagrees with its declaration",
+                    decl.name
+                );
+                func_type.clone()
+            }
+            None => {
+                let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
+                    Some(sort) => Ok(sort.clone()),
+                    None => Err(Error::TypeError(TypeError::UndefinedSort(
+                        name.to_owned(),
+                        decl.span.clone(),
+                    ))),
+                };
+                let func_type = Arc::new(FuncType {
+                    name: decl.name.clone(),
+                    subtype: decl.subtype,
+                    is_global: decl.internal_let,
+                    input: decl
+                        .schema
+                        .input
+                        .iter()
+                        .map(get_sort)
+                        .collect::<Result<Vec<_>, _>>()?,
+                    outputs: decl
+                        .schema
+                        .outputs
+                        .iter()
+                        .map(get_sort)
+                        .collect::<Result<Vec<_>, _>>()?,
+                });
+                self.type_info.declare_func_type(func_type.clone());
+                func_type
+            }
         };
 
-        let input = decl
-            .schema
-            .input
-            .iter()
-            .map(get_sort)
-            .collect::<Result<Vec<_>, _>>()?;
-        let outputs = decl
-            .schema
-            .outputs
-            .iter()
-            .map(get_sort)
-            .collect::<Result<Vec<_>, _>>()?;
+        let input = &func_type.input;
+        let outputs = &func_type.outputs;
         let num_outputs = outputs.len();
-
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
-            // View tables (functions with term_constructor) need subsumption support
-            FunctionSubtype::Custom => decl.term_constructor.is_some(),
+            // View tables need subsumption support
+            FunctionSubtype::Custom => decl.internal_view.is_some(),
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
@@ -1087,7 +1176,41 @@ impl EGraph {
                 None => MergeFn::AssertEq,
             },
         };
-        let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
+        // Proof-node relations are write-once records identified by a freshly
+        // minted final id; extraction only scans them.
+        let is_proof_node = decl.internal_term_node
+            && input
+                .last()
+                .is_some_and(|sort| sort.name() == self.proof_state.proof_names.proof_datatype);
+        if is_proof_node {
+            assert_eq!(
+                decl.subtype,
+                FunctionSubtype::Custom,
+                "proof-node relation `{}` must be a custom function",
+                decl.name
+            );
+            assert!(
+                decl.merge.is_none(),
+                "proof-node relation `{}` cannot declare merge behavior",
+                decl.name
+            );
+            assert!(
+                decl.internal_view.is_none(),
+                "proof-node relation `{}` cannot be an FD view",
+                decl.name
+            );
+            assert!(
+                matches!(outputs.as_slice(), [output] if output.name() == "Unit"),
+                "proof-node relation `{}` must have exactly one Unit output",
+                decl.name
+            );
+            assert!(
+                input.last().is_some_and(|sort| sort.is_eq_sort()),
+                "proof-node relation `{}` must end in an eq-sort id",
+                decl.name
+            );
+        }
+        let config = egglog_bridge::FunctionConfig {
             schema: input
                 .iter()
                 .chain(outputs.iter())
@@ -1102,15 +1225,26 @@ impl EGraph {
             merge,
             name: decl.name.to_string(),
             can_subsume,
-        });
-        assert_eq!(backend_id, own_id);
-
+        };
         let function = Function {
             decl: decl.clone(),
-            schema: ResolvedSchema { input, outputs },
+            func_type,
             can_subsume,
-            backend_id,
+            backend_id: own_id,
         };
+        let (kind, input_arity, output_arity) = function.table_read_projection();
+        let backend_id = if is_proof_node {
+            self.backend.add_internal_flat_table(config)
+        } else {
+            self.backend
+                .add_table_with_read_projection(config, kind, input_arity, output_arity)
+        };
+        assert_eq!(backend_id, function.backend_id);
+        if function.is_hidden() {
+            self.type_info
+                .hidden_functions
+                .insert(function.name().to_owned());
+        }
 
         let old = self.functions.insert(decl.name.clone(), function);
         if old.is_some() {
@@ -1123,11 +1257,34 @@ impl EGraph {
         Ok(())
     }
 
-    /// Extract rows of a table using the default cost model with name sym
-    /// The `include_output` parameter controls whether the output column is always extracted
-    /// For functions, the output column is usually useful
-    /// Print up to `n` the tuples in a given function.
-    /// Print all tuples if `n` is not provided.
+    /// Find the storage for a global, including in a replayed desugared program.
+    fn global_table(&self, name: &str) -> Option<&Function> {
+        let binding = self.type_info.global_tables.bindings.get(name).or_else(|| {
+            self.proof_state
+                .original_typechecking
+                .as_ref()?
+                .type_info
+                .global_tables
+                .bindings
+                .get(name)
+        });
+        if let Some(table) = binding {
+            return self.functions.get(&table.name);
+        }
+        let key = self.backend.base_values().get::<S>(name.to_owned().into());
+        self.functions.values().find(|function| {
+            function.decl.internal_let
+                && function.func_type.input.len() == 1
+                && function.func_type.input[0].name() == StringSort.name()
+                && self
+                    .backend
+                    .lookup_id(function.backend_id, &[key])
+                    .is_some()
+        })
+    }
+
+    /// Print up to `n` of a function's tuples, or all of them when `n` is
+    /// `None`.
     pub fn print_function(
         &mut self,
         sym: &str,
@@ -1151,7 +1308,8 @@ impl EGraph {
         let f = self
             .functions
             .get(sym)
-            // function_to_dag should have checked this
+            .or_else(|| self.global_table(sym))
+            // function_to_dag resolved the same name, so this cannot miss
             .unwrap();
         let terms_and_outputs: Vec<_> = terms.into_iter().zip(outputs.unwrap()).collect();
         let output = CommandOutput::PrintFunction(f.clone(), termdag, terms_and_outputs, mode);
@@ -1168,7 +1326,8 @@ impl EGraph {
 
     /// Provide a program for use in proof checking.
     /// This enables testing of a desugared egglog proof program outside of proof mode.
-    /// When proof_testing is true, turns all the `check` commands into `prove` commands.
+    /// When proof_testing is true, turns every `check` outside `fail` into a `prove` command.
+    /// Checks inside `fail` remain negative assertions.
     /// Not intended for general use but needed in files.rs, so public but hidden.
     #[doc(hidden)]
     pub fn set_proof_checking_program(
@@ -1195,14 +1354,9 @@ impl EGraph {
     /// `(name size)` pairs, e.g. `((name size) ...)`.
     pub fn print_size(&self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
-            // In proof mode, we have view tables instead of term tables.
-            // So we do a linear scan to find the view table first, falling back on the normal table otherwise.
-            // (We don't check the proof mode flag so that this still works after desugaring)
             let f = self
                 .functions
-                .values()
-                .find(|f| f.decl.term_constructor.as_deref() == Some(sym))
-                .or_else(|| self.functions.get(sym))
+                .get(sym)
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
             // Skip hidden and let_binding functions
             if f.decl.internal_hidden || f.decl.internal_let {
@@ -1213,19 +1367,11 @@ impl EGraph {
             Ok(CommandOutput::PrintFunctionSize(size))
         } else {
             // Print size of all non-hidden, non-let_binding functions
-            // For view tables, use the term_constructor name instead
             let mut lens = self
                 .functions
                 .iter()
                 .filter(|(_, f)| !f.decl.internal_hidden && !f.decl.internal_let)
-                .map(|(sym, f)| {
-                    let name = f
-                        .decl
-                        .term_constructor
-                        .clone()
-                        .unwrap_or_else(|| sym.clone());
-                    (name, self.backend.table_size(f.backend_id))
-                })
+                .map(|(sym, f)| (sym.clone(), self.backend.table_size(f.backend_id)))
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order
@@ -1377,8 +1523,8 @@ impl EGraph {
         ) {
             match &rulesets[ruleset].kind {
                 RulesetKind::Rules(rules) => {
-                    for (_, id) in rules.values() {
-                        ids.push(*id);
+                    for rule in rules.values() {
+                        ids.push(rule.backend_id);
                     }
                 }
                 RulesetKind::Combined(sub_rulesets) => {
@@ -1394,7 +1540,7 @@ impl EGraph {
 
         let iteration_report = self
             .backend
-            .run_rules(&rule_ids)
+            .run_rules(&rule_ids, Some(&self.type_info))
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
         let report = RunReport::singleton(
@@ -1412,9 +1558,8 @@ impl EGraph {
         // Pure/Write to Read/Full, so primitives that read or write the
         // database can run inside this rule.
         let seminaive = self.seminaive && !rule.eval_mode.is_naive();
-        // The `:no-decomp` rule option (and the global `--no-decomp`
-        // flag) skips tree-decomposition in query planning, forcing
-        // the single-bag fast path.
+        // Tree decomposition is opt-in. A rule's `:no-decomp` option
+        // keeps the single-bag fast path even when enabled globally.
         let no_decomp = self.no_decomp || rule.no_decomp;
         let requires_read_context = !seminaive
             || matches!(
@@ -1476,7 +1621,14 @@ impl EGraph {
             indexmap::map::Entry::Occupied(_) => {
                 return Err(Error::RuleAlreadyExists(rule.name, rule.span));
             }
-            indexmap::map::Entry::Vacant(e) => e.insert((core_rule, rule_id)),
+            indexmap::map::Entry::Vacant(e) => e.insert(CompiledRule {
+                core: core_rule,
+                backend_id: rule_id,
+                seminaive,
+                requires_read_context,
+                no_decomp,
+                include_subsumed: rule.include_subsumed,
+            }),
         };
         Ok(rule.name)
     }
@@ -1500,7 +1652,7 @@ impl EGraph {
         );
         translator.actions(&actions)?;
         let id = translator.build(false);
-        let result = self.backend.run_rules(&[id]);
+        let result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
 
         match result {
@@ -1520,6 +1672,26 @@ impl EGraph {
         self.functions.iter()
     }
 
+    /// Run `f` against a raw execution state, with this e-graph's declarations
+    /// visible to any primitive it reaches.
+    ///
+    /// Every execution egglog starts goes through here or its `_tracked` twin,
+    /// so no call site has to decide whether a primitive it cannot see might
+    /// want to resolve a signature.
+    fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
+        self.backend.with_execution_state(Some(&self.type_info), f)
+    }
+
+    /// [`EGraph::with_execution_state`], also reporting whether `f` staged a
+    /// mutation.
+    fn with_execution_state_tracked<R>(
+        &self,
+        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
+    ) -> (R, bool) {
+        self.backend
+            .with_execution_state_tracked(Some(&self.type_info), f)
+    }
+
     /// Run a read-only closure against the e-graph. The closure receives
     /// a [`ReadState`], so it can read but not write. Because this
     /// borrows `&self`, the closure and its callbacks may also call other
@@ -1527,9 +1699,8 @@ impl EGraph {
     ///
     pub fn read<R>(&self, f: impl FnOnce(ReadState<'_, '_>) -> R) -> R {
         let registry = self.backend.action_registry().clone();
-        let guard = registry.read().unwrap();
-        self.backend
-            .with_execution_state_tracked(|es| f(ReadState::wrap(es, &guard, Context::Read)))
+        let guard = registry.read();
+        self.with_execution_state_tracked(|es| f(ReadState::wrap(es, &guard, Context::Read)))
             .0
     }
 
@@ -1559,10 +1730,8 @@ impl EGraph {
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        // An internal term relation (under term encoding) has `Custom` subtype but
-        // is not a user-facing function table — it reads as enodes via
-        // `constructor_enodes`, so reject it here.
-        if function.subtype() != FunctionSubtype::Custom || function.is_relation_term() {
+        let (kind, input_arity, output_arity) = function.table_read_projection();
+        if kind == TableKind::Constructor {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "function",
@@ -1570,7 +1739,7 @@ impl EGraph {
             }
             .into());
         }
-        if function.schema.outputs.len() != 1 {
+        if output_arity != 1 {
             return Err(crate::api::ApiError::TupleOutputUnsupported {
                 name: name.to_owned(),
                 method: "function_entries",
@@ -1578,13 +1747,9 @@ impl EGraph {
             .into());
         }
         self.backend.for_each_while(function.backend_id, |row| {
-            let (output, inputs) = row
-                .vals
-                .split_last()
-                .expect("function row has at least an output column");
             f(FunctionEntry {
-                inputs,
-                output: *output,
+                inputs: &row.vals[..input_arity],
+                output: row.vals[input_arity],
                 subsumed: row.subsumed,
             })
         });
@@ -1617,12 +1782,8 @@ impl EGraph {
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        // A real constructor, or (under term encoding) an internal term relation,
-        // reads as enodes. The eclass id is the row's output column for a real
-        // constructor, or the last input column for a term relation (whose trailing
-        // `Unit` output is then ignored) — `extraction_output_index` picks the right
-        // one and `extraction_num_children` the matching children count.
-        if function.subtype() != FunctionSubtype::Constructor && !function.is_relation_term() {
+        let (kind, input_arity, _) = function.table_read_projection();
+        if kind != TableKind::Constructor {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "constructor",
@@ -1630,12 +1791,11 @@ impl EGraph {
             }
             .into());
         }
-        let num_children = function.extraction_num_children();
-        let eclass_idx = function.extraction_output_index();
         self.backend.for_each_while(function.backend_id, |row| {
             f(Enode {
-                children: &row.vals[..num_children],
-                eclass: row.vals[eclass_idx],
+                name,
+                children: &row.vals[..input_arity],
+                eclass: row.vals[input_arity],
                 subsumed: row.subsumed,
             })
         });
@@ -1707,7 +1867,9 @@ impl EGraph {
     /// Each tuple is `(name, span, sort)`, where `span` is used for diagnostics
     /// tied to that binding. `output_sort` constrains overload resolution and
     /// output-type inference for the expression. Global references are rewritten
-    /// into the same zero-argument function calls used during command execution.
+    /// into the same shared-table reads used during command execution.
+    /// This shares the command pipeline's source typechecking and global lowering;
+    /// it does not instrument the expression with terms or proofs.
     /// `context` should match the runtime context where the resolved expression
     /// will be evaluated.
     pub fn typecheck_expr_with_bindings_and_output(
@@ -1727,14 +1889,24 @@ impl EGraph {
                 return Err(TypeError::AlreadyDefined(name.clone(), span.clone()));
             }
         }
-        let resolved = self.type_info.typecheck_expr_with_output(
-            &mut self.parser.symbol_gen,
-            expr,
-            &binding_map,
-            output_sort,
-            context,
-        )?;
-        Ok(remove_globals::remove_globals_expr(resolved))
+        let resolved = self.typecheck_source(|source| {
+            source.type_info.typecheck_expr_with_output(
+                &mut source.parser.symbol_gen,
+                expr,
+                &binding_map,
+                output_sort,
+                context,
+            )
+        })?;
+        let commands = self.lower_source_globals(vec![ResolvedNCommand::CoreAction(
+            ResolvedAction::Expr(expr.span(), resolved),
+        )]);
+        let ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved)) =
+            commands.into_iter().next().unwrap()
+        else {
+            unreachable!("lowering an expression does not introduce global bindings")
+        };
+        Ok(resolved)
     }
 
     /// Replace literal `(unstable-fn "...")` targets with hidden evaluator bindings.
@@ -1881,7 +2053,7 @@ impl EGraph {
         );
 
         let id = translator.build(false);
-        let rule_result = self.backend.run_rules(&[id]);
+        let rule_result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         let _ = rule_result.map_err(|e| {
@@ -1954,7 +2126,7 @@ impl EGraph {
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
             eval_mode: RuleEvalMode::default(),
-            no_decomp: false,
+            no_decomp: self.no_decomp,
             include_subsumed: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
@@ -1968,8 +2140,9 @@ impl EGraph {
         let ext_sc_ref = ext_sc.clone();
         let ext_id = self
             .backend
-            .register_external_func(Box::new(make_external_func(move |_, _| {
+            .register_external_func(Box::new(make_external_func(move |exec_state, _| {
                 *ext_sc_ref.lock().unwrap() = Some(());
+                exec_state.trigger_early_stop();
                 Some(Value::new_const(0))
             })));
 
@@ -1987,8 +2160,8 @@ impl EGraph {
             &[],
             egglog_bridge::ColumnTy::Id,
         );
-        let id = translator.build(false);
-        let run_result = self.backend.run_rules(&[id]);
+        let id = translator.build(rule.no_decomp);
+        let run_result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         let iteration_report = run_result.map_err(|e| Error::BackendError(e.to_string()))?;
@@ -2084,7 +2257,7 @@ impl EGraph {
                     // proofs when replaying an encoded program in a fresh e-graph.
                     names.fiat_prefix = pc.fiat;
                     names.proj_constructor = pc.proj;
-                    names.proj_all_prefix = pc.proj_all;
+                    names.proj_prim_prefix = pc.proj_prim;
                 }
                 log::info!("Declared sort {name}.")
             }
@@ -2161,42 +2334,36 @@ impl EGraph {
                 let n = self.eval_resolved_expr(span, &variants)?;
                 let n: i64 = self.backend.base_values().unwrap(n);
 
-                let mut termdag = TermDag::default();
-
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    Some(vec![sort]),
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
                 return if n == 0 {
-                    if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
-                        // dont turn termdag into a string if we have messages disabled for performance reasons
-                        if log_enabled!(Level::Info) {
-                            log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
-                        }
-                        Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
-                    } else {
-                        Err(Error::ExtractError(
-                            "Unable to find any valid extraction (likely due to subsume or delete)"
-                                .to_string(),
-                        ))
+                    let (termdag, term, cost) = self.extract_value(&sort, x)?;
+                    // dont turn termdag into a string if we have messages disabled for performance reasons
+                    if log_enabled!(Level::Info) {
+                        log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
                     }
+                    Ok(vec![CommandOutput::ExtractBest(termdag, cost, term)])
                 } else {
                     if n < 0 {
                         return Err(Error::ExtractError(
                             "cannot extract a negative number of variants".to_string(),
                         ));
                     }
-                    let terms: Vec<TermId> = extractor
-                        .extract_variants(self, &mut termdag, x, n as usize)
-                        .iter()
-                        .map(|e| e.1)
+                    let extracted = self.extract_variants(vec![(sort, x)], n as usize)?;
+                    let terms: Vec<TermId> = extracted
+                        .variants
+                        .into_iter()
+                        .next()
+                        .expect("extract_variants returns one result for one root")
+                        .into_iter()
+                        .map(|extracted| extracted.term)
                         .collect();
                     if log_enabled!(Level::Info) {
                         let expr_str = expr.to_string();
                         log::info!("extracted {} variants for {expr_str}", terms.len());
                     }
-                    Ok(vec![CommandOutput::ExtractVariants(termdag, terms)])
+                    Ok(vec![CommandOutput::ExtractVariants(
+                        extracted.termdag,
+                        terms,
+                    )])
                 };
             }
             ResolvedNCommand::Push(n) => {
@@ -2247,29 +2414,46 @@ impl EGraph {
                 return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, cmds) => {
-                let mut any_failed = false;
-                for c in cmds {
-                    if let Err(e) = self.run_command(c) {
-                        log::info!("Command failed as expected: {e}");
-                        any_failed = true;
-                        break;
+                // A single check is read-only, so avoid cloning the e-graph for
+                // the overwhelmingly common negative-assertion form.
+                if matches!(cmds.as_slice(), [ResolvedNCommand::Check(..)]) {
+                    let check = cmds.into_iter().next().unwrap();
+                    return match self.run_command(check) {
+                        Err(error) => {
+                            log::info!("Command failed as expected: {error}");
+                            Ok(vec![])
+                        }
+                        Ok(_) => Err(Error::ExpectFail(span)),
+                    };
+                }
+
+                self.push();
+                let failure = cmds
+                    .into_iter()
+                    .find_map(|command| self.run_command(command).err());
+                self.pop()
+                    .expect("the snapshot pushed for `fail` must still be present");
+                return match failure {
+                    Some(error) => {
+                        log::info!("Command failed as expected: {error}");
+                        Ok(vec![])
                     }
-                }
-                if !any_failed {
-                    return Err(Error::ExpectFail(span));
-                }
+                    None => Err(Error::ExpectFail(span)),
+                };
             }
-            ResolvedNCommand::Input { span, name, file } => {
+            ResolvedNCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => {
                 // An encoded program (term/proof mode, or a replayed desugared
-                // program) keeps `(input …)` targeting the encoded *term relation*,
-                // loaded natively into the encoded tables; a plain program targets a
-                // user relation/constructor loaded by the relation loader.
-                if self
-                    .functions
-                    .get(&name)
-                    .is_some_and(|f| f.is_relation_term())
-                {
-                    self.native_input(span, &name, file)?;
+                // program) declares nothing under the function's own name, so the
+                // name resolving to a view is what says the rows go into the
+                // encoded tables; a plain program targets a user
+                // relation/constructor loaded by the relation loader.
+                if self.functions.get(&name).is_some_and(|f| f.is_fd_view()) {
+                    self.native_input(span, &name, file, proof_base)?;
                 } else {
                     self.input_file(span, &name, file)?;
                 }
@@ -2277,38 +2461,34 @@ impl EGraph {
             ResolvedNCommand::Output { span, file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
-                // append to file
+
+                // Preserve the command's file-error ordering: reject an invalid
+                // output path before evaluating expressions.
+                use std::io::Write;
                 let mut f = File::options()
                     .append(true)
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    None,
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
-                let mut termdag: TermDag = Default::default();
-
-                use std::io::Write;
-                for expr in exprs {
-                    let value = self.eval_resolved_expr(span.clone(), &expr)?;
-                    let expr_type = expr.output_type();
-
-                    let term = match extractor.extract_best_with_sort(
-                        self,
-                        &mut termdag,
-                        value,
-                        expr_type,
-                    ) {
-                        Some((_, term)) => term,
-                        None => return Err(Error::ExtractError(
+                // Evaluation may mutate the e-graph, so finish it before
+                // extraction takes a shared borrow for its prepared costs.
+                let roots = exprs
+                    .iter()
+                    .map(|expr| {
+                        let value = self.eval_resolved_expr(span.clone(), expr)?;
+                        Ok((expr.output_type(), value))
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                let extracted = self.extract_best(roots)?;
+                for root in extracted.terms {
+                    let root = root.ok_or_else(|| {
+                        Error::ExtractError(
                             "Unable to find any valid extraction (likely due to subsume or delete)"
                                 .to_string(),
-                        )),
-                    };
-                    writeln!(f, "{}", termdag.to_string(term))
+                        )
+                    })?;
+                    writeln!(f, "{}", extracted.termdag.to_string(root.term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
@@ -2474,14 +2654,14 @@ impl EGraph {
         let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
         if function_type.subtype != FunctionSubtype::Constructor {
-            self.backend.with_execution_state(|es| {
+            self.with_execution_state(|es| {
                 for row in parsed_contents.iter() {
                     table_action.insert(es, row.iter().copied());
                 }
                 Some(unit_val)
             });
         } else {
-            self.backend.with_execution_state(|es| {
+            self.with_execution_state(|es| {
                 for row in parsed_contents.iter() {
                     // Constructor semantics: mint a fresh eclass id for
                     // each missing key.
@@ -2497,54 +2677,42 @@ impl EGraph {
         Ok(())
     }
 
-    /// Load `(input …)` facts natively into the term/proof encoding's tables. For
-    /// each row we mint a term id (and, when the encoding carries proofs, its
-    /// fiat-proof id) and insert the encoded term-relation, view, and proof rows
-    /// directly. Rows are plain-inserted (no get-or-insert): a duplicate view key
-    /// is left to the view's merge/no-merge handling. The proof checker keeps using
-    /// the per-row top-level fiat actions (`desugared_before_proofs`); this just
-    /// materializes the same table state.
+    /// Load `(input …)` facts natively into the encoding's tables. Each row gets
+    /// a fresh e-class and goes straight into the function's view, with the fiat
+    /// justifying it when the encoding carries proofs. Rows are plain-inserted
+    /// (no get-or-insert): a duplicate view key is left to the view's
+    /// merge/no-merge handling.
     ///
-    /// Everything is derived from the encoded schema + annotations (never the
-    /// pre-encoding `FuncType`), so it also works when a desugared program is
-    /// replayed in a fresh e-graph. `func_name` names the encoded *term relation*;
-    /// the encoded shape is read off the term and view schemas:
-    /// * constructor / relation (`term_inputs == view_inputs + 1`) — term row
-    ///   `(F children… term-id) Unit` and FD view `(children…) -> (term-id,
-    ///   proof)`.
-    /// * custom `:merge` / `:no-merge` (`term_inputs == view_inputs + 2`) — term
-    ///   row `(f children… output term-id) Unit` and view row `(children… output
-    ///   proof)`.
-    fn native_input(&mut self, span: Span, func_name: &str, file: String) -> Result<(), Error> {
-        // The encoded term relation keeps the user's original name. Its last input
-        // column is the minted term id; the columns before it are the CSV base
-        // columns (children, plus a custom function's output value).
-        let term = self
+    /// The row shape is read off the view, so this also works when a desugared
+    /// program is replayed in a fresh e-graph. `proof_base` is where
+    /// `lower_inputs` put this input's per-row actions in the program proof
+    /// checking reads: row `i` is justified by naming the action at
+    /// `proof_base + i`.
+    fn native_input(
+        &mut self,
+        span: Span,
+        func_name: &str,
+        file: String,
+        proof_base: Option<usize>,
+    ) -> Result<(), Error> {
+        let view = self
             .functions
             .get(func_name)
             .unwrap_or_else(|| panic!("Unrecognized function name {func_name}"));
-        let f_id = term.backend_id;
-        let term_input = term.schema.input.clone();
-        let n_term_input = term_input.len();
-        let term_id_sort = term_input[n_term_input - 1].name().to_string();
-        let csv_sorts: Vec<ArcSort> = term_input[..n_term_input - 1].to_vec();
-
-        // Locate the view by its `:internal-term-constructor` back-reference (as
-        // extraction / print-size do) and read the encoded shape off it.
-        let view = self
-            .functions
-            .values()
-            .find(|g| g.decl.term_constructor.as_deref() == Some(func_name))
-            .unwrap_or_else(|| panic!("no encoded view for {func_name}"));
         let view_id = view.backend_id;
-        let view_n_inputs = view.schema.input.len();
         // Proofs are on for this relation iff the view's proof column (its last
         // output) is not `Unit`; term-encoding-only mode uses `Unit` there.
-        let proofs = view.schema.outputs.last().unwrap().name() != "Unit";
-        // Constructor iff the FD view keys on all children and the term relation
-        // adds exactly the term id; a custom's (`:merge` or `:no-merge`) term
-        // relation also carries the output column.
-        let is_constructor = view.is_fd_view() && n_term_input == view_n_inputs + 1;
+        let proofs = view.func_type.outputs.last().unwrap().name() != "Unit";
+        // A constructor's and a relation's output is the e-class the load mints;
+        // a function's is a value the rows carry. That is the split the view
+        // records, and it has to agree with the one `input_actions` made when it
+        // built the per-row actions a fiat now names.
+        let output_is_minted = view.rows_are_enodes();
+        // The CSV columns: the view's children, plus any output they carry.
+        let mut csv_sorts: Vec<ArcSort> = view.func_type.input.clone();
+        if !output_is_minted {
+            csv_sorts.push(view.func_type.outputs[0].clone());
+        }
 
         let rows = Self::read_input_rows(self.fact_directory.as_deref(), &csv_sorts, &span, &file)?;
         let unit_val = self.backend.base_values().get(());
@@ -2567,31 +2735,36 @@ impl EGraph {
             })
             .collect();
 
-        // The term-id sort's fiat relation, named off the prefix the `Proof`
-        // sort's `:internal-proof-names` records.
-        let fiat_table = proofs.then(|| {
-            let fiat = self.proof_state.proof_names.fiat(&term_id_sort);
-            self.functions
-                .get(&fiat)
-                .unwrap_or_else(|| panic!("no fiat relation for sort {term_id_sort}"))
-                .backend_id
+        // Each row's existence is justified by the per-row action `lower_inputs`
+        // put in the program proof checking reads, named by position like every
+        // other fiat, so nothing here names the term the row built. The encoder
+        // stamped where those actions start onto the command.
+        let fiat_term = proofs.then(|| {
+            let relation = self.proof_state.proof_names.fiat_term_constructor.clone();
+            let table = self
+                .functions
+                .get(&relation)
+                .unwrap_or_else(|| panic!("no fiat-term relation"))
+                .backend_id;
+            let base = proof_base.expect("an encoded input carries where its rows start");
+            // A constructor row is the whole per-row action; a custom row is the
+            // `set`'s row node, which follows its argument and value nodes — one
+            // literal each, so one per CSV column.
+            let node = if output_is_minted { 0 } else { csv_sorts.len() };
+            (table, base, node)
         });
 
         let num_facts = value_rows.len();
         let mut batch: Vec<(egglog_bridge::FunctionId, Vec<Value>)> = Vec::new();
-        for value_row in value_rows {
+        for (row_index, value_row) in value_rows.into_iter().enumerate() {
             let fv = self.backend.fresh_id();
-            // Term-relation row: CSV columns (children [+ output]) + term id + Unit.
-            let mut frow = value_row.clone();
-            frow.push(fv);
-            frow.push(unit_val);
-            batch.push((f_id, frow));
 
-            let view_proof = if let Some(fiat_id) = fiat_table {
-                // Fiat proof of the base fact: `@Fiat_<Sort>(fv, fv)` (see
-                // `fiat_reflexive_proof`).
+            let view_proof = if let Some((fiat_id, base, node)) = fiat_term {
+                // `(FiatTerm <this row's action> <node> pf)`.
                 let pf = self.backend.fresh_id();
-                batch.push((fiat_id, vec![fv, fv, pf, unit_val]));
+                let at = self.backend.base_values().get((base + row_index) as i64);
+                let node = self.backend.base_values().get(node as i64);
+                batch.push((fiat_id, vec![at, node, pf, unit_val]));
                 pf
             } else {
                 unit_val
@@ -2601,7 +2774,7 @@ impl EGraph {
             // custom view stores the base output (already in `value_row`). The
             // proof column follows (`Unit` when the encoding carries no proofs).
             let mut vrow = value_row;
-            if is_constructor {
+            if output_is_minted {
                 vrow.push(fv);
             }
             vrow.push(view_proof);
@@ -2617,22 +2790,48 @@ impl EGraph {
         self.proof_state.proofs_enabled
     }
 
+    /// Commands and expression APIs resolve names in the source environment,
+    /// before term encoding changes function signatures and global storage.
+    fn typecheck_source<T>(
+        &mut self,
+        typecheck: impl FnOnce(&mut EGraph) -> Result<T, TypeError>,
+    ) -> Result<T, TypeError> {
+        let timer = Instant::now();
+        let result = match self.proof_state.original_typechecking.as_mut() {
+            Some(source) => typecheck(source),
+            None => typecheck(self),
+        };
+        self.overall_report.typecheck += timer.elapsed();
+        result
+    }
+
+    fn lower_source_globals(&mut self, commands: Vec<ResolvedNCommand>) -> Vec<ResolvedNCommand> {
+        let source_types = self
+            .proof_state
+            .original_typechecking
+            .as_mut()
+            .map(|source| &mut source.type_info)
+            .unwrap_or(&mut self.type_info);
+        remove_globals::remove_globals(
+            commands,
+            &mut self.parser.symbol_gen,
+            &mut source_types.global_tables,
+        )
+    }
+
     fn resolve_command_before_proofs(
         &mut self,
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
+        let typechecked = self.typecheck_source(|source| source.typecheck_program(&desugared))?;
+        let proofs_enabled = self.proof_state.proofs_enabled;
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
-            // Typecheck using the original egraph
-            // TODO this is ugly- we don't need an entire e-graph just for type information.
-            let typecheck_timer = Instant::now();
-            let typechecked = original_typechecking.typecheck_program(&desugared)?;
-            self.overall_report.typecheck += typecheck_timer.elapsed();
-
             for command in &typechecked {
                 if let Err(reason) = command_supports_proof_encoding(
                     &command.to_command(),
                     &original_typechecking.type_info,
+                    proofs_enabled,
                 ) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
@@ -2644,15 +2843,10 @@ impl EGraph {
 
             Ok(proof_form(typechecked, &mut self.parser.symbol_gen))
         } else {
-            let typecheck_timer = Instant::now();
-            let mut typechecked = self.typecheck_program(&desugared)?;
-            self.overall_report.typecheck += typecheck_timer.elapsed();
-
-            typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
                 self.names.check_shadowing(command)?;
             }
-            Ok(typechecked)
+            Ok(self.lower_source_globals(typechecked))
         }
     }
 
@@ -2684,32 +2878,26 @@ impl EGraph {
             // The proof checker consumes the per-row top-level fiat actions.
             let per_row_before_proofs =
                 ProofInstrumentor::lower_inputs(self, resolved_before_proofs.clone())?;
-            // Execution keeps every `(input …)` as an `Input` command, loaded
-            // natively at run time by `EGraph::native_input` straight into the
-            // encoded tables. Globals get the same function-style desugaring
-            // (`remove_globals`) as the non-encoding path.
-            let typechecked_no_globals =
-                remove_globals::remove_globals(resolved_before_proofs, &mut self.parser.symbol_gen);
-            // The term encoder runs before the encoded program is typechecked, so it
-            // can't rely on the later typecheck to populate `global_sorts`. Register
-            // the new global functions' sorts eagerly so `is_global` recognizes them
-            // while encoding.
-            for command in &typechecked_no_globals {
-                if let GenericNCommand::Function(fdecl) = command
-                    && fdecl.internal_let
-                    && let Some(output_sort) = self.type_info.sorts.get(fdecl.schema.output())
-                {
-                    self.type_info
-                        .global_sorts
-                        .insert(fdecl.name.clone(), output_sort.clone());
-                }
-            }
-            for command in &typechecked_no_globals {
+            // Execution keeps `(input …)` for native loading. Globals use the
+            // same desugaring as native execution, on the source type information.
+            for command in &resolved_before_proofs {
                 self.names.check_shadowing(command)?;
             }
-
+            let typechecked_no_globals = self.lower_source_globals(resolved_before_proofs);
+            let numbered_before = self.proof_state.global_actions_numbered;
             let term_encoding_added =
                 ProofInstrumentor::add_term_encoding(self, typechecked_no_globals)?;
+            // A fiat names a global action by index, so the encoder's numbering
+            // has to be the one `gather_global_actions` will walk. It counts the
+            // encoded program's commands while the checker walks the lowered
+            // one; the two agree only because neither lowering changes how many
+            // global actions a command contributes.
+            debug_assert_eq!(
+                self.proof_state.global_actions_numbered - numbered_before,
+                crate::proofs::proof_checker::gather_global_actions(&per_row_before_proofs).count(),
+                "the encoder numbered a different number of global actions than this command \
+                 contributes to the program proof checking reads"
+            );
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared =
@@ -2727,6 +2915,7 @@ impl EGraph {
                 let desugared_typechecked = remove_globals::remove_globals(
                     desugared_typechecked,
                     &mut self.parser.symbol_gen,
+                    &mut self.type_info.global_tables,
                 );
 
                 new_typechecked.extend(desugared_typechecked);
@@ -2738,8 +2927,8 @@ impl EGraph {
         }
     }
 
-    /// Run a program, returning the desugared outputs as well as the CommandOutputs.
-    /// Can optionally not run the commands, just adding type information.
+    /// Run a program and return its outputs, or resolve it without execution.
+    /// Only resolution retains the lowered commands in the returned value.
     fn process_program_internal(
         &mut self,
         program: Vec<Command>,
@@ -2783,13 +2972,17 @@ impl EGraph {
                     desugared_before_proofs.extend(resolved.resolved_before_proofs);
                 } else {
                     let resolved = self.resolve_command(command)?;
-                    if run_commands && self.are_proofs_enabled() {
-                        self.proof_check_program
-                            .extend(resolved.desugared_before_proofs.clone());
+                    // Execution callers discard resolved trees; retaining them here
+                    // duplicates large proof programs. Keep only the checker's history.
+                    if run_commands {
+                        if self.are_proofs_enabled() {
+                            self.proof_check_program
+                                .extend(resolved.desugared_before_proofs);
+                        }
+                    } else {
+                        desugared_before_proofs.extend(resolved.desugared_before_proofs);
+                        desugared.extend(resolved.desugared.clone());
                     }
-
-                    desugared_before_proofs.extend(resolved.desugared_before_proofs);
-                    desugared.extend(resolved.desugared.clone());
 
                     for processed in resolved.desugared {
                         // even in desugar mode we still run push and pop
@@ -2816,6 +3009,11 @@ impl EGraph {
 
     /// Run a program, represented as an AST.
     /// Return a list of messages.
+    ///
+    /// Egglog errors, including `(panic ...)`, are not transactional: effects
+    /// completed before an error remain. After a rule-action error, a successful
+    /// recovery rebuild leaves the database canonical and reusable. Rust panics
+    /// in extension code unwind normally instead of becoming [`enum@Error`] values.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
         let res = self.process_program_internal(program, true)?;
         Ok(res.outputs)
@@ -2823,7 +3021,7 @@ impl EGraph {
 
     /// Resolves an egglog program by parsing, typechecking, and desugaring each command.
     /// Outputs a new egglog program without any syntactic sugar, either user provided ([`CommandMacro`]) or built-in (e.g., `rewrite` commands).
-    /// Also removes globals from the program by replacing with new constructors.
+    /// Also lowers global bindings to rows in a shared table per sort.
     pub fn resolve_program(
         &mut self,
         filename: Option<String>,
@@ -2955,7 +3153,7 @@ impl EGraph {
 
     /// Convert from a Rust container type to an egglog value.
     pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
-        self.backend.with_execution_state(|state| {
+        self.with_execution_state(|state| {
             self.backend.container_values().register_val::<T>(x, state)
         })
     }
@@ -2964,8 +3162,40 @@ impl EGraph {
     ///
     /// `panics` if the function does not exist.
     pub fn get_size(&self, func: &str) -> usize {
-        let function_id = self.functions.get(func).unwrap().backend_id;
-        self.backend.table_size(function_id)
+        if let Some(function) = self.functions.get(func) {
+            self.backend.table_size(function.backend_id)
+        } else {
+            let table = self.global_table(func).expect("unknown function or global");
+            let key = self.backend.base_values().get::<S>(func.to_owned().into());
+            usize::from(self.backend.lookup_id(table.backend_id, &[key]).is_some())
+        }
+    }
+
+    /// The total number of rows across all non-hidden functions, including
+    /// global `let` bindings.
+    pub fn total_size(&self) -> usize {
+        self.functions
+            .values()
+            .filter(|f| !f.is_hidden())
+            .map(|f| self.backend.table_size(f.backend_id))
+            .sum()
+    }
+
+    /// The number of e-nodes in the e-graph: the total number of rows across
+    /// visible constructor tables for unionable eq-sorts, including their
+    /// term/proof-encoding views. Analysis functions, global lets, hidden
+    /// helpers, and `relation`s are excluded.
+    pub fn num_nodes(&self) -> usize {
+        self.functions
+            .values()
+            .filter(|f| {
+                !f.is_hidden()
+                    && !f.is_let_binding()
+                    && f.rows_are_enodes()
+                    && self.type_info.is_sort_unionable(f.extraction_layout().0)
+            })
+            .map(|f| self.backend.table_size(f.backend_id))
+            .sum()
     }
 
     /// Get a function by name.
@@ -2973,6 +3203,46 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    /// Returns the typed child values stored inside a container-sort value.
+    ///
+    /// `sort` must be a container sort and `value` must belong to that sort.
+    pub fn container_inner_values(&self, sort: &ArcSort, value: Value) -> Vec<(ArcSort, Value)> {
+        sort.inner_values(self.backend.container_values(), value)
+    }
+
+    /// Reconstructs a base-sort value into a [`TermDag`].
+    ///
+    /// `sort` must be a base sort and `value` must belong to that sort in this
+    /// e-graph.
+    pub fn reconstruct_base_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        termdag: &mut TermDag,
+    ) -> TermId {
+        sort.reconstruct_termdag_base(self.backend.base_values(), value, termdag)
+    }
+
+    /// Reconstructs a container-sort value from its extracted element terms.
+    ///
+    /// `sort` and `value` must identify a container in this e-graph, and
+    /// `element_terms` must correspond to [`EGraph::container_inner_values`] in
+    /// the same order.
+    pub fn reconstruct_container_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<TermId>,
+    ) -> TermId {
+        sort.reconstruct_termdag_container(
+            self.backend.container_values(),
+            value,
+            termdag,
+            element_terms,
+        )
     }
 
     /// Returns `true` if a user-defined command with the given name is
@@ -3066,10 +3336,9 @@ impl EGraph {
         f: impl FnOnce(FullState<'_, '_>) -> Result<R, Error>,
     ) -> Result<R, Error> {
         let registry = self.backend.action_registry().clone();
-        let guard = registry.read().unwrap();
-        let (result, changed) = self
-            .backend
-            .with_execution_state_tracked(|es| f(FullState::wrap(es, &guard, Context::Full)));
+        let guard = registry.read();
+        let (result, changed) =
+            self.with_execution_state_tracked(|es| f(FullState::wrap(es, &guard, Context::Full)));
         drop(guard);
         // A read-only closure stages nothing, so `flush_updates` would only do
         // a no-op merge plus a spurious timestamp bump and rebuild check. Skip
@@ -3126,12 +3395,15 @@ impl EGraph {
                 Some(())
             })?;
             let rule_ids = match &self.rulesets[&ruleset].kind {
-                RulesetKind::Rules(rules) => rules.values().map(|(_, id)| *id).collect::<Vec<_>>(),
+                RulesetKind::Rules(rules) => rules
+                    .values()
+                    .map(|rule| rule.backend_id)
+                    .collect::<Vec<_>>(),
                 RulesetKind::Combined(_) => unreachable!("the query ruleset was created directly"),
             };
             let iteration_report = self
                 .backend
-                .run_rules(&rule_ids)
+                .run_rules(&rule_ids, Some(&self.type_info))
                 .map_err(|e| Error::BackendError(e.to_string()))?;
             self.overall_report.commands_check += iteration_report.total_time();
             Ok(())
@@ -3145,7 +3417,7 @@ impl EGraph {
         }) = self.rulesets.swap_remove(&ruleset)
         {
             for (_, rule) in rules {
-                self.backend.free_rule(rule.1);
+                self.backend.free_rule(rule.backend_id);
             }
         }
         outcome?;
@@ -3785,6 +4057,65 @@ mod tests {
     use crate::PureState;
 
     #[test]
+    fn tree_decomposition_is_opt_in_with_a_per_rule_override() {
+        for no_decomp in [true, false] {
+            let mut egraph = EGraph::default();
+            assert!(egraph.no_decomp);
+            egraph.no_decomp = no_decomp;
+            egraph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                    (relation Edge (i64 i64))
+                    (relation Reach (i64 i64))
+                    (rule ((Edge a b) (Edge b c)) ((Reach a c)) :name "normal")
+                    (rule ((Edge a b) (Edge b c)) ((Reach a c))
+                          :name "single-bag" :no-decomp)
+                    (Edge 1 2)
+                    (Edge 2 3)
+                    (run 1)
+                    (check (Reach 1 3))
+                    (fail (check (Reach 3 1)))
+                    "#,
+                )
+                .unwrap();
+            let RulesetKind::Rules(rules) = &egraph.rulesets[""].kind else {
+                panic!("expected a plain ruleset");
+            };
+            assert_eq!(rules["normal"].no_decomp, no_decomp);
+            assert!(rules["single-bag"].no_decomp);
+        }
+    }
+
+    #[test]
+    fn execution_drops_resolved_commands_but_keeps_proof_history() {
+        let source = "(datatype T (A) (B)) (union (A) (B)) (check (= (A) (B)))";
+        for proofs in [false, true] {
+            let mut graph = EGraph::default();
+            if proofs {
+                graph = graph.with_proofs_enabled().with_proof_testing();
+            }
+            let program = graph.parse_program(None, source).unwrap();
+            let result = graph.process_program_internal(program, true).unwrap();
+            assert!(result.resolved.is_empty());
+            assert!(result.resolved_before_proofs.is_empty());
+            assert_eq!(!graph.proof_check_program.is_empty(), proofs);
+
+            // Resolution still returns both representations for desugaring and
+            // the proof checker, without registering execution history.
+            let mut graph = EGraph::default();
+            if proofs {
+                graph = graph.with_proofs_enabled();
+            }
+            let program = graph.parse_program(None, source).unwrap();
+            let result = graph.process_program_internal(program, false).unwrap();
+            assert!(!result.resolved.is_empty());
+            assert_eq!(!result.resolved_before_proofs.is_empty(), proofs);
+            assert!(graph.proof_check_program.is_empty());
+        }
+    }
+
+    #[test]
     fn encoded_source_typecheck_is_charged_to_the_outer_egraph() {
         let mut egraph = EGraph::new_with_term_encoding();
 
@@ -3968,6 +4299,28 @@ mod tests {
     }
 
     #[test]
+    fn proof_support_adds_no_fail_specific_term_read_restrictions() {
+        for source in [
+            "(datatype N (A)) (let $a (A)) (fail (extract $a -1))",
+            "(datatype N (A)) (relation R (N)) (let $a (A)) \
+             (R $a) (fail (delete (R $a)) (panic \"stop\"))",
+        ] {
+            let mut egraph = EGraph::default();
+            let resolved = egraph.resolve_program(None, source).unwrap();
+            assert!(
+                program_supports_proofs(&resolved, &egraph.type_info),
+                "{source}"
+            );
+        }
+
+        let source = "(datatype N (A)) (let $a (A)) \
+                      (fail (output \"term.txt\" $a) (panic \"stop\"))";
+        let mut egraph = EGraph::default();
+        let resolved = egraph.resolve_program(None, source).unwrap();
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
     fn proof_support_rejects_unstable_fn_primitives_without_validators() {
         let mut egraph = EGraph::default();
         let resolved = egraph
@@ -4102,32 +4455,37 @@ mod tests {
 
     #[test]
     fn test_typecheck_expr_with_bindings_and_output_uses_context() {
-        let mut egraph = EGraph::default();
-        egraph.add_full_primitive(FullOnly, None);
-        let mut parser = crate::ast::Parser::default();
-        let expr = parser.get_expr_from_string(None, "(full-only)").unwrap();
+        for mut egraph in [
+            EGraph::default(),
+            EGraph::new_with_term_encoding(),
+            EGraph::new_with_proofs(),
+        ] {
+            egraph.add_full_primitive(FullOnly, None);
+            let mut parser = crate::ast::Parser::default();
+            let expr = parser.get_expr_from_string(None, "(full-only)").unwrap();
 
-        let resolved = egraph
-            .typecheck_expr_with_bindings_and_output(
-                &expr,
-                &[],
-                I64Sort.to_arcsort(),
-                Context::Full,
-            )
-            .unwrap();
-        assert_eq!(resolved.output_type().name(), I64Sort.name());
+            let resolved = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Full,
+                )
+                .unwrap();
+            assert_eq!(resolved.output_type().name(), I64Sort.name());
 
-        let err = egraph
-            .typecheck_expr_with_bindings_and_output(
-                &expr,
-                &[],
-                I64Sort.to_arcsort(),
-                Context::Pure,
-            )
-            .unwrap_err();
-        match err {
-            TypeError::UnboundFunction(name, _) => assert_eq!(name, "full-only"),
-            other => panic!("expected unbound function, got {other:?}"),
+            let err = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Pure,
+                )
+                .unwrap_err();
+            match err {
+                TypeError::UnboundFunction(name, _) => assert_eq!(name, "full-only"),
+                other => panic!("expected unbound function, got {other:?}"),
+            }
         }
     }
 
@@ -4158,27 +4516,88 @@ mod tests {
 
     #[test]
     fn test_typecheck_expr_with_bindings_and_output_rewrites_globals() {
-        let mut egraph = EGraph::default();
-        egraph.parse_and_run_program(None, "(let $x 1)").unwrap();
-        let mut parser = crate::ast::Parser::default();
-        let expr = parser.get_expr_from_string(None, "$x").unwrap();
+        for mut egraph in [
+            EGraph::default(),
+            EGraph::new_with_term_encoding(),
+            EGraph::new_with_proofs(),
+        ] {
+            egraph
+                .parse_and_run_program(None, "(let $x 1) (let $y (+ $x 1))")
+                .unwrap();
+            let mut parser = crate::ast::Parser::default();
+            for (text, expected) in [("$x", 1), ("(+ $x $y)", 3)] {
+                let expr = parser.get_expr_from_string(None, text).unwrap();
+                let resolved = egraph
+                    .typecheck_expr_with_bindings_and_output(
+                        &expr,
+                        &[],
+                        I64Sort.to_arcsort(),
+                        Context::Read,
+                    )
+                    .unwrap();
 
-        let resolved = egraph
-            .typecheck_expr_with_bindings_and_output(
-                &expr,
-                &[],
-                I64Sort.to_arcsort(),
-                Context::Read,
-            )
-            .unwrap();
-
-        match resolved {
-            ResolvedExpr::Call(_, ResolvedCall::Func(func), children) => {
-                assert_eq!(func.name, "$x");
-                assert!(children.is_empty());
-                assert_eq!(func.output().name(), I64Sort.name());
+                let value = egraph.eval_resolved_expr(span!(), &resolved).unwrap();
+                assert_eq!(egraph.value_to_base::<i64>(value), expected);
             }
-            other => panic!("expected global function call rewrite, got {other:?}"),
+
+            let expr = parser.get_expr_from_string(None, "(+ $x local)").unwrap();
+            let resolved = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[("local".into(), span!(), I64Sort.to_arcsort())],
+                    I64Sort.to_arcsort(),
+                    Context::Read,
+                )
+                .unwrap();
+            assert_eq!(resolved.output_type().name(), I64Sort.name());
+        }
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_restores_global_scope() {
+        for mut egraph in [
+            EGraph::default(),
+            EGraph::new_with_term_encoding(),
+            EGraph::new_with_proofs(),
+        ] {
+            let mut parser = crate::ast::Parser::default();
+            let expr = parser.get_expr_from_string(None, "$scoped").unwrap();
+            egraph
+                .parse_and_run_program(None, "(push) (let $scoped 1)")
+                .unwrap();
+            egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Read,
+                )
+                .unwrap();
+
+            egraph.parse_and_run_program(None, "(pop)").unwrap();
+            assert!(matches!(
+                egraph.typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Read,
+                ),
+                Err(TypeError::Unbound(name, _)) if name == "$scoped"
+            ));
+
+            egraph
+                .parse_and_run_program(None, "(let $scoped true)")
+                .unwrap();
+            let resolved = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    BoolSort.to_arcsort(),
+                    Context::Read,
+                )
+                .unwrap();
+            let value = egraph.eval_resolved_expr(span!(), &resolved).unwrap();
+            assert!(egraph.value_to_base::<bool>(value));
         }
     }
 
@@ -4343,6 +4762,28 @@ mod tests {
     }
 
     #[test]
+    fn test_rule_rejects_combined_and_unbound_rulesets() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                None,
+                "(relation number (i64)) (ruleset base) \
+                 (unstable-combined-ruleset rules1and2 base)",
+            )
+            .unwrap();
+
+        let err = egraph
+            .parse_and_run_program(None, "(rule () ((number 1)) :ruleset rules1and2)")
+            .unwrap_err();
+        assert!(matches!(err, Error::CombinedRulesetError(name, _) if name == "rules1and2"));
+
+        let err = egraph
+            .parse_and_run_program(None, "(rule () ((number 2)) :ruleset unboundruleset)")
+            .unwrap_err();
+        assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "unboundruleset"));
+    }
+
+    #[test]
     fn test_combined_ruleset_with_mixed_responsibilities_errors() {
         let mut egraph = EGraph::default();
         let maintenance = egraph
@@ -4397,6 +4838,58 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, Error::IoError(..)));
+    }
+
+    /// Regression test: `SymbolGen::fresh` minted colliding names for
+    /// different hints (e.g. hint "x" at count 11 and hint "x1" at count 1
+    /// both produce "@x11"). Two distinct globals sharing one minted name
+    /// were then conflated while compiling an action, silently binding a
+    /// global to the wrong term.
+    #[test]
+    fn test_fresh_name_collision_globals() {
+        let mut egraph = EGraph::default();
+        // Each `(or2 x y)` command consumes one `fresh("x")`. After the ten
+        // `t` commands (plus the definition of `x` itself), the minted name
+        // for a fresh "x" is "@x11". Global `x1` has only been minted once
+        // (by its own definition), so minting for it also produces "@x11".
+        // The final command references both globals, conflating them.
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (sort B)
+                (constructor var (String) B)
+                (constructor and2 (B B) B)
+                (constructor or2 (B B) B)
+                (let x (var "x"))
+                (let y (var "y"))
+                (let t1 (or2 x y))
+                (let t2 (or2 x y))
+                (let t3 (or2 x y))
+                (let t4 (or2 x y))
+                (let t5 (or2 x y))
+                (let t6 (or2 x y))
+                (let t7 (or2 x y))
+                (let t8 (or2 x y))
+                (let t9 (or2 x y))
+                (let t10 (or2 x y))
+                (let x1 (var "x1"))
+                (let out (and2 x x1))
+                "#,
+            )
+            .unwrap();
+
+        // `out` must equal the term it was bound to. With the name
+        // collision, the last action was miscompiled as
+        // `(set (out) (and2 (x1) (x1)))`, so this check failed.
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (check (= out (and2 (var "x") x1)))
+                "#,
+            )
+            .unwrap();
     }
 }
 

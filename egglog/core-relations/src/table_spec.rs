@@ -1,8 +1,8 @@
 //! High-level types for specifying the behavior and layout of tables.
 //!
-//! Tables are a mapping from some set of keys to another set of values. Tables
-//! can also be "sorted by" a columna dn "partitioned by" another. This can help
-//! speed up queries.
+//! Tables either map a set of keys to values or store flat rows without a
+//! primary key. Tables can also be "sorted by" a column and "partitioned by"
+//! another. This can help speed up queries.
 
 use std::{
     any::Any,
@@ -20,7 +20,6 @@ use crate::{
         mask::{Mask, MaskIter},
     },
     common::Value,
-    hash_index::{IndexBase, TupleIndex},
     offsets::{RowId, Subset, SubsetRef},
     pool::{PoolSet, Pooled, with_pool_set},
     row_buffer::{RowBuffer, RowSink, TaggedRowBuffer},
@@ -50,15 +49,38 @@ pub struct TableVersion {
     // NB: we may want to make `Offset` and `RowId` the same.
 }
 
+/// The logical schema and supported access pattern of a table.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TableSchema {
+    /// A keyed table that enforces the functional dependency from keys to
+    /// values and supports primary-key lookups.
+    Fd {
+        /// The number of key columns.
+        n_keys: usize,
+        /// The number of non-key (value) columns.
+        n_vals: usize,
+    },
+    /// A flat row store with no primary key or keyed operations.
+    Flat {
+        /// The total number of columns.
+        n_cols: usize,
+    },
+}
+
+impl TableSchema {
+    /// The total number of columns stored by the table.
+    pub fn arity(self) -> usize {
+        match self {
+            TableSchema::Fd { n_keys, n_vals } => n_keys + n_vals,
+            TableSchema::Flat { n_cols } => n_cols,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct TableSpec {
-    /// The number of key columns for the table.
-    pub n_keys: usize,
-
-    /// The number of non-key (i.e. value) columns in the table.
-    ///
-    /// The total "arity" of the table is `n_keys + n_vals`.
-    pub n_vals: usize,
+    /// The table's logical schema and access pattern.
+    pub schema: TableSchema,
 
     /// Columns that cannot be cached across generations.
     ///
@@ -76,7 +98,7 @@ pub struct TableSpec {
 impl TableSpec {
     /// The total number of columns stored by the table.
     pub fn arity(&self) -> usize {
-        self.n_keys + self.n_vals
+        self.schema.arity()
     }
 }
 
@@ -166,8 +188,9 @@ pub struct Row {
 
 /// An interface for a table.
 pub trait Table: Any + Send + Sync {
-    /// A variant of clone that returns a boxed trait object; this trait object
-    /// must contain all of the data associated with the current table.
+    /// A variant of clone that returns a boxed trait object containing the
+    /// table's committed data. Callers must merge pending mutation buffers
+    /// before cloning if those mutations should be included.
     fn dyn_clone(&self) -> Box<dyn Table>;
 
     /// If this table can perform a table-level rebuild, construct a [`Rebuilder`] for it.
@@ -254,6 +277,10 @@ pub trait Table: Any + Send + Sync {
     /// `start` token, ending after up to `n` rows, returning the next start
     /// token if more rows remain. Only invoke `f` on rows that match the given
     /// constraints.
+    ///
+    /// An implementation must not invoke `f` on a stale row, constrained or
+    /// not, so callers need not filter stale rows back out.
+    /// `tests/repro-stale-rows.egg` guards the constrained path.
     ///
     /// This method is _not_ object safe, but it is used to define various
     /// "default" implementations of object-safe methods like `scan` and
@@ -377,8 +404,8 @@ pub trait Table: Any + Send + Sync {
 
     /// Look up a single row by the given key values, if it is in the table.
     ///
-    /// The number of values specified by `keys` should match the number of
-    /// primary keys for the table.
+    /// The table must have a [`TableSchema::Fd`] schema, and the number of
+    /// values specified by `keys` should match its number of primary keys.
     fn get_row(&self, key: &[Value]) -> Option<Row>;
 
     /// Look up the given column of single row by the given key values, if it is
@@ -442,33 +469,6 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         table.scan_generic_bounded(subset, start, n, &[], |row_id, row| {
             out.add_row(row_id, row);
         })
-    }
-    fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
-        let table = table.as_any().downcast_ref::<T>().unwrap();
-        let mut res = TupleIndex::new(cols.len());
-        match cols {
-            [] => {}
-            [col] => table.scan_generic(subset, |row_id, row| {
-                res.add_row(&[row[col.index()]], row_id);
-            }),
-            [x, y] => table.scan_generic(subset, |row_id, row| {
-                res.add_row(&[row[x.index()], row[y.index()]], row_id);
-            }),
-            [x, y, z] => table.scan_generic(subset, |row_id, row| {
-                res.add_row(&[row[x.index()], row[y.index()], row[z.index()]], row_id);
-            }),
-            _ => {
-                let mut scratch = SmallVec::<[Value; 8]>::new();
-                table.scan_generic(subset, |row_id, row| {
-                    for col in cols {
-                        scratch.push(row[col.index()]);
-                    }
-                    res.add_row(&scratch, row_id);
-                    scratch.clear();
-                });
-            }
-        }
-        res
     }
     fn for_each_col(
         &self,
@@ -628,6 +628,8 @@ impl WrappedTable {
     /// Starting at the given [`Offset`] into `subset`, scan up to `n` rows and
     /// write them to `out`. Return the next starting offset. If no offset is
     /// returned then the subset has been scanned completely.
+    /// Rows written to `out` are never stale, so callers can take the buffer's
+    /// full contents.
     pub fn scan_bounded(
         &self,
         subset: SubsetRef,
@@ -638,13 +640,10 @@ impl WrappedTable {
         self.as_ref().scan_bounded(subset, start, n, out)
     }
 
-    /// Group the contents of the given subset by the given columns.
-    pub(crate) fn group_by_key(&self, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
-        self.as_ref().group_by_key(subset, cols)
-    }
-
     /// A variant fo [`WrappedTable::scan_bounded`] that projects a subset of
     /// columns and only appends rows that match the given constraints.
+    /// Rows written to `out` are never stale, so callers can take the buffer's
+    /// full contents.
     pub fn scan_project(
         &self,
         subset: SubsetRef,
@@ -723,8 +722,6 @@ pub(crate) trait TableWrapper: Send + Sync {
         n: usize,
         out: &mut TaggedRowBuffer,
     ) -> Option<Offset>;
-    fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex;
-
     /// Scan each row in `subset`, calling `f(row_id, col_value)` for each.
     /// Unlike `scan_project`, this writes directly to the callback with no
     /// intermediate buffer.
@@ -826,11 +823,6 @@ impl WrappedTableRef<'_> {
         out: &mut TaggedRowBuffer,
     ) -> Option<Offset> {
         self.wrapper.scan_bounded(self.inner, subset, start, n, out)
-    }
-
-    /// Group the contents of the given subset by the given columns.
-    pub(crate) fn group_by_key(&self, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
-        self.wrapper.group_by_key(self.inner, subset, cols)
     }
 
     /// Scan each row in `subset` and call `f(row_id, col_value)` for each.

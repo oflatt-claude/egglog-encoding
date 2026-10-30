@@ -211,40 +211,40 @@ def build_target(
     engine: Engine = "egglog",
 ) -> tuple[Path, str]:
     checkout_path = Path(row.path)
-    engine_label = "" if engine == "egglog" else " · egg"
+    engine_label = "" if engine == "egglog" else f" · {engine}"
     console.print(Text.assemble(("Building", "bold"), " ", _display_target(row), engine_label))
-    package = "egglog-experimental" if engine == "egglog" else "egg-math-benchmark"
-    if engine == "egglog":
-        profile_args = ["--release"] if build_profile == "release" else ["--profile", "profiling"]
-        build_args = [
-            "cargo",
-            "build",
-            "--locked",
-            *profile_args,
-            "-p",
-            package,
-            "--no-default-features",
-            "--features",
-            "bin",
-            "--bin",
-            "egglog-experimental",
-        ]
-    elif build_profile == "release":
-        build_args = ["cargo", "build", "--release", "-p", package]
-    else:
-        build_args = ["cargo", "build", "--profile", "profiling", "-p", package]
-    subprocess.run(
-        build_args,
-        cwd=checkout_path,
-        check=True,
-        stdout=sys.stderr,
-        stderr=sys.stderr,
-    )
-    binary_stem = "egglog-experimental" if engine == "egglog" else "egg-math-benchmark"
-    binary_name = f"{binary_stem}.exe" if os.name == "nt" else binary_stem
+    package = {"egglog": "egglog-experimental", "egg": "egg-math-benchmark"}.get(engine)
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", "target"))
     if not target_dir.is_absolute():
         target_dir = checkout_path / target_dir
+    build_args = ["cargo", "build"]
+    if engine == "egglog":
+        build_args.append("--locked")
+    if build_profile == "release":
+        build_args.append("--release")
+    else:
+        build_args.extend(("--profile", build_profile))
+    if package is None:
+        native = checkout_path / "benchmarks/disequality/native"
+        target_dir = checkout_path / "benchmarks/local/parameter-native/target"
+        build_args.extend(
+            (
+                "--locked",
+                "--manifest-path",
+                str(native / "Cargo.toml"),
+                "--target-dir",
+                str(target_dir),
+                "--bin",
+                engine,
+            )
+        )
+    else:
+        build_args.extend(("-p", package))
+        if engine == "egglog":
+            build_args.extend(("--no-default-features", "--features", "bin", "--bin", package))
+    subprocess.run(build_args, cwd=checkout_path, check=True, stdout=sys.stderr, stderr=sys.stderr)
+    binary_stem = package or engine
+    binary_name = f"{binary_stem}.exe" if os.name == "nt" else binary_stem
     binary_path = target_dir / build_profile / binary_name
     if not binary_path.is_file():
         raise FileNotFoundError(f"{build_profile} binary was not produced: {binary_path}")
@@ -312,10 +312,16 @@ def workload_command(
     binary_path: Path,
     file_spec: FileSpec,
     treatment: Treatment,
+    disequality_encoding: str = "nee",
 ) -> list[str]:
     specification = TREATMENT_SPECS[treatment]
-    if specification.engine == "egg":
+    file_spec = file_spec.for_engine(specification.engine)
+    if specification.engine != "egglog":
+        if disequality_encoding != "nee":
+            raise ValueError("disequality encoding selection is only supported by egglog treatments")
         validate_engine_workload(file_spec, treatment)
+        if specification.engine != "egg":
+            return [str(binary_path), str(file_spec.absolute_path), "100000", "10000"]
         return [str(binary_path), *specification.flags]
     return [
         str(binary_path),
@@ -323,6 +329,7 @@ def workload_command(
         "no-messages",
         "-j",
         "1",
+        *(["--disequality-encoding", disequality_encoding] if disequality_encoding != "nee" else []),
         *(["--fact-directory", str(file_spec.fact_directory)] if file_spec.fact_directory is not None else []),
         *specification.flags,
         str(file_spec.absolute_path),

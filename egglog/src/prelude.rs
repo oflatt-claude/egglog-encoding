@@ -88,14 +88,14 @@
 //! - [`crate::EGraph::extract_value`] — picks the lowest-cost
 //!   representative under the default tree-additive cost model and
 //!   returns it as a [`crate::TermId`] in a [`crate::TermDag`].
-//! - [`crate::EGraph::extract_value_with_cost_model`] — same but with
-//!   a user-supplied cost model, an impl of
-//!   [`crate::extract::CostModel`].
-//! - [`crate::EGraph::extract_value_to_string`] — convenience: prints
-//!   the extracted term back as egglog-syntax text.
+//! - [`crate::EGraph::extract_best`] / [`crate::EGraph::extract_variants`] —
+//!   extract batches of roots under the default cost model.
+//! - [`crate::EGraph::extract_best_with_cost_model`] /
+//!   [`crate::EGraph::extract_variants_with_cost_model`] — do the same under a
+//!   user-supplied cost model.
 //!
 //! See the [`crate::extract`] module for the full API
-//! ([`crate::extract::Extractor`], variant extraction,
+//! ([`crate::extract::TreeExtractor`], variant extraction,
 //! sort-restricted extraction, custom cost types).
 //!
 //! To get the `(sort, Value)` pair an `extract_value` call needs in
@@ -777,7 +777,7 @@ pub fn add_function(
         merge: merge.map(GenericMerge::result_only),
         hidden: false,
         let_binding: false,
-        term_constructor: None,
+        internal_view: None,
         unextractable: false,
         identity_vals: None,
         cost: None,
@@ -801,7 +801,6 @@ pub fn add_constructor(
         unextractable,
         hidden: false,
         let_binding: false,
-        term_constructor: None,
     }])
 }
 

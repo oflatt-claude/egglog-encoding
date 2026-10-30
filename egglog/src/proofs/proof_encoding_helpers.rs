@@ -2,7 +2,9 @@
 //! naming, headers, and checking whether a program supports proof encoding.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use egglog_concurrency::ReadOptimizedLock;
 
 use crate::{
     ArcSort, EGraph, TypeInfo, Value,
@@ -25,6 +27,12 @@ pub(crate) struct EncodingNames {
     /// value: sort `S`'s constructor is [`Self::fiat`]. Derived from one name
     /// for the same reason as [`Self::rule_fused_prefix`].
     pub(crate) fiat_prefix: String,
+    /// The fiat justification of a top-level `union`, which names the global
+    /// action it came from rather than its two endpoints.
+    pub(crate) fiat_union_constructor: String,
+    /// The fiat justification that a term a top-level action built exists, which
+    /// names where that term is written rather than naming the term.
+    pub(crate) fiat_term_constructor: String,
     /// The sorts [`ProofInstrumentor::fiat_constructor`] has declared.
     pub(crate) fiat_declared: HashSet<String>,
     /// Prefix of the rule proofs carrying their body premises inline: premise
@@ -52,14 +60,14 @@ pub(crate) struct EncodingNames {
     pub(crate) congr_constructor: String,
     pub(crate) congr_all_constructor: String,
     pub(crate) proj_constructor: String,
-    /// Prefix of the element-matching projections, minted where the child's
-    /// position in the term is only known once the term is in hand (see
-    /// [`crate::proofs::proof_container_rebuild`]). The child is named by value,
-    /// so sort `S`'s constructor is [`Self::proj_all`]. Derived from one name for
-    /// the same reason as [`Self::rule_fused_prefix`].
-    pub(crate) proj_all_prefix: String,
-    /// The sorts [`ProofInstrumentor::proj_all_constructor`] has declared.
-    pub(crate) proj_all_declared: HashSet<String>,
+    /// Prefix of the primitive projections, minted where a rule body reads an
+    /// element out of a container and the child's position in the term is not
+    /// known at the site. The row names that call by where it sits in the
+    /// rule body, so a call taking `k` arguments uses [`Self::proj_prim`] of `k`.
+    /// Derived from one name for the same reason as [`Self::rule_fused_prefix`].
+    pub(crate) proj_prim_prefix: String,
+    /// The argument counts [`ProofInstrumentor::proj_prim_constructor`] has declared.
+    pub(crate) proj_prim_declared: HashSet<usize>,
     pub(crate) container_normalize_constructor: String,
     pub(crate) eval_constructor: String,
     pub(crate) fn_to_term_sort: HashMap<String, String>,
@@ -69,7 +77,6 @@ pub(crate) struct EncodingNames {
     pub(crate) rebuilding_cleanup_ruleset_name: String,
     pub(crate) subsume_ruleset_name: String,
     // Per-function fresh names
-    pub(crate) view_name: HashMap<String, String>,
     pub(crate) subsumed_name: HashMap<String, String>,
     /// The functions whose subsumption scaffolding some program has already
     /// declared (see [`ProofInstrumentor::subsume_marker`]).
@@ -340,12 +347,12 @@ pub(crate) enum Justification {
     /// Term-free merge justification for a merge-body subexpression: function
     /// name, the two premise (view) proof expressions, and the pre-order index of
     /// this subexpression in the merge body (matches `subexpr_at_index` in proof
-    /// conversion). It names no term, so it needs neither the merged term nor
+    /// lifting). It names no term, so it needs neither the merged term nor
     /// the function key/children — usable in a `:merge` action.
     MergeIdx(String, String, String, usize),
     /// Term-free merge justification for the whole view row (function name + two
     /// premise proof expressions). The conclusion `f(children, merged)` is
-    /// reconstructed during proof conversion by running the whole merge body on
+    /// reconstructed during proof lifting by running the whole merge body on
     /// the premise outputs, so the row names no term.
     MergeRow(String, String, String),
 }
@@ -383,15 +390,18 @@ impl EncodingNames {
             .is_some_and(|sort| sort.starts_with('_'))
     }
 
-    /// The element-matching projection naming a child of `sort`.
-    pub(crate) fn proj_all(&self, sort: &str) -> String {
-        format!("{}_{sort}", self.proj_all_prefix)
+    /// The primitive projection for a body call taking `args` arguments.
+    pub(crate) fn proj_prim(&self, args: usize) -> String {
+        format!("{}_{args}", self.proj_prim_prefix)
     }
 
-    /// Whether `head` is one of [`Self::proj_all`]'s constructors.
-    pub(crate) fn is_proj_all(&self, head: &str) -> bool {
-        head.strip_prefix(&self.proj_all_prefix)
-            .is_some_and(|sort| sort.starts_with('_'))
+    /// The argument count `head` carries, when it is one of
+    /// [`Self::proj_prim`]'s constructors.
+    pub(crate) fn proj_prim_args(&self, head: &str) -> Option<usize> {
+        head.strip_prefix(&self.proj_prim_prefix)?
+            .strip_prefix('_')?
+            .parse()
+            .ok()
     }
 
     /// The rule proof constructor carrying `arity` premise proofs inline.
@@ -427,6 +437,8 @@ impl EncodingNames {
         Self {
             proof_datatype: symbol_gen.fresh("Proof"),
             fiat_prefix: symbol_gen.fresh("Fiat"),
+            fiat_union_constructor: symbol_gen.fresh("FiatUnion"),
+            fiat_term_constructor: symbol_gen.fresh("FiatTerm"),
             fiat_declared: HashSet::default(),
             rule_fused_prefix: symbol_gen.fresh("Rule"),
             rule_fused_declared: HashSet::default(),
@@ -440,8 +452,8 @@ impl EncodingNames {
             congr_constructor: symbol_gen.fresh("Congr"),
             congr_all_constructor: symbol_gen.fresh("CongrAll"),
             proj_constructor: symbol_gen.fresh("Proj"),
-            proj_all_prefix: symbol_gen.fresh("ProjAll"),
-            proj_all_declared: HashSet::default(),
+            proj_prim_prefix: symbol_gen.fresh("ProjPrim"),
+            proj_prim_declared: HashSet::default(),
             container_normalize_constructor: symbol_gen.fresh("ContainerNormalize"),
             eval_constructor: symbol_gen.fresh("Eval"),
             fn_to_term_sort: HashMap::default(),
@@ -449,7 +461,6 @@ impl EncodingNames {
             rebuilding_ruleset_name: symbol_gen.fresh("rebuilding"),
             rebuilding_cleanup_ruleset_name: symbol_gen.fresh("rebuilding_cleanup"),
             subsume_ruleset_name: symbol_gen.fresh("subsume_ruleset"),
-            view_name: HashMap::default(),
             subsumed_name: HashMap::default(),
             subsume_declared: HashSet::default(),
         }
@@ -631,21 +642,6 @@ impl ProofInstrumentor<'_> {
         res.expect("internally generated term-encoding expression must parse")
     }
 
-    // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.
-    pub(crate) fn view_name(&mut self, name: &str) -> String {
-        if let Some(n) = self.egraph.proof_state.proof_names.view_name.get(name) {
-            n.clone()
-        } else {
-            let fresh_name = self.egraph.parser.symbol_gen.fresh(&format!("{name}View"));
-            self.egraph
-                .proof_state
-                .proof_names
-                .view_name
-                .insert(name.to_string(), fresh_name.clone());
-            fresh_name
-        }
-    }
-
     pub(crate) fn subsumed_name(&mut self, name: &str) -> String {
         if let Some(n) = self.egraph.proof_state.proof_names.subsumed_name.get(name) {
             n.clone()
@@ -709,6 +705,8 @@ impl ProofInstrumentor<'_> {
         let EncodingNames {
             ref proof_datatype,
             ref fiat_prefix,
+            ref fiat_union_constructor,
+            ref fiat_term_constructor,
             ref rule_link_constructor,
             ref merge_fn_idx_constructor,
             ref merge_fn_row_constructor,
@@ -717,7 +715,7 @@ impl ProofInstrumentor<'_> {
             ref congr_constructor,
             ref congr_all_constructor,
             ref proj_constructor,
-            ref proj_all_prefix,
+            ref proj_prim_prefix,
             ref container_normalize_constructor,
             ref eval_constructor,
             ..
@@ -727,12 +725,27 @@ impl ProofInstrumentor<'_> {
             "
 ;; The proof datatype records the global proof constructor names so container
 ;; rebuild can recover them on re-parse (see ContainerRebuildSpec).
-(sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_prefix} {proj_constructor} {proj_all_prefix})
+(sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_prefix} {proj_constructor} {proj_prim_prefix})
 
 ;; Proof terms are relations, not constructors: the encoding mints a fresh id
 ;; and asserts the row (both in one `mint-<Relation>!` call), so congruent
 ;; duplicates are kept (never merged away) rather than relying on native
 ;; congruence. The final column of each relation is the minted output id.
+
+;; Fiat justification of a top-level `union`: which global action it is in the
+;; program proof checking reads, and whether the encoding oriented the edge
+;; against that action's operand order (see the `ordering-swapped` primitive).
+;; Lifting evaluates the action to recover both endpoints, so the row names
+;; neither of them:
+;;   (FiatUnion <global action index> <0 or 1> <proof>)
+(function {fiat_union_constructor} (i64 i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+
+;; Fiat justification that a term a top-level action builds exists, stating
+;; `t = t`. It names where the term is written — which global action, and which
+;; node of it in `action_exprs` order — so lifting evaluates that node instead
+;; of the row naming the term:
+;;   (FiatTerm <global action index> <expression index> <proof>)
+(function {fiat_term_constructor} (i64 i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the
 ;; proposition being justified. Its endpoints are values of one sort, so there is
@@ -746,7 +759,7 @@ impl ProofInstrumentor<'_> {
 ;; the shared premises and the bridges recorded before it — plus the one *bridge*
 ;; premise recorded since: the view-row proof of the subterm the head interned,
 ;; saying which e-class it landed in. `<column>` says which proof of the head's
-;; lowering this is (see `proof_head`); proof conversion derives the proposition
+;; lowering this is (see `proof_head`); proof lifting derives the proposition
 ;; from it, so no term is stored. The rule name is not repeated either: it is
 ;; read off the `Rule_<k>` row ending the chain.
 ;;   (RuleLink <earlier column's proof> <bridge proof> <column>)
@@ -766,11 +779,11 @@ impl ProofInstrumentor<'_> {
 
 ;; term-free merge justification for an FD custom-function view subexpression:
 ;; name of function, two premise proofs, and the pre-order index of the merge-body
-;; subexpression whose conclusion is reconstructed during proof conversion
+;; subexpression whose conclusion is reconstructed during proof lifting
 (function {merge_fn_idx_constructor} (String {proof_datatype} {proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 ;; term-free merge justification for an FD custom-function view row:
 ;; name of function and two premise proofs; the whole-row conclusion is
-;; reconstructed during proof conversion by running the whole merge body
+;; reconstructed during proof lifting by running the whole merge body
 (function {merge_fn_row_constructor} (String {proof_datatype} {proof_datatype} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; transitivity of equality proofs
@@ -793,12 +806,16 @@ impl ProofInstrumentor<'_> {
 ;; produces a justification that ci = ci
 (function {proj_constructor} ({proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
-;; element-matching projection: given a proof that t1 = c and a term a that is a
-;; child of c, produces a justification that a = a. Used where the child's
-;; position is only known once the term is in hand. The child is named by value,
-;; so there is a `ProjAll_<Sort>` per projected sort, declared with that sort (see
-;; `ProofInstrumentor::proj_all_constructor`):
-;;   (ProjAll_<Sort> <proof> <term> <proof>)
+;; primitive projection: given a proof per argument of a rule-body call that
+;; reads an element out of a container, produces a justification that the element
+;; equals itself. The call is named by its rule and its index in that rule's body
+;; rather than by the primitive's name, which would not pin down a validator
+;; since primitives are overloaded. Proof lifting resolves the typed
+;; container argument from that primitive's signature, runs its validator on the
+;; argument terms, and projects along the term path to the result only from that
+;; argument, so the row stores no term. There is a `ProjPrim_<k>` per argument
+;; count (see `ProofInstrumentor::proj_prim_constructor`):
+;;   (ProjPrim_<k> <rule name> <body index> <one proof per argument> <proof>)
 
 ;; given a proof that t1 = c, where c is a container term, produces a proof that
 ;; t1 = normalize(c) (the container's canonicalization: sort/dedup for sets,
@@ -866,6 +883,12 @@ pub enum ProofEncodingUnsupportedReason {
     )]
     EqSortPrimitiveResultWithoutContainer,
     #[error(
+        "a primitive whose result could come from more than one of its container arguments is \
+         not supported by proof encoding. The proof projects the element out of one container, \
+         so which one has to be unambiguous."
+    )]
+    ElementFromSeveralContainers,
+    #[error(
         "sort has a presort (custom sort container implementation). Custom sorts are not supported by proof encoding."
     )]
     SortWithPresort,
@@ -875,12 +898,12 @@ pub enum ProofEncodingUnsupportedReason {
     SortWithUfAnnotation,
     #[error("user-defined commands are not supported.")]
     UserDefinedCommand,
-    #[error("`fail` wrapping an `input` command is not supported by proof encoding.")]
-    FailInputCommand,
+    #[error("`output` commands are not supported when proofs are enabled.")]
+    OutputCommand,
     #[error(
-        "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
+        "container-valued global bindings are not supported by the term/proof encoding; bind the container inside a rule instead"
     )]
-    LetBindingWithNonEqSort,
+    LetBindingWithContainer,
     #[error(
         "rule uses `:unsafe-seminaive`. Arbitrary RHS database reads are not representable by the term/proof encoding."
     )]
@@ -907,24 +930,8 @@ pub enum ProofEncodingUnsupportedReason {
 
 /// Checks whether a desugared program supports proof encoding.
 pub fn program_supports_proofs(commands: &[ResolvedCommand], type_info: &TypeInfo) -> bool {
-    // Globals defined anywhere in the program, including inside `(push)`/`(pop)`
-    // scopes. `type_info.global_sorts` reflects only the final scope (each `pop`
-    // unregisters its globals), so checking against it alone misreads a popped
-    // global's action-side lookup as an unsupported function lookup.
-    let let_globals: HashSet<String> = commands
-        .iter()
-        .filter_map(|c| match c {
-            GenericCommand::Function {
-                name,
-                let_binding: true,
-                ..
-            } => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
     for command in commands {
-        if let Err(reason) = command_supports_proof_encoding_impl(command, type_info, &let_globals)
-        {
+        if let Err(reason) = command_supports_proof_encoding(command, type_info, true) {
             let cmd = command.to_string();
             log::debug!(
                 "program does not support proofs: {reason}\n  command: {}",
@@ -956,40 +963,15 @@ fn expr_primitives_have_validators(expr: &ResolvedExpr) -> bool {
 }
 
 /// Check if an action contains non-global function lookups in any of its expressions
-fn action_has_function_lookup(
-    action: &ResolvedAction,
-    type_info: &TypeInfo,
-    extra_globals: &HashSet<String>,
-) -> bool {
+fn action_has_function_lookup(action: &ResolvedAction, type_info: &TypeInfo) -> bool {
     let mut has_lookup = false;
     action.clone().visit_exprs(&mut |expr| {
-        if expr_has_non_global_lookup(&expr, type_info, extra_globals) {
+        if type_info.expr_has_function_lookup(&expr).is_some() {
             has_lookup = true;
         }
         expr
     });
     has_lookup
-}
-
-/// Like [`TypeInfo::expr_has_function_lookup`], but also treating names in
-/// `extra_globals` as globals (see [`program_supports_proofs`]).
-fn expr_has_non_global_lookup(
-    expr: &ResolvedExpr,
-    type_info: &TypeInfo,
-    extra_globals: &HashSet<String>,
-) -> bool {
-    use crate::ast::GenericExpr;
-    expr.find(&mut |e| {
-        if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e
-            && func_type.subtype == crate::ast::FunctionSubtype::Custom
-            && !type_info.is_global(&func_type.name)
-            && !extra_globals.contains(&func_type.name)
-        {
-            return Some(span.clone());
-        }
-        None
-    })
-    .is_some()
 }
 
 /// Whether a fact contains a primitive call whose result is an eq-sort or
@@ -1044,15 +1026,15 @@ fn bind_vars(expr: &ResolvedExpr, bound: &mut HashSet<String>) {
 }
 
 /// Which of a rule body's facts the encoding stores no premise proof for: the
-/// premise is a reflexive fiat over a base value, which proof conversion
+/// premise is a reflexive fiat over a base value, which proof lifting
 /// recomputes by evaluating the fact against the bindings the earlier facts
 /// give. Answered per fact, in body order, since a fact is only recomputable
 /// once one of its sides reads nothing but variables the body has already bound.
 ///
-/// The encoder and proof conversion share this gate so they cannot drift, and
+/// The encoder and proof lifting share this gate so they cannot drift, and
 /// each must therefore describe the same rule the same way. `remove_globals`
 /// rewrites a global reference into a lookup call, which is not a base value, so
-/// conversion — which sees the rule from before that pass — reports a global's
+/// lifting — which sees the rule from before that pass — reports a global's
 /// variable through `is_global` to reach the same answer.
 pub(crate) fn recomputable_premises(
     body: &[ResolvedFact],
@@ -1362,28 +1344,27 @@ impl BodyAnchorScan {
 /// the reflexive anchor of a value the query computed, which no view row names.
 fn body_premise_without_anchor(body: &[ResolvedFact]) -> Option<ProofEncodingUnsupportedReason> {
     let scan = BodyAnchorScan::scan(body);
+    // Proof lifting projects an element out of one container, so a read whose
+    // result could have come from several has no one container to name.
+    if scan
+        .elements
+        .values()
+        .any(|containers| containers.len() > 1)
+    {
+        return Some(ProofEncodingUnsupportedReason::ElementFromSeveralContainers);
+    }
     scan.requests
         .iter()
         .find(|(value, _)| !scan.anchored(value, &mut HashSet::default()))
         .map(|(_, reason)| reason.clone())
 }
 
-/// Checks whether a resolved command supports proof encoding.
-/// Returns Ok(()) if supported, or Err with the reason if not.
+/// Checks the constraints shared by term/proof encoding. `proofs_enabled`
+/// additionally checks commands that are unsupported only when recording proofs.
 pub(crate) fn command_supports_proof_encoding(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
-) -> Result<(), ProofEncodingUnsupportedReason> {
-    command_supports_proof_encoding_impl(command, type_info, &HashSet::default())
-}
-
-/// [`command_supports_proof_encoding`] with `extra_globals`: let-bound names
-/// treated as globals even when out of scope in `type_info` (see
-/// [`program_supports_proofs`]).
-fn command_supports_proof_encoding_impl(
-    command: &ResolvedCommand,
-    type_info: &TypeInfo,
-    extra_globals: &HashSet<String>,
+    proofs_enabled: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
     // `:unsafe-seminaive` rules perform arbitrary reads against the live
     // database; the term/proof encoding can't represent that.
@@ -1469,11 +1450,10 @@ fn command_supports_proof_encoding_impl(
 
     // Check actions (not queries) for function lookups
     // Egglog supports lookups in actions at the global level, but not in proofs mode
-    // (global function calls are allowed - they get desugared to constructors)
+    // Global reads are supported by the encoding.
     let mut has_function_lookup_in_action = false;
     command.clone().visit_actions(&mut |action| {
-        has_function_lookup_in_action |=
-            action_has_function_lookup(&action, type_info, extra_globals);
+        has_function_lookup_in_action |= action_has_function_lookup(&action, type_info);
         action
     });
 
@@ -1483,7 +1463,7 @@ fn command_supports_proof_encoding_impl(
     if let GenericCommand::Function {
         merge: Some(merge), ..
     } = command
-        && expr_has_non_global_lookup(&merge.result, type_info, extra_globals)
+        && type_info.expr_has_function_lookup(&merge.result).is_some()
     {
         return Err(ProofEncodingUnsupportedReason::FunctionLookupInAction);
     }
@@ -1534,12 +1514,15 @@ fn command_supports_proof_encoding_impl(
             Err(ProofEncodingUnsupportedReason::SortWithUfAnnotation)
         }
         GenericCommand::UserDefined(..) => Err(ProofEncodingUnsupportedReason::UserDefinedCommand),
+        GenericCommand::Output { .. } if proofs_enabled => {
+            Err(ProofEncodingUnsupportedReason::OutputCommand)
+        }
         // Extract commands can't have non-global function lookups
         // because instrument_action_expr doesn't support them
-        // (global function calls are fine - they get desugared to constructors)
+        // Global reads are supported by the encoding.
         GenericCommand::Extract(_, expr, variants) => {
-            if expr_has_non_global_lookup(expr, type_info, extra_globals)
-                || expr_has_non_global_lookup(variants, type_info, extra_globals)
+            if type_info.expr_has_function_lookup(expr).is_some()
+                || type_info.expr_has_function_lookup(variants).is_some()
             {
                 Err(ProofEncodingUnsupportedReason::FunctionLookupInAction)
             } else {
@@ -1548,29 +1531,25 @@ fn command_supports_proof_encoding_impl(
         }
         GenericCommand::Fail(_, commands) => {
             for command in commands {
-                if let GenericCommand::Input { .. } = command {
-                    return Err(ProofEncodingUnsupportedReason::FailInputCommand);
-                }
-                command_supports_proof_encoding(command, type_info)?;
+                command_supports_proof_encoding(command, type_info, proofs_enabled)?;
             }
             Ok(())
         }
-        // let binding with non-eq sort not supported by proof_global_desugar
         ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => {
-            // let binding with non-eq sort not supported by proof_global_desugar
-            // we detect as setting something that is no-merge to a primitive not supported (global primitive binding)
-            if expr.output_type().is_eq_sort() {
-                Ok(())
+            if expr.output_type().is_container_sort() {
+                Err(ProofEncodingUnsupportedReason::LetBindingWithContainer)
             } else {
-                Err(ProofEncodingUnsupportedReason::LetBindingWithNonEqSort)
+                Ok(())
             }
         }
         // After global desugar it may look like this
         ResolvedCommand::Action(ResolvedAction::Set(_span, head, _children, expr)) => {
-            if !type_info.is_global(head.name()) || expr.output_type().is_eq_sort() {
-                Ok(())
+            if matches!(head, ResolvedCall::Func(func) if func.is_global)
+                && expr.output_type().is_container_sort()
+            {
+                Err(ProofEncodingUnsupportedReason::LetBindingWithContainer)
             } else {
-                Err(ProofEncodingUnsupportedReason::LetBindingWithNonEqSort)
+                Ok(())
             }
         }
         _ => Ok(()),
@@ -1738,7 +1717,11 @@ pub(crate) const DROP_REFLEXIVE_STEP: &str = "drop-reflexive-step";
 #[derive(Clone, Default)]
 pub(crate) struct DropReflexiveStep {
     /// `(spelling, column)` -> that spelling without the column.
-    dropped: Arc<Mutex<HashMap<(Value, i64), Value>>>,
+    /// Math run 12 measurements (1/16 threads, with/without decomposition) saw
+    /// only six insertions in 29.9–30.7 million lookups, all within the first
+    /// 355 lookups. Optimize for the read-only steady state: the previous mutex
+    /// contended even on cache hits.
+    dropped: Arc<ReadOptimizedLock<HashMap<(Value, i64), Value>>>,
 }
 
 impl crate::Primitive for DropReflexiveStep {
@@ -1761,7 +1744,7 @@ impl crate::PurePrim for DropReflexiveStep {
         }
         let base_values = crate::exec_state::Core::base_values(&state);
         let key = (*spelling, base_values.unwrap::<i64>(*column));
-        if let Some(dropped) = self.dropped.lock().unwrap().get(&key) {
+        if let Some(dropped) = self.dropped.read().get(&key) {
             return Some(*dropped);
         }
         let text = base_values.unwrap::<crate::sort::S>(*spelling);
@@ -1772,7 +1755,7 @@ impl crate::PurePrim for DropReflexiveStep {
                 .spelling()
                 .into(),
         );
-        self.dropped.lock().unwrap().insert(key, dropped);
+        self.dropped.lock().insert(key, dropped);
         Some(dropped)
     }
 }
@@ -1820,4 +1803,97 @@ impl crate::constraint::TypeConstraint for DropReflexiveStepTypeConstraint {
         }
         constraints
     }
+}
+
+/// Every expression node of a rule body, in a canonical pre-order: the facts in
+/// written order, each `Eq` fact's two sides left to right, and each call's
+/// arguments after the call itself.
+///
+/// A proof names a body call by its index here (see
+/// [`ProofInstrumentor::request_element_anchor`]). The encoder and proof
+/// lifting both index through this function, so they cannot disagree.
+pub(crate) fn body_exprs(body: &[ResolvedFact]) -> Vec<&ResolvedExpr> {
+    fn walk<'a>(expr: &'a ResolvedExpr, out: &mut Vec<&'a ResolvedExpr>) {
+        out.push(expr);
+        if let ResolvedExpr::Call(_, head, args) = expr
+            && !matches!(head, ResolvedCall::Func(func) if func.is_global)
+        {
+            for arg in args {
+                walk(arg, out);
+            }
+        }
+    }
+    let mut out = vec![];
+    for fact in body {
+        match fact {
+            ResolvedFact::Fact(expr) => walk(expr, &mut out),
+            ResolvedFact::Eq(_, lhs, rhs) => {
+                walk(lhs, &mut out);
+                walk(rhs, &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// The index `expr` has in [`body_exprs`], by node identity.
+pub(crate) fn body_expr_index(body: &[ResolvedFact], expr: &ResolvedExpr) -> Option<usize> {
+    body_exprs(body)
+        .into_iter()
+        .position(|candidate| std::ptr::eq(candidate, expr))
+}
+
+/// A term a top-level action names, for the fiats that say a term exists.
+#[derive(Clone, Copy)]
+pub(crate) enum ActionNode<'a> {
+    /// A node written in the action.
+    Expr(&'a ResolvedExpr),
+    /// The row a `set` writes, `f(args…, value)`. The encoding proves that term
+    /// exists, but no expression of the action denotes it.
+    Row(&'a ResolvedAction),
+}
+
+/// Every term a top-level action names, in a canonical order: the action's
+/// expressions in written order with each call's arguments after the call, then
+/// the row a `set` writes.
+///
+/// A fiat names a term by its index here (see
+/// [`ProofInstrumentor::reflexive_for_justification`]); [`body_exprs`] says
+/// what keeps the two sides agreeing. Global reads remain one source node;
+/// their storage keys introduced by global lowering are not source expressions.
+pub(crate) fn action_nodes(action: &ResolvedAction) -> Vec<ActionNode<'_>> {
+    fn walk<'a>(expr: &'a ResolvedExpr, out: &mut Vec<ActionNode<'a>>) {
+        out.push(ActionNode::Expr(expr));
+        if let ResolvedExpr::Call(_, head, args) = expr
+            && !matches!(head, ResolvedCall::Func(func) if func.is_global)
+        {
+            for arg in args {
+                walk(arg, out);
+            }
+        }
+    }
+    let mut out = vec![];
+    match action {
+        ResolvedAction::Let(_, _, expr) | ResolvedAction::Expr(_, expr) => walk(expr, &mut out),
+        ResolvedAction::Set(_, head, args, value) => {
+            if !matches!(head, ResolvedCall::Func(func) if func.is_global) {
+                for arg in args {
+                    walk(arg, &mut out);
+                }
+            }
+            walk(value, &mut out);
+            out.push(ActionNode::Row(action));
+        }
+        ResolvedAction::Change(_, _, _, args) => {
+            for arg in args {
+                walk(arg, &mut out);
+            }
+        }
+        ResolvedAction::Union(_, lhs, rhs) => {
+            walk(lhs, &mut out);
+            walk(rhs, &mut out);
+        }
+        ResolvedAction::Panic(..) => {}
+    }
+    out
 }

@@ -38,7 +38,7 @@ impl ProofInstrumentor<'_> {
         let children = children_vec.join(" ");
         let in_sorts = ListDisplay(input.iter().map(|s| s.name()).collect::<Vec<_>>(), " ");
         let subsumed_name = self.subsumed_name(name);
-        let view_name = self.view_name(name);
+        let view_name = name.to_string();
         let subsume_ruleset = self.proof_names().subsume_ruleset_name.clone();
         let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
         let fresh_name = self.egraph.parser.symbol_gen.fresh("subsume_rule");
@@ -115,17 +115,16 @@ impl ProofInstrumentor<'_> {
     /// each rule composes the updated view proof.
     pub(super) fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
         let proofs = self.proofs_enabled();
-        // A global's output *is* its e-class (like a constructor's), so it takes the
-        // e-class rebuild below (union-tracking) — not the custom-output rebuild
-        // (congruence), which would emit a nonsensical `Congr` on its nullary term.
+        // Constructor and Eq-sort global rows carry the value's e-class proof.
+        // Custom function rows carry a proof of `f(inputs..., output)` instead.
         let output_is_eclass = self.output_is_eclass(fdecl);
-        let types = fdecl.resolved_schema.view_types();
+        let types = self.column_sorts(fdecl);
         let n = types.len();
         let child = |i: usize| format!("c{i}_");
         // Key columns of the view row: the children (the value tuple is unkeyed).
         let n_keys = n - 1;
         let key_vars: Vec<String> = (0..n_keys).map(child).collect();
-        let view_name = self.view_name(&fdecl.name);
+        let view_name = fdecl.name.to_string();
         let keys_str = format!("{}", ListDisplay(&key_vars, " "));
 
         let mut rules = String::new();
@@ -183,7 +182,7 @@ impl ProofInstrumentor<'_> {
         }
         if output_is_eclass {
             // Covered by the index rule above, which indexes the e-class column too.
-        } else if fdecl.subtype == FunctionSubtype::Custom && !self.is_encoded_global(fdecl) {
+        } else if fdecl.subtype == FunctionSubtype::Custom {
             if types[n - 1].is_eq_sort() {
                 rules.push_str(&self.fd_custom_value_rebuild_rule(fdecl, &key_vars, n - 1));
             } else if types[n - 1].is_eq_container_sort() {
@@ -223,7 +222,7 @@ impl ProofInstrumentor<'_> {
             uf_canon_prim_name, uf_canon_proof_prim_name,
         };
         let proofs = self.proofs_enabled();
-        let view_name = self.view_name(&fdecl.name);
+        let view_name = fdecl.name.to_string();
         let keys_str = format!("{}", ListDisplay(key_vars, " "));
         let n_keys = key_vars.len();
 
@@ -366,7 +365,7 @@ impl ProofInstrumentor<'_> {
         key_vars: &[String],
         out_idx: usize,
     ) -> String {
-        let value_uf_name = self.uf_name(fdecl.resolved_schema.output().name());
+        let value_uf_name = self.uf_name(self.sort_by_name(fdecl.schema.output()).name());
         let (query_view, value_var, view_prf) = self.query_fd_view(&fdecl.name, key_vars);
         let canon = self.fresh_var();
         let uf_prf = self.fresh_var();
@@ -379,7 +378,7 @@ impl ProofInstrumentor<'_> {
             (String::new(), "()".to_string())
         };
         let set_canon = self.update_fd_view(&fdecl.name, key_vars, &canon, &pf_arg);
-        let view_name = self.view_name(&fdecl.name);
+        let view_name = fdecl.name.to_string();
         let keys_str = ListDisplay(key_vars, " ").to_string();
         let actions = format!("{proof_lets}\n(delete ({view_name} {keys_str}))\n{set_canon}");
         let facts = format!(
@@ -427,7 +426,7 @@ impl ProofInstrumentor<'_> {
         key_vars: &[String],
         out_idx: usize,
     ) -> String {
-        let out_ty = fdecl.resolved_schema.output().clone();
+        let out_ty = self.sort_by_name(fdecl.schema.output());
         let value_prim = self.container_rebuild_prim(&out_ty);
         let (query_view, value_var, view_prf) = self.query_fd_view(&fdecl.name, key_vars);
         let canon = self.fresh_var();
@@ -440,7 +439,7 @@ impl ProofInstrumentor<'_> {
             (String::new(), "()".to_string())
         };
         let set_canon = self.update_fd_view(&fdecl.name, key_vars, &canon, &pf_arg);
-        let view_name = self.view_name(&fdecl.name);
+        let view_name = fdecl.name.to_string();
         let keys_str = ListDisplay(key_vars, " ").to_string();
         let facts = format!("{query_view}\n{canon_fact}\n(!= {value_var} {canon})");
         let actions = format!("{proof_lets}\n(delete ({view_name} {keys_str}))\n{set_canon}");

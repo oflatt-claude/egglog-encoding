@@ -19,10 +19,19 @@ cargo install --path=egglog-experimental
 To use it in a Rust project, you can add it as a dependency in a `Cargo.toml` file.
 
 ```
-egglog-experimental = "1.0"
+egglog-experimental = "3.0"
 ```
+
+## Slotted e-graphs
+
+In this workspace, `egglog-experimental --slotted FILE.egg` transforms the slotted
+source language into ordinary egglog before evaluating it through the normal CLI.
+`--slotted-no-aliasing` selects compatibility with the reference nested matcher;
+`--mode desugar` shows the lowered program. The transformation lives entirely in
+this crate. See [the source language](src/slotted/LANGUAGE.md) and
+[the encoding](src/slotted/ENCODING.md) for its supported syntax and semantics.
 
 ## Documentation
 
 Check out the crate documentation (built locally) for the current list of implemented extensions, API details, and demo links.
-We plan to do a release on crates.io with the release of egglog 2.0.
+Releases are coordinated with compatible releases of egglog.

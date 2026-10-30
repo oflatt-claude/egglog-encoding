@@ -187,8 +187,12 @@ def test_build_target_builds_release_binary(monkeypatch: pytest.MonkeyPatch, tmp
 
 
 @pytest.mark.parametrize("target_dir_is_absolute", [False, True])
+@pytest.mark.parametrize("engine", ["egglog", "egg"])
+@pytest.mark.parametrize("profile", ["release", "profiling"])
 def test_build_target_uses_cargo_target_dir(
     target_dir_is_absolute: bool,
+    engine: models.Engine,
+    profile: targets.BuildProfile,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -196,7 +200,8 @@ def test_build_target_uses_cargo_target_dir(
     checkout.mkdir()
     target_dir = tmp_path / "shared-target" if target_dir_is_absolute else Path("shared-target")
     binary_root = target_dir if target_dir_is_absolute else checkout / target_dir
-    binary = binary_root / "release" / "egglog-experimental"
+    binary_name = "egglog-experimental" if engine == "egglog" else "egg-math-benchmark"
+    binary = binary_root / profile / binary_name
     binary.parent.mkdir(parents=True)
     binary.write_text("binary", encoding="utf-8")
     monkeypatch.setenv("CARGO_TARGET_DIR", str(target_dir))
@@ -204,7 +209,7 @@ def test_build_target_uses_cargo_target_dir(
     monkeypatch.setattr(targets, "sha256_file", lambda path: "sha256:bin")
     row = models.TargetRow(".", str(checkout), "HEAD", "abc123", False, None)
 
-    path, digest = targets.build_target(row, Console(file=io.StringIO(), color_system=None))
+    path, digest = targets.build_target(row, Console(file=io.StringIO(), color_system=None), profile, engine)
 
     assert path == binary
     assert digest == "sha256:bin"

@@ -395,6 +395,61 @@ impl RuleBuilder<'_> {
     ) -> Variable {
         let args = args.to_vec();
         let res = self.new_var(ret_ty);
+        // A mint cannot fail, so it needs no panic fallback: lower it to a
+        // batched insert whose minted column comes from the id counter.
+        if let Some(mint) = self.egraph.mint_insert_plan(func, args.len()) {
+            self.query.add_rule.push(Box::new(move |inner, rb| {
+                let mut row: Vec<WriteVal> = inner
+                    .convert_all(&args)
+                    .iter()
+                    .copied()
+                    .map(WriteVal::QueryEntry)
+                    .collect();
+                row.push(WriteVal::IncCounter(mint.counter));
+                row.extend(mint.tail.iter().map(|v| WriteVal::from(*v)));
+                mint.math.write_table_row(
+                    &mut row,
+                    RowVals {
+                        timestamp: WriteVal::QueryEntry(inner.next_ts()),
+                        subsume: mint.math.subsume.then(|| WriteVal::from(NOT_SUBSUMED)),
+                        ret_val: None,
+                    },
+                );
+                let var = rb.insert_and_bind(mint.table, &row, mint.minted_col)?;
+                inner.mapping.insert(res.id, var.into());
+                Ok(())
+            }));
+            return res;
+        }
+        // `set-if-empty` is exactly a lookup-or-insert on the view.
+        if let Some(plan) = self.egraph.set_if_empty_plan(func, args.len()) {
+            self.query.add_rule.push(Box::new(move |inner, rb| {
+                let all = inner.convert_all(&args);
+                let (keys, vals) = all.split_at(plan.n_keys);
+                let mut default: Vec<WriteVal> =
+                    vals.iter().copied().map(WriteVal::QueryEntry).collect();
+                default.push(WriteVal::QueryEntry(inner.next_ts()));
+                if plan.subsume {
+                    default.push(WriteVal::QueryEntry(DstVar::Const(NOT_SUBSUMED)));
+                }
+                let var = rb.lookup_or_insert(plan.table, keys, &default, plan.ret_val_col)?;
+                inner.mapping.insert(res.id, var.into());
+                Ok(())
+            }));
+            return res;
+        }
+        // A view-column read is a lookup with a fallback and cannot fail, so it
+        // needs no panic path either.
+        if let Some(plan) = self.egraph.view_col_plan(func, args.len()) {
+            self.query.add_rule.push(Box::new(move |inner, rb| {
+                let all = inner.convert_all(&args);
+                let (keys, rest) = all.split_at(plan.n_keys);
+                let var = rb.lookup_with_default(plan.table, keys, rest[0], plan.dst_col)?;
+                inner.mapping.insert(res.id, var.into());
+                Ok(())
+            }));
+            return res;
+        }
         // External functions that fail on the RHS of a rule should cause a panic.
         let panic_fn = self.egraph.new_panic_lazy(panic_msg);
         self.query.add_rule.push(Box::new(move |inner, rb| {
@@ -517,7 +572,7 @@ impl RuleBuilder<'_> {
     /// `entries` should match the number of keys to the function.
     pub fn subsume(&mut self, func: FunctionId, entries: &[QueryEntry]) {
         // Ensure the row exists (panics otherwise); its value is re-read per column below.
-        let _ret = self.lookup_with_subsumed(
+        let ret = self.lookup_with_subsumed(
             func,
             entries,
             QueryEntry::Const {
@@ -534,20 +589,21 @@ impl RuleBuilder<'_> {
         let entries = entries.to_vec();
         let table = info.table;
 
+        let ret: QueryEntry = ret.into();
         self.add_callback(move |inner, rb| {
-            // Then, add a tuple subsuming the entry, but only if the entry isn't already subsumed.
+            // Preserve the predicted primary value and every additional value column.
             let keys = inner.convert_all(&entries);
-            let cur_subsume_val = rb.lookup(
-                table,
-                &keys,
-                ColumnId::from_usize(schema_math.subsume_col()),
-            )?;
             // Re-read every value column so subsumption preserves the whole row (tuple-output views
             // carry more than one value, e.g. the e-class and its proof).
             let mut dst_entries = keys.clone();
             for i in 0..n_vals {
-                let v = rb.lookup(table, &keys, ColumnId::from_usize(schema_math.val_col(i)))?;
-                dst_entries.push(v.into());
+                let v = if i == 0 {
+                    inner.convert(&ret)
+                } else {
+                    rb.lookup(table, &keys, ColumnId::from_usize(schema_math.val_col(i)))?
+                        .into()
+                };
+                dst_entries.push(v);
             }
             schema_math.write_table_row(
                 &mut dst_entries,
@@ -557,13 +613,7 @@ impl RuleBuilder<'_> {
                     ret_val: None,
                 },
             );
-            rb.insert_if_eq(
-                table,
-                cur_subsume_val.into(),
-                NOT_SUBSUMED.into(),
-                &dst_entries,
-            )?;
-            Ok(())
+            rb.insert(table, &dst_entries).context("subsume")
         });
     }
 

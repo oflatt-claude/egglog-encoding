@@ -3,7 +3,7 @@ use std::hash::Hasher;
 use crate::Context;
 use crate::proofs::proof_container_rebuild::register_container_rebuild_from_spec;
 use crate::{
-    core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
+    core::{CoreActionContext, GenericActionsExt, ResolvedCall},
     *,
 };
 use ast::{
@@ -12,9 +12,9 @@ use ast::{
 };
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
-use egglog_bridge::ActionRegistry;
+use egglog_bridge::{ActionRegistry, SharedActionRegistry};
 use enum_map::EnumMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 // `ExternalFunction` wrapper for `PurePrim`. Holds the primitive
 // directly so the dispatch chain `external_funcs[id].invoke(...)` →
@@ -43,7 +43,7 @@ impl<T: PurePrim + Clone> ExternalFunction for PurePrimWrapper<T> {
 #[derive(Clone)]
 struct RegistryPrimWrapper<T, S> {
     prim: T,
-    registry: Arc<RwLock<ActionRegistry>>,
+    registry: SharedActionRegistry,
     /// Stamped onto the state wrapper.
     ctx: Context,
     _wrap: std::marker::PhantomData<fn() -> S>,
@@ -106,7 +106,7 @@ impl<T: Clone + Send + Sync + 'static, S: RegistryWrap<T> + 'static> ExternalFun
     for RegistryPrimWrapper<T, S>
 {
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let registry = self.registry.read().unwrap();
+        let registry = self.registry.read();
         S::invoke(&self.prim, exec_state, self.ctx, args, &registry)
     }
 }
@@ -115,6 +115,9 @@ impl<T: Clone + Send + Sync + 'static, S: RegistryWrap<T> + 'static> ExternalFun
 pub struct FuncType {
     pub name: String,
     pub subtype: FunctionSubtype,
+    /// A global binding or its shared storage table. Arguments identify storage
+    /// rows and do not add expression nodes to a source-level proof.
+    pub is_global: bool,
     pub input: Vec<ArcSort>,
     /// The output (value-column) sorts, primary first. A tuple-output function has more than one;
     /// ordinary functions have exactly one. Always non-empty.
@@ -142,6 +145,7 @@ impl PartialEq for FuncType {
     fn eq(&self, other: &Self) -> bool {
         if self.name == other.name
             && self.subtype == other.subtype
+            && self.is_global == other.is_global
             && self.num_outputs() == other.num_outputs()
             && self
                 .outputs
@@ -170,6 +174,7 @@ impl Hash for FuncType {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         self.subtype.hash(state);
+        self.is_global.hash(state);
         for out in &self.outputs {
             out.name().hash(state);
         }
@@ -237,12 +242,15 @@ pub struct TypeInfo {
     reserved_primitives: HashSet<&'static str>,
     pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
-    func_types: HashMap<String, FuncType>,
+    func_types: HashMap<String, Arc<FuncType>>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
+    pub(crate) global_tables: crate::ast::remove_globals::GlobalTables,
     /// Sorts that do not allow union (e.g., from `:no-union` sorts or relations).
     pub(crate) non_unionable_sorts: HashSet<String>,
     /// Declared indexes, by the name their atoms are written with.
     pub(crate) indexes: HashMap<String, IndexInfo>,
+    /// Function declarations hidden from user-facing table listings.
+    pub(crate) hidden_functions: HashSet<String>,
 }
 
 /// A declared index: a read-only relation over the rows of `function`, holding
@@ -527,12 +535,13 @@ impl EGraph {
         let unit = self.type_info.sorts.get("Unit").expect("Unit sort").clone();
         self.type_info.func_types.insert(
             name.to_owned(),
-            FuncType {
+            Arc::new(FuncType {
                 name: name.to_owned(),
                 subtype: FunctionSubtype::Custom,
+                is_global: false,
                 input,
                 outputs: vec![unit],
-            },
+            }),
         );
         self.type_info.indexes.insert(
             name.to_owned(),
@@ -550,33 +559,33 @@ impl EGraph {
         let command: ResolvedNCommand = match command {
             NCommand::Function(fdecl) => {
                 let resolved = self.type_info.typecheck_function(symbol_gen, fdecl)?;
-                // An FD view (function carrying `term_constructor` with a tuple
+                // An FD view (a function marked `:internal-view`, with a tuple
                 // `(eclass, proof)` output) gets a `set-if-empty` primitive (+ a
                 // proof-column reader) so the encoding can canonicalize a term to
                 // the view's e-class at insertion time. Registered here so it
                 // survives re-parse of the desugared program.
-                if resolved.term_constructor.is_some()
-                    && let ResolvedCall::Func(ft) = &resolved.resolved_schema
+                if resolved.internal_view.is_some()
+                    && let Some(ft) = self.type_info.get_func_type(&resolved.name)
                     && ft.outputs.len() >= 2
                 {
                     let (name, input, outputs) =
                         (resolved.name.clone(), ft.input.clone(), ft.outputs.clone());
                     crate::proofs::proof_fresh::register_set_if_empty(self, &name, input, outputs);
                 }
-                // A term-node relation (a term or proof node, whose last input is
-                // the minted id) gets a mint primitive, so the encoding writes a
-                // node in one statement. Registered here for the same reason as
-                // `set-if-empty` above.
+                // An internal proof-node relation (whose last input is the minted
+                // id) gets a mint primitive, so the encoding writes a node in one
+                // statement. Registered here for the same reason as `set-if-empty`
+                // above.
                 if resolved.internal_term_node
-                    && let ResolvedCall::Func(ft) = &resolved.resolved_schema
+                    && let Some(ft) = self.type_info.get_func_type(&resolved.name)
                     && let Some((id_sort, arg_sorts)) = ft.input.split_last()
                     && id_sort.is_eq_sort()
                 {
-                    // `register_mint` stages one `Unit` value column, so a term-node
+                    // `register_mint` stages one `Unit` value column, so a proof-node
                     // relation must declare exactly that.
                     debug_assert!(
                         matches!(ft.outputs.as_slice(), [out] if out.name() == "Unit"),
-                        "term-node relation `{}` must declare one `Unit` value column, got {:?}",
+                        "proof-node relation `{}` must declare one `Unit` value column, got {:?}",
                         resolved.name,
                         ft.outputs.iter().map(|out| out.name()).collect::<Vec<_>>(),
                     );
@@ -648,7 +657,7 @@ impl EGraph {
                     names.container_normalize_constructor = pc.normalize.clone();
                     names.fiat_prefix = pc.fiat.clone();
                     names.proj_constructor = pc.proj.clone();
-                    names.proj_all_prefix = pc.proj_all.clone();
+                    names.proj_prim_prefix = pc.proj_prim.clone();
                 }
                 // A container sort under the term/proof encoding carries a spec
                 // for its rebuild primitives; register them here so they are
@@ -816,8 +825,8 @@ impl EGraph {
                 ResolvedNCommand::PrintSize(span.clone(), n.clone())
             }
             NCommand::ProveExists(span, constructor) => {
-                // prove-exists targets a table: a constructor, or its lowering to
-                // a term relation (a function) under the term/proof encoding.
+                // prove-exists targets a table: a constructor, or the view
+                // standing in for one under the term/proof encoding.
                 // `get_func_type` already rejects primitives/unbound names.
                 let func_type = self
                     .type_info
@@ -843,10 +852,16 @@ impl EGraph {
                     exprs,
                 }
             }
-            NCommand::Input { span, name, file } => ResolvedNCommand::Input {
+            NCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => ResolvedNCommand::Input {
                 span: span.clone(),
                 name: name.clone(),
                 file: file.clone(),
+                proof_base: *proof_base,
             },
             NCommand::UserDefined(span, name, exprs) => {
                 ResolvedNCommand::UserDefined(span.clone(), name.clone(), exprs.clone())
@@ -1003,12 +1018,15 @@ impl TypeInfo {
         Ok(FuncType {
             name: func.name.clone(),
             subtype: func.subtype,
+            is_global: func.internal_let,
             input,
             outputs,
         })
     }
 
-    fn typecheck_function(
+    /// Validate and register a function signature. Macros may use this on a
+    /// cloned environment to infer commands that depend on generated declarations.
+    pub fn typecheck_function(
         &mut self,
         symbol_gen: &mut SymbolGen,
         fdecl: &FunctionDecl,
@@ -1025,20 +1043,24 @@ impl TypeInfo {
                 fdecl.span.clone(),
             ));
         }
-        // View tables (with term_constructor) must have at least one input (the e-class), except the
+        // View tables must have at least one input (the e-class), except the
         // proof-mode functional-dependency tuple view `(children) -> (eclass, proof)`, which keys on
         // children only (a 0-arg constructor's view then has no inputs).
-        if fdecl.term_constructor.is_some()
+        if fdecl.internal_view.is_some()
             && fdecl.schema.input.is_empty()
             && !fdecl.schema.is_tuple_output()
         {
-            return Err(TypeError::TermConstructorNoInputs(
+            return Err(TypeError::ViewTableNoInputs(
                 fdecl.name.clone(),
                 fdecl.span.clone(),
             ));
         }
         let ftype = self.function_to_functype(fdecl)?;
-        if self.func_types.insert(fdecl.name.clone(), ftype).is_some() {
+        if self
+            .func_types
+            .insert(fdecl.name.clone(), Arc::new(ftype))
+            .is_some()
+        {
             return Err(TypeError::FunctionAlreadyBound(
                 fdecl.name.clone(),
                 fdecl.span.clone(),
@@ -1054,9 +1076,8 @@ impl TypeInfo {
 
         // Tuple outputs are only meaningful for custom functions (which carry a functional
         // dependency from keys to a tuple of values). Constructors mint a single e-class id, so they
-        // may not be tuple-output. Term-constructor *views* may be tuple-output: the proof-mode
-        // encoder emits `(children) -> (eclass, proof)` views (an internal-only annotation, so this
-        // can't be reached by user input).
+        // may not be tuple-output. The proof encoder declares its internal views as functions with
+        // `(children) -> (source output, proof)`, so those views may be tuple-output.
         if is_tuple && fdecl.subtype == FunctionSubtype::Constructor {
             return Err(TypeError::TupleOutputNotAllowed(
                 fdecl.name.clone(),
@@ -1141,14 +1162,14 @@ impl TypeInfo {
             name: fdecl.name.clone(),
             subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
-            resolved_schema: ResolvedCall::Func(self.func_types.get(&fdecl.name).unwrap().clone()),
+
             merge,
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
             internal_hidden: fdecl.internal_hidden,
             internal_let: fdecl.internal_let,
             span: fdecl.span.clone(),
-            term_constructor: fdecl.term_constructor.clone(),
+            internal_view: fdecl.internal_view,
             identity_vals: fdecl.identity_vals,
             internal_term_node: fdecl.internal_term_node,
         })
@@ -1243,7 +1264,9 @@ impl TypeInfo {
         Result::Ok(schedule)
     }
 
-    fn typecheck_rule(
+    /// Infer a rule's body and head together. Command macros can use the resolved
+    /// expressions before emitting actions, which are typechecked again normally.
+    pub fn typecheck_rule(
         &self,
         symbol_gen: &mut SymbolGen,
         rule: &Rule,
@@ -1259,8 +1282,6 @@ impl TypeInfo {
             no_decomp,
             include_subsumed,
         } = rule;
-        let mut constraints = vec![];
-
         // Compile with the permissive Read/Full primitive contexts (so the RHS
         // can read the database) when the whole EGraph is non-seminaive, or the
         // rule's own mode requires it (`:naive` / `:unsafe-seminaive`).
@@ -1276,26 +1297,15 @@ impl TypeInfo {
         };
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
-        constraints.extend(query.get_constraints(self, query_ctx)?);
+        let mut problem = Problem::default();
+        problem.add_query(&query, self, query_ctx)?;
 
         let mut binding = query.vars().collect::<IndexSet<_>>();
         // We lower to core actions with `union_to_set_optimization`
         // later in the pipeline. For typechecking we do not need it.
         let mut ctx = CoreActionContext::new(self, &mut binding, symbol_gen, false);
         let (actions, mapped_action) = head.to_core_actions(&mut ctx)?;
-
-        let mut problem = Problem::default();
-        problem.add_rule(
-            &CoreRule {
-                span: span.clone(),
-                body: query,
-                head: actions,
-            },
-            self,
-            symbol_gen,
-            query_ctx,
-            action_ctx,
-        )?;
+        problem.add_actions(&actions, self, symbol_gen, action_ctx)?;
 
         let assignment = problem
             .solve(|sort: &ArcSort| sort.name())
@@ -1379,10 +1389,33 @@ impl TypeInfo {
         Ok(annotated_facts)
     }
 
-    // Standalone expressions/actions use action lowering. Top-level commands
-    // pass `Full`; function `:merge` reuses this path with `Write` because
-    // merge expressions run during table updates.
-    fn typecheck_standalone_actions(
+    /// Infer an expression's sort for a command macro, including rule-local bindings.
+    /// Generated actions still pass through ordinary typechecking afterwards.
+    pub fn infer_expr_sort(
+        &self,
+        symbol_gen: &mut SymbolGen,
+        expr: &Expr,
+        bindings: &[(String, Span, ArcSort)],
+        context: Context,
+    ) -> Result<ArcSort, TypeError> {
+        let mut binding_map = IndexMap::default();
+        for (name, span, sort) in bindings {
+            if binding_map
+                .insert(name.as_str(), (span.clone(), sort.clone()))
+                .is_some()
+            {
+                return Err(TypeError::AlreadyDefined(name.clone(), span.clone()));
+            }
+        }
+        Ok(self
+            .typecheck_standalone_expr(symbol_gen, expr, &binding_map, context)?
+            .output_type())
+    }
+
+    /// Infer a whole action block, including constraints on local bindings.
+    /// Top-level commands pass `Full`; function `:merge` uses `Write` because
+    /// merge expressions run during table updates.
+    pub fn typecheck_standalone_actions(
         &self,
         symbol_gen: &mut SymbolGen,
         actions: &Actions,
@@ -1514,13 +1547,21 @@ impl TypeInfo {
             .any(|p| p.context_ids.iter().any(|(_, pid)| *pid == Some(id)) && p.validator.is_some())
     }
 
-    pub fn get_func_type(&self, sym: &str) -> Option<&FuncType> {
+    /// The shared signature declared for `sym`, or `None` if no function with
+    /// that name is declared. Clone it to keep it past the borrow.
+    pub fn get_func_type(&self, sym: &str) -> Option<&Arc<FuncType>> {
         self.func_types.get(sym)
     }
 
+    /// Record a signature for a function that did not come through
+    /// typechecking — desugaring generates some (global bindings, proof
+    /// tables) directly.
+    pub(crate) fn declare_func_type(&mut self, func_type: Arc<FuncType>) {
+        self.func_types.insert(func_type.name.clone(), func_type);
+    }
+
     pub fn is_constructor(&self, sym: &str) -> bool {
-        self.func_types
-            .get(sym)
+        self.get_func_type(sym)
             .is_some_and(|f| f.subtype == FunctionSubtype::Constructor)
     }
 
@@ -1533,7 +1574,8 @@ impl TypeInfo {
     }
 
     /// Check if an expression contains non-global function lookups (FunctionSubtype::Custom calls).
-    /// Global function calls are allowed since they get desugared to constructors.
+    /// Global reads are allowed; the term/proof encoding handles them separately.
+    /// Use the resolved function's flag so this also works after its scope is popped.
     /// Returns Some(span) if a lookup is found, None otherwise.
     pub fn expr_has_function_lookup(&self, expr: &ResolvedExpr) -> Option<Span> {
         use ast::GenericExpr;
@@ -1541,7 +1583,7 @@ impl TypeInfo {
         expr.find(&mut |e| {
             if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e
                 && func_type.subtype == FunctionSubtype::Custom
-                && !self.is_global(&func_type.name)
+                && !func_type.is_global
             {
                 return Some(span.clone());
             }
@@ -1617,10 +1659,8 @@ pub enum TypeError {
     NonEqsortUnion(ArcSort, Span),
     #[error("{}\nCannot union values of sort {} because it is marked as non-unionable (e.g. from a relation)", .1, .0.name())]
     NonUnionableSort(ArcSort, Span),
-    #[error(
-        "{1}\nView table {0} with :internal-term-constructor must have at least one input (the e-class)."
-    )]
-    TermConstructorNoInputs(String, Span),
+    #[error("{1}\nView table {0} with :internal-view must have at least one input (the e-class).")]
+    ViewTableNoInputs(String, Span),
     #[error(
         "{span}\nNon-global variable `{name}` must not start with `{}`.",
         crate::GLOBAL_NAME_PREFIX

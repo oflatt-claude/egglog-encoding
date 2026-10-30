@@ -1,6 +1,6 @@
-use crate::ast::{FunctionSubtype, ResolvedNCommand};
+use crate::ast::ResolvedNCommand;
+use crate::core::ResolvedCall;
 use crate::*;
-use crate::{core::ResolvedCall, typechecking::FuncType};
 use egglog_ast::generic_ast::GenericExpr;
 
 /// Transforms queries into "proof normal form" by lifting subexpressions to the
@@ -8,6 +8,9 @@ use egglog_ast::generic_ast::GenericExpr;
 /// other primitives. This is what lets the proof checker re-evaluate a primitive
 /// directly (see `check_side_condition`) instead of needing a proof for each of a
 /// primitive's arguments — the arguments are already bound elsewhere.
+///
+/// This runs before encoding. [`super::proof_format::lift_proof`] reconstructs
+/// source-level proofs after execution.
 ///
 /// 1. A custom function call becomes its own top-level fact:
 ///    `(= (lower-bound a b) c)`.
@@ -49,16 +52,9 @@ fn proof_form_fact(
     match fact {
         ResolvedFact::Eq(
             span,
-            ResolvedExpr::Call(
-                span2,
-                head @ ResolvedCall::Func(FuncType {
-                    subtype: FunctionSubtype::Custom,
-                    ..
-                }),
-                args,
-            ),
+            ResolvedExpr::Call(span2, head @ ResolvedCall::Func(_), args),
             ResolvedExpr::Var(span3, v),
-        ) => {
+        ) if head.is_custom_func() => {
             let mut new_args = vec![];
             for arg in args {
                 new_args.push(proof_form_expr(arg, res, fresh));
@@ -88,13 +84,9 @@ fn proof_form_expr(
     match fact {
         ref fact @ ResolvedExpr::Call(
             ref span,
-            ref head @ ResolvedCall::Func(FuncType {
-                subtype: FunctionSubtype::Custom,
-                ref outputs,
-                ..
-            }),
+            ref head @ ResolvedCall::Func(ref func_type),
             ref args,
-        ) => {
+        ) if head.is_custom_func() => {
             // bind this to a new variable
             let new_args = args
                 .iter()
@@ -104,7 +96,7 @@ fn proof_form_expr(
                 span.clone(),
                 ResolvedVar {
                     name: fresh.fresh("n"),
-                    sort: outputs[0].clone(),
+                    sort: func_type.outputs[0].clone(),
                     is_global_ref: false,
                 },
             );
@@ -135,7 +127,7 @@ fn proof_form_expr(
                     // (but allow other primitives to stay inline)
                     ref arg_expr @ ResolvedExpr::Call(
                         ref arg_span,
-                        ResolvedCall::Func(FuncType { ref outputs, .. }),
+                        ResolvedCall::Func(ref func_type),
                         ref inner_args,
                     ) => {
                         // First recursively normalize the inner arguments
@@ -149,7 +141,7 @@ fn proof_form_expr(
                             arg_span.clone(),
                             ResolvedVar {
                                 name: fresh.fresh("v"),
-                                sort: outputs[0].clone(),
+                                sort: func_type.outputs[0].clone(),
                                 is_global_ref: false,
                             },
                         );

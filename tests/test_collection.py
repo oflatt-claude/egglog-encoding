@@ -195,10 +195,12 @@ def test_same_checkout_target_aliases_build_once(
 
 
 @pytest.mark.parametrize("target_dir_is_absolute", [False, True])
+@pytest.mark.parametrize("treatments", [("off", "proofs"), ("egg", "egg-proofs"), ("off", "egg")])
 def test_distinct_checkouts_reject_one_cargo_target_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     target_dir_is_absolute: bool,
+    treatments: tuple[models.Treatment, models.Treatment],
 ) -> None:
     baseline_request = targets.parse_target("baseline")
     candidate_request = targets.parse_target("candidate")
@@ -219,11 +221,11 @@ def test_distinct_checkouts_reject_one_cargo_target_dir(
             (
                 (
                     baseline_request,
-                    (models.EndpointRequest(baseline_request, "off"),),
+                    (models.EndpointRequest(baseline_request, treatments[0]),),
                 ),
                 (
                     candidate_request,
-                    (models.EndpointRequest(candidate_request, "proofs"),),
+                    (models.EndpointRequest(candidate_request, treatments[1]),),
                 ),
             ),
             cast(ReportStore, object()),
@@ -235,6 +237,52 @@ def test_distinct_checkouts_reject_one_cargo_target_dir(
             ROOT,
             Console(stderr=True),
         )
+
+
+@pytest.mark.parametrize("candidate_treatment", ["egg-ee", "off"])
+def test_isolated_native_checkouts_allow_a_shared_cargo_target_dir(
+    candidate_treatment: models.Treatment,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    baseline_request = targets.parse_target("baseline")
+    candidate_request = targets.parse_target("candidate")
+    rows = {
+        baseline_request: models.TargetRow("baseline", str(tmp_path / "baseline"), "HEAD", "baseline123", False),
+        candidate_request: models.TargetRow("candidate", str(tmp_path / "candidate"), "HEAD", "candidate123", False),
+    }
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "shared-target"))
+    monkeypatch.setattr(collection, "materialize_target_request", lambda request, *_args: rows[request])
+    builds: list[models.TargetRequest] = []
+
+    def build(
+        request: models.TargetRequest,
+        row: models.TargetRow,
+        _console: Console,
+        _profile: targets.BuildProfile,
+        _engines: tuple[models.Engine, ...],
+    ) -> models.ResolvedTarget:
+        builds.append(request)
+        return models.ResolvedTarget(request, row, f"sha256:{row.git_sha}", Path(row.path) / "binary")
+
+    monkeypatch.setattr(collection, "build_resolved_target", build)
+    resolved = collection.resolve_targets(
+        (
+            (baseline_request, (models.EndpointRequest(baseline_request, "egg-ee"),)),
+            (candidate_request, (models.EndpointRequest(candidate_request, candidate_treatment),)),
+        ),
+        cast(ReportStore, object()),
+        (FILE_SPEC,),
+        1,
+        120,
+        False,
+        tmp_path,
+        ROOT,
+        Console(stderr=True),
+    )
+
+    assert builds == [baseline_request, candidate_request]
+    assert tuple(resolved) == (baseline_request, candidate_request)
 
 
 def test_same_target_builds_each_engine_required_by_its_treatments(
@@ -608,7 +656,7 @@ def test_collect_rows_rejects_unsupported_timing_summary_before_append(
             Console(stderr=True),
         )
 
-    assert report.read_text(encoding="utf-8") == ""
+    assert not report.exists()
 
 
 def test_run_process_passes_treatment_flags(
@@ -747,7 +795,7 @@ def test_collect_rows_rejects_mutated_workload_before_append(
         collection.collect_rows(store, plan, 120, Console(stderr=True))
 
     assert store.row_count == 0
-    assert store.path.read_text(encoding="utf-8") == ""
+    assert not store.path.exists()
 
 
 def test_redirected_collection_logs_each_run_and_one_status_summary(

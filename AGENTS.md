@@ -54,10 +54,11 @@ make benchmark-smoke
 
 The Make target writes the one-round machine-readable report to
 `/tmp/egglog-encoding-bench-smoke.jsonl` by default and verifies that it is
-nonempty. Override `BENCHMARK_SMOKE_REPORT` to use another temporary path.
+nonempty. It uses small Math and disequality fixtures, not the full local
+benchmark suite. Override `BENCHMARK_SMOKE_REPORT` to use another temporary path.
 
 For benchmark-report UI changes, inspect both a focused one-file report and the
-default ten-file report in Rich and Markdown form. Exercise terminal widths 80,
+default eleven-file report in Rich and Markdown form. Exercise terminal widths 80,
 119, 120, 160, and 200 using copies of the report cache under `/tmp`; do not read
 from or append to the repository cache during UI validation. Confirm that the
 cumulative `--detail` levels add files, phases, and top rulesets in that order,
@@ -101,19 +102,21 @@ or modify the JSONL.
   evidence only; `--proof-testing` remains the strict correctness mode.
 - Bare `./bench.py` compares `proofs` with `off`. The `proof-extraction`
   treatment is explicit opt-in.
-- The five egglog treatments run `egglog-experimental`. The four `egg*`
-  treatments run `egg-math-benchmark` and support only the fixed Rational Math
-  workload. Mixed-engine comparisons build both executables, and every cache
-  row identifies the executable that actually ran.
+- The five egglog treatments run `egglog-experimental`. The `egg` treatment and
+  its three proof variants run `egg-math-benchmark` on the fixed Rational Math
+  workload. `egg-de`, `egg-ee`, `egg-nee`, and `egg-oee` run the original native
+  parameter-analysis drivers on `.in` inputs without proofs. Mixed-engine
+  comparisons build each required executable, and every cache row identifies
+  the executable that actually ran.
 - Benchmark inputs should not contain executable `(prove ...)` commands. Use
   `(check ...)` so the selected treatment controls proof extraction, and cover
   strict proof validity in proof tests.
 - Benchmark files are resolved relative to the command invocation directory,
   not relative to comparison targets.
 - Cache reuse is decided by binary SHA-256, file SHA-256, fact-directory
-  SHA-256, treatment, and timeout.
+  SHA-256, treatment, disequality encoding, and timeout.
 - The baseline and candidate must have different endpoint cache identities
-  (binary SHA-256 and treatment). They may use the same binary when treatment
-  differs.
+  (binary SHA-256, treatment, and disequality encoding). They may use the same
+  binary when treatment or encoding differs.
 - A request must not contain duplicate file/fact-directory hash pairs; those
   selectors would address the same cached workload observations twice.

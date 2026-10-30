@@ -30,6 +30,7 @@ from rich.text import Text
 from .engines import TREATMENT_SPECS
 from .models import (
     BenchmarkEndpoint,
+    DisequalityEncoding,
     EndpointRequest,
     EngineBinary,
     FileSpec,
@@ -67,6 +68,7 @@ class BenchmarkRunPlan:
     required_rows: int
     cached_statuses: tuple[Status, ...]
     missing_observations: int
+    disequality_encoding: DisequalityEncoding = "nee"
 
 
 @dataclass(frozen=True)
@@ -123,7 +125,7 @@ def build_collection_plan(
 
     requests = tuple(
         (
-            file_spec,
+            file_spec.for_engine(TREATMENT_SPECS[endpoint.treatment].engine),
             endpoint.treatment,
             CacheKey.for_endpoint(endpoint, file_spec, timeout_sec),
         )
@@ -142,6 +144,7 @@ def build_collection_plan(
                 required_rows=rounds,
                 cached_statuses=cached,
                 missing_observations=missing,
+                disequality_encoding=cache_key.disequality_encoding,
             )
         )
     return CollectionPlan(target=target, runs=tuple(runs))
@@ -185,15 +188,24 @@ def resolve_targets(
             checkout_path = Path(target.row.path).resolve()
             pending_by_checkout.setdefault(checkout_path, []).append(target)
 
-    if len(pending_by_checkout) > 1:
+    cargo_checkouts = {
+        checkout_path
+        for checkout_path, pending_targets in pending_by_checkout.items()
+        if any(
+            TREATMENT_SPECS[endpoint.treatment].engine in ("egglog", "egg")
+            for target in pending_targets
+            for endpoint in target.endpoint_requests
+        )
+    }
+    if len(cargo_checkouts) > 1:
         configured_target_dir = Path(os.environ.get("CARGO_TARGET_DIR", "target"))
         effective_target_dirs = {
             (
                 configured_target_dir if configured_target_dir.is_absolute() else checkout_path / configured_target_dir
             ).resolve()
-            for checkout_path in pending_by_checkout
+            for checkout_path in cargo_checkouts
         }
-        if len(effective_target_dirs) != len(pending_by_checkout):
+        if len(effective_target_dirs) != len(cargo_checkouts):
             raise ValueError(
                 "multiple checkouts cannot share one CARGO_TARGET_DIR during collection; "
                 "build and freeze distinct endpoint binaries first"
@@ -310,9 +322,11 @@ def label_has_enough_rows(
             endpoint.treatment,
             timeout_sec,
             file_spec.fact_directory_sha256,
+            endpoint.disequality_encoding,
         )
-        for file_spec in files
+        for logical_file in files
         for endpoint in endpoint_requests
+        for file_spec in (logical_file.for_engine(TREATMENT_SPECS[endpoint.treatment].engine),)
     )
     selected = store.selected_statuses_for_keys(keys, rounds)
     return all(len(selected[key]) >= rounds for key in keys)
@@ -324,12 +338,17 @@ def run_process(
     file_spec: FileSpec,
     treatment: Treatment,
     timeout_sec: int,
+    disequality_encoding: DisequalityEncoding = "nee",
 ) -> ProcessObservation:
     """Run one measured workload and read the summary it emitted on success."""
 
     with tempfile.TemporaryDirectory(prefix="egglog-benchmark-") as directory:
         summary_path = Path(directory) / "timing-summary.json"
-        workload = workload_command(binary_path, file_spec, treatment)
+        workload = workload_command(binary_path, file_spec, treatment, disequality_encoding)
+        if not TREATMENT_SPECS[treatment].timing_summary:
+            result = run_command(workload, checkout_path, timeout_sec)
+            require_workload_unchanged(file_spec)
+            return ProcessObservation(result=result, timing_summary=None)
         command = [workload[0], "--timing-summary", str(summary_path), *workload[1:]]
         result = run_command(command, checkout_path, timeout_sec)
         require_workload_unchanged(file_spec)
@@ -378,8 +397,12 @@ def preflight_collection(plan: CollectionPlan, timeout_sec: int) -> None:
         binary_path = target.binary_path_for(engine_runs[0].treatment)
         if binary_path is None:
             raise ValueError(f"target {target.display_label} needs a fresh {engine} binary")
+        if engine not in ("egglog", "egg"):
+            continue
         required_outputs = ["--timing-summary"]
         if engine == "egglog":
+            if any(run.disequality_encoding != "nee" for run in engine_runs):
+                required_outputs.append("--disequality-encoding")
             required_outputs.extend(
                 flag for run in engine_runs for flag in TREATMENT_SPECS[run.treatment].flags if flag.startswith("--")
             )
@@ -401,11 +424,13 @@ def collection_label(
     treatment: Treatment,
     round_index: int,
     rounds: int,
+    disequality_encoding: DisequalityEncoding = "nee",
 ) -> str:
     """Return a concise progress label for one measured observation."""
 
     filename = Path(file_spec.display_path).name
-    return f"{filename} · {treatment} · {round_index + 1}/{rounds}"
+    encoding = f"/{disequality_encoding}" if disequality_encoding != "nee" else ""
+    return f"{filename} · {treatment}{encoding} · {round_index + 1}/{rounds}"
 
 
 def format_timing_result(result: TimingResult) -> str:
@@ -478,6 +503,7 @@ def flat_report_record(
         "fact_directory_path": (str(run.file.fact_directory) if run.file.fact_directory is not None else None),
         "fact_directory_sha256": run.file.fact_directory_sha256,
         "treatment": run.treatment,
+        "disequality_encoding": run.disequality_encoding,
         "timeout_sec": timeout_sec,
         "wall_sec": result.timing.wall_sec,
         "max_rss_bytes": result.timing.max_rss_bytes,
@@ -537,6 +563,7 @@ def collect_rows(
                     run.treatment,
                     round_index,
                     run.missing_observations,
+                    run.disequality_encoding,
                 )
                 progress.update(
                     process_task,
@@ -554,6 +581,7 @@ def collect_rows(
                     run.file,
                     run.treatment,
                     timeout_sec,
+                    run.disequality_encoding,
                 )
                 store.append(
                     flat_report_record(

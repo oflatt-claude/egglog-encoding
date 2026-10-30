@@ -15,7 +15,6 @@ use crate::{
     },
     core::ResolvedCall,
     proofs::proof_format::{Justification, ProofId, ProofStore, Proposition},
-    typechecking::FuncType,
     util::{HashMap, HashSet, IndexMap, SymbolGen},
 };
 use thiserror::Error;
@@ -68,12 +67,10 @@ pub(crate) fn run_merge(
     term_dag: &mut TermDag,
     func_name: &str,
     prog: &[ResolvedNCommand],
+    globals: &HashMap<String, TermId>,
     old_term: TermId,
     new_term: TermId,
 ) -> Result<(TermId, HashSet<Proposition>), ProofCheckError> {
-    let mut subst = HashMap::default();
-    subst.insert("old".to_string(), old_term);
-    subst.insert("new".to_string(), new_term);
     for cmd in prog {
         if let GenericNCommand::Function(func_decl) = cmd
             && func_decl.name == func_name
@@ -85,13 +82,36 @@ pub(crate) fn run_merge(
                     function_name: func_name.to_string(),
                 })
             })?;
-            return eval_expr_with_subst("merge_function", &merge.result, term_dag, &subst);
+            return eval_merge_expr(term_dag, &merge.result, globals, old_term, new_term);
         }
     }
     Err(ProofCheckErrorKind::FunctionNotFound {
         function_name: func_name.to_string(),
     }
     .into())
+}
+
+/// Evaluate a merge using only its referenced bindings, so each merge proof
+/// does not copy every global in the program.
+pub(crate) fn eval_merge_expr(
+    term_dag: &mut TermDag,
+    expr: &ResolvedExpr,
+    globals: &HashMap<String, TermId>,
+    old_term: TermId,
+    new_term: TermId,
+) -> Result<(TermId, HashSet<Proposition>), ProofCheckError> {
+    let subst = expr
+        .vars()
+        .filter_map(|var| {
+            let value = match var.name.as_str() {
+                "old" => Some(old_term),
+                "new" => Some(new_term),
+                _ => globals.get(&var.name).copied(),
+            };
+            value.map(|value| (var.name, value))
+        })
+        .collect();
+    eval_expr_with_subst("merge_function", expr, term_dag, &subst)
 }
 
 /// Given a sequence of actions, computes:
@@ -816,8 +836,14 @@ impl ProofStore {
                     };
 
                 // Run the merge function to get the expected result
-                let (merged_term_child, mut merged_props) =
-                    run_merge(&mut self.term_dag, function, program, old_term, new_term)?;
+                let (merged_term_child, mut merged_props) = run_merge(
+                    &mut self.term_dag,
+                    function,
+                    program,
+                    &ctx.global_bindings,
+                    old_term,
+                    new_term,
+                )?;
                 // Add f(inputs..., merged_term) to merged_props
                 let mut merged_view_args = input_args.clone();
                 merged_view_args.push(merged_term_child);
@@ -1168,17 +1194,10 @@ impl ProofStore {
             // In the term representation, custom functions store output as last arg: f(args..., v)
             ResolvedFact::Eq(
                 _,
-                ResolvedExpr::Call(
-                    _,
-                    ResolvedCall::Func(FuncType {
-                        subtype: FunctionSubtype::Custom,
-                        name,
-                        ..
-                    }),
-                    args,
-                ),
+                ResolvedExpr::Call(_, call @ ResolvedCall::Func(_), args),
                 ResolvedExpr::Var(_, v),
-            ) => {
+            ) if call.is_custom_func() => {
+                let name = call.name();
                 // Get the output variable's term
                 let var_term = subst_with_globals.get(&v.name).copied().ok_or_else(|| {
                     ProofCheckErrorKind::UnboundVariable {
@@ -1204,7 +1223,7 @@ impl ProofStore {
                 // Add the output variable as the last argument
                 arg_terms.push(var_term);
 
-                let expected_term_id = self.term_dag.app(name.clone(), arg_terms);
+                let expected_term_id = self.term_dag.app(name.to_owned(), arg_terms);
 
                 // The proposition should be a reflexive equality for this term
                 if lhs != expected_term_id || rhs != expected_term_id {
