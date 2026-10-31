@@ -63,14 +63,13 @@ impl Layouts {
         let integer = |v| graph.value_to_base::<i64>(v);
         let mut carriers = BTreeMap::new();
         let mut indices = BTreeSet::new();
-        for row in rows(graph, "SlottedCarrierLayout", &["String", "i64", "String"])? {
+        for row in rows(graph, "SlottedCarrierLayout", &["String", "i64"])? {
             let sort = text(row[0]);
             let index = usize::try_from(integer(row[1]))
                 .map_err(|_| format!("negative carrier index for {sort}"))?;
-            let variable = text(row[2]);
             if !indices.insert(index)
                 || carriers
-                    .insert(sort.clone(), Symbols::new(&sort, index, &variable))
+                    .insert(sort.clone(), Symbols::new(&sort, index))
                     .is_some()
             {
                 return Err(format!("conflicting carrier layout for {sort}"));
@@ -133,6 +132,7 @@ impl Layouts {
             covered.entry(name).or_default().insert(body);
         }
         let mut constructors = BTreeMap::new();
+        let mut variable_sorts = BTreeSet::new();
         for (name, arity) in arities {
             let function = graph
                 .get_function(&name)
@@ -194,11 +194,13 @@ impl Layouts {
                     .then(|| edge_columns.get(i).copied())
                     .flatten()
             });
-            let variable = carriers.get(&op.sort).is_some_and(|s| s.var == name);
-            if (variable && op.columns != [Column::Var])
-                || (!variable && op.columns.contains(&Column::Var))
-            {
-                return Err(format!("invalid variable layout for {name}"));
+            if op.columns.contains(&Column::Var) {
+                if op.columns != [Column::Var] {
+                    return Err(format!("invalid variable layout for {name}"));
+                }
+                if !variable_sorts.insert(op.sort.clone()) {
+                    return Err(format!("multiple variable constructors for {}", op.sort));
+                }
             }
             if physical != arity
                 || (!binders.is_empty() && covered_column.is_none())
@@ -230,15 +232,6 @@ impl Layouts {
             }
         }
         for s in carriers.values() {
-            if !constructors
-                .get(&s.var)
-                .is_some_and(|op| op.sort == s.sort && op.columns == [Column::Var])
-            {
-                return Err(format!(
-                    "missing variable constructor {} for {}",
-                    s.var, s.sort
-                ));
-            }
             for (name, kind, input, output) in [
                 (
                     &s.free_vars,

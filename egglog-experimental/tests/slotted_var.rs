@@ -23,23 +23,84 @@ fn variable_equalities_do_not_cross_carriers() {
 }
 
 fn check(source: &str) {
+    check_inputs(&[source]);
+}
+
+fn check_inputs(sources: &[&str]) {
     for proof_mode in [ProofMode::Disabled, ProofMode::Prove] {
-        let encoded = Compiler::new(Options {
+        let mut compiler = Compiler::new(Options {
             proof_mode,
             ..Options::default()
-        })
-        .compile(None, source)
-        .unwrap();
+        });
         let mut graph = if proof_mode == ProofMode::Prove {
             new_egraph_with_proofs()
         } else {
             new_egraph()
         };
-        graph.parse_and_run_program(None, &encoded).unwrap();
-        if proof_mode == ProofMode::Disabled {
-            egglog_experimental::slotted::export::export(&graph).unwrap();
+        for source in sources {
+            let encoded = compiler.compile(None, source).unwrap();
+            graph.parse_and_run_program(None, &encoded).unwrap();
+            if proof_mode == ProofMode::Disabled {
+                egglog_experimental::slotted::export::export(&graph).unwrap();
+            }
         }
     }
+}
+
+#[test]
+fn binders_do_not_require_a_variable_constructor() {
+    check(
+        r#"
+        (sort Empty)
+        (datatype Expr (Num i64) (Lambda Var Expr :binder 0))
+        (let term (Lambda $x (Num 1)))
+        (check (= term (Lambda $y (Num 1))))
+        (extract term)
+        (rewrite (Lambda $bound body) body :when ((not-free $bound body)))
+        (run 1)
+        (check (= term (Num 1)))
+    "#,
+    );
+}
+
+#[test]
+fn a_variable_constructor_can_be_added_later_and_is_scoped() {
+    check_inputs(&[
+        "(sort Expr)",
+        "(constructor Num (i64) Expr) (constructor Lambda (Var Expr) Expr :binder 0)",
+        "(push) (constructor Temporary (Var) Expr) (let t (Temporary $a)) (pop)",
+        "(constructor Name (Var) Expr) (let id (Lambda $x (Name $x)))",
+        "(check (= id (Lambda $y (Name $y)))) (extract id)",
+    ]);
+}
+
+#[test]
+fn a_second_variable_constructor_is_rejected_across_inputs() {
+    let mut compiler = Compiler::default();
+    compiler
+        .compile(None, "(datatype Expr (Name Var))")
+        .unwrap();
+    let error = compiler
+        .compile(None, "(constructor AnotherName (Var) Expr)")
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("already has variable constructor Name")
+    );
+}
+
+#[test]
+fn substitution_without_a_variable_constructor_preserves_closed_bodies() {
+    let source = r#"
+        (datatype Expr (Num i64) (Lambda Var Expr :binder 0) (App Expr Expr))
+        (let call (App (Lambda $x (Lambda $y (Num 1))) (Num 2)))
+        (rewrite (App (Lambda $x body) arg) (subst body $x arg))
+        (run 1)
+        (check (= call (Lambda $z (Num 1))))
+    "#;
+    let encoded = Compiler::default().compile(None, source).unwrap();
+    new_egraph().parse_and_run_program(None, &encoded).unwrap();
 }
 
 #[test]

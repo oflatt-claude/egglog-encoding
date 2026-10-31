@@ -17,7 +17,7 @@ source proof   ← flattened proof   ← egglog proof
 # Terms
 
 A term is what the language writes: a constructor applied to children, a payload
-literal, or a rigid `Var` name such as `$a`. Each carrier declares exactly one unary
+literal, or a rigid `Var` name such as `$a`. Each carrier may declare one unary
 variable constructor, for example `(V Var)` in `Math`; `(V $a)` is a `Math` term.
 A binder column holds a `Var` name directly. Ordinary proof steps compare terms
 syntactically: `(Lam $a (V $a))` and `(Lam $b (V $b))` are different terms.

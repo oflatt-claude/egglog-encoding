@@ -104,7 +104,7 @@ fn export_supports_multiple_carriers_and_escaped_payloads() {
 }
 
 #[test]
-fn export_requires_variable_metadata_for_every_carrier() {
+fn export_requires_slot_metadata_for_declared_variable_constructors() {
     let mut graph =
         run("(datatype* (Expr (VE Var)) (Value (VV Var) (Num i64))) (let n (Num 7)) (run 0)");
     export(&graph).unwrap();
@@ -181,6 +181,7 @@ fn native_reads_reject_invalid_variables_renamings_and_metadata() {
         "(delete (SlottedNodeLayout \"Null\" 0))",
         "(set (SlottedNodeLayout \"F\" 99) ())",
         "(set (SlottedEdgeLayout \"F\" 1) ())",
+        "(constructor AnotherName (Renaming) U) (set (SlottedNodeLayout \"AnotherName\" 1) ()) (set (SlottedSlotLayout \"AnotherName\" 0) ())",
     ] {
         let mut graph = run(source);
         graph.parse_and_run_program(None, mutation).unwrap();

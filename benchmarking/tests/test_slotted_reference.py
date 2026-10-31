@@ -71,6 +71,21 @@ def test_source_variables_require_the_declared_wrapper(tmp_path: Path) -> None:
     assert driver.pattern(src.lang, ("sl", "$x")) == "(V $x)"
 
 
+def test_variable_constructor_is_optional_with_binders(tmp_path: Path) -> None:
+    src = syntax.Source(tmp_path / "language.egg", text="(datatype Expr (Num i64) (Lambda Var Expr :binder 0))")
+    assert src.carriers["Expr"].var is None
+    assert src.term(syntax.parse("(Lambda $x (Num 1))")[0]) == ("Lambda", src.slots.intern("$x"), ("Num", "1"))
+    assert "(var $0)" not in driver.reference_spec(src.lang, 1, [], [], [], [])
+    assert "_variable_seed" not in driver.source_program("unused", src.lang, [], [], [], [], 1)
+    with pytest.raises(ValueError, match="no variable constructor"):
+        driver.term(src.lang, ("var", 0))
+
+
+def test_multiple_variable_constructors_are_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="at most one unary variable constructor"):
+        syntax.Source(tmp_path / "language.egg", text="(datatype Expr (Name Var) (AnotherName Var))")
+
+
 def test_binder_ports_are_rigid_fields_and_keep_nonpayload_indices() -> None:
     sig = syntax.signature(["String", "Var", "i64", "Var", "U"], [0, 1])
     assert sig == ["String", syntax.BINDER, "i64", syntax.BINDER, syntax.CHILD]

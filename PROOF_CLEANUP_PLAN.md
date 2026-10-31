@@ -264,8 +264,8 @@ tests. Validation log: `/tmp/slotted-malformed-step-check.log`.
 
 ## Rigid Var names
 
-The source language uses a built-in rigid `Var` sort and requires one unary
-variable constructor per equality sort, as requested. Terms use explicit
+The source language uses a built-in rigid `Var` sort and allows at most one unary
+variable constructor per equality sort. Terms use explicit
 applications such as `(V $a)`; binders hold `Var` names directly. Equalities
 between variable applications cannot equate names or cross carrier sorts.
 
@@ -294,3 +294,10 @@ retain their explicit skips.
 
 Validation: `/tmp/var-sort-check-complete.log`. Review:
 `/tmp/var-sort-fable-review.txt`.
+
+Optional variable constructors are covered by regressions for empty carriers,
+binder-only proofs and extraction, declarations across inputs and scopes,
+duplicate rejection, and substitution in closed bodies. Constructor identity
+comes from its layout; carrier metadata contains only the sort and index.
+Root `make check` passed again, with 300 Python tests and all seven default
+proof-fuzz profiles. Validation: `/tmp/optional-var-check.log`.

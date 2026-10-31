@@ -23,7 +23,7 @@ Existing egglog forms have these slotted semantics:
 
 | Form | Behavior in slotted mode |
 | --- | --- |
-| [Sorts and constructors](#sorts-and-constructors) | Every equality sort declares one unary variable constructor; term children must use its result sort |
+| [Sorts and constructors](#sorts-and-constructors) | Each equality sort may declare one unary variable constructor; term children must use its result sort |
 | [`let`](#let) | Binds a term or concrete slot; references preserve its free-slot identities |
 | [`union`](#union), [`=` and `!=`](#equality) | Equality respects bound-variable alpha-equivalence and known symmetries while preserving free-variable identities |
 | [`rewrite`](#rewrite) | Pattern slots are rule-local; distinct names match distinct slots, and RHS-only slot literals are implicitly fresh |
@@ -84,14 +84,14 @@ The equivalent datatype declaration is:
 ```
 
 `Var` is a built-in sort of rigid names: distinct names cannot be unioned or
-rewritten equal. Each equality sort, or **carrier**, must declare exactly one
-unary variable constructor, such as `(V Var)`. `(V $a)` is an `Expr` term;
-`$a` itself has sort `Var`. Equating `(V $a)` with `(V $b)` does not equate
-those names or variable terms in another carrier.
+rewritten equal. Each equality sort, or **carrier**, may declare at most one
+unary variable constructor, with any nonreserved name, such as `(V Var)`.
+`(V $a)` is an `Expr` term; `$a` itself has sort `Var`. Equating `(V $a)`
+with `(V $b)` does not equate those names or variable terms in another carrier.
 
-Declare the variable constructor together with its carrier, in the same input
-and push/pop scope. Several carriers may be declared, including through
-`datatype*`. A constructor's term children must have the same carrier as its result.
+Constructors may be added in later inputs and follow normal push/pop scope.
+Several carriers may be declared, including through `datatype*`.
+A constructor's term children must have the same carrier as its result.
 All patterns in a query must also use one carrier, as must the terms
 in a union or comparison. Cross-carrier operations are rejected.
 
@@ -108,10 +108,20 @@ do not count. Binder positions must be distinct, contiguous, and immediately
 precede the term child they bind. Multiple binder columns act as nested
 binders around that child. Other children remain outside their scope.
 
-Binder columns have sort `Var`. Their arguments are slot literals or globals
-bound to names; compound terms and ordinary pattern variables are rejected.
+Binder columns have sort `Var` and do not require a variable constructor.
+Their arguments are slot literals or globals bound to names; compound terms and
+ordinary pattern variables are rejected.
 In `(Let initializer $x body)`, `$x` binds occurrences in `body`
 and has no scope over `initializer`.
+
+For example, `(Lam $x (V $x))` binds the variable occurrence `(V $x)`.
+A datatype without a variable constructor can still bind unused names:
+
+```slotted
+(datatype Expr (Num i64) (Lambda Var Expr :binder 0))
+(let constant (Lambda $x (Num 1)))
+(check (= constant (Lambda $y (Num 1))))
+```
 
 ## Slots and terms
 

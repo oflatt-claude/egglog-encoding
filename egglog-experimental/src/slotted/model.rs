@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) struct Symbols {
     pub sort: String,
     pub index: usize,
-    pub var: String,
     pub renames: String,
     pub equated: String,
     pub free_vars: String,
@@ -20,11 +19,10 @@ pub(super) struct Symbols {
 }
 
 impl Symbols {
-    pub fn new(sort: &str, i: usize, var: &str) -> Self {
+    pub fn new(sort: &str, i: usize) -> Self {
         Self {
             sort: sort.into(),
             index: i,
-            var: var.into(),
             renames: format!("RenamesToLeader_{i}"),
             equated: format!("Equated_{i}"),
             free_vars: format!("FreeVars_{i}"),

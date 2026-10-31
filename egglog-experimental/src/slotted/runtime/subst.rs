@@ -1047,9 +1047,9 @@ impl Layouts {
             }
             retained.insert(name, layout);
         }
-        if variables.len() != 1 {
+        if variables.len() > 1 {
             return Err(format!(
-                "carrier {carrier} must have exactly one variable constructor"
+                "carrier {carrier} must have at most one variable constructor"
             ));
         }
         layouts.constructors = retained;

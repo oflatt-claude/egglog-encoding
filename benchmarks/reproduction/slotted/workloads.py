@@ -84,7 +84,10 @@ def logic_workload(path, *, rounds=None):
         return src.lang.sexpr(src.term(form, ground=True))
 
     # Seed the same variable node explicitly in both engines, including closed inputs.
-    head = [f"rounds {budget}", *ctor_lines(src.lang), f"term {term(goal[0])}", "term (var $0)"]
+    head = [f"rounds {budget}", *ctor_lines(src.lang), f"term {term(goal[0])}"]
+    variable = src.carriers[src.sorts[0]].var
+    if variable is not None:
+        head.append("term (var $0)")
     head += [f"union {term(a)} {term(b)}" for a, b in unions]
     tail = [f"goal {term(goal[1])}"]
     multi = [line for rule in rules for line in syntax.rule_lines(src, src.lang, rule)]
@@ -98,7 +101,8 @@ def logic_workload(path, *, rounds=None):
     forms = syntax.parse(program)
     forms = [["run", str(budget)] if f[0] == "run" else f for f in forms]
     first_action = next(i for i, form in enumerate(forms) if form[0] in ("union", "run"))
-    forms.insert(first_action, ["let", "_variable_seed", [src.carriers[src.sorts[0]].var, "$0"]])
+    if variable is not None:
+        forms.insert(first_action, ["let", "_variable_seed", [variable, "$0"]])
     return Workload(
         study="logic",
         case=path.stem,

@@ -24,7 +24,7 @@ class CarrierSymbols:
     """Generated constructor and relation names for one equality sort."""
 
     sort: str
-    var: str
+    var: str | None
     renames: str
     equated: str
     free_vars: str
@@ -58,7 +58,7 @@ class CarrierSymbols:
 
 def carrier_symbols(sorts, variables):
     """The table names for one declared equality sort, in declaration order."""
-    return {sort: CarrierSymbols.create(sort, i, variables[sort]) for i, sort in enumerate(tuple(sorts))}
+    return {sort: CarrierSymbols.create(sort, i, variables.get(sort)) for i, sort in enumerate(tuple(sorts))}
 
 
 def read_language(path, sorts=("U",)):
@@ -792,11 +792,8 @@ class Source:
             self.child_sorts[name] = children
             if sig == [SLOT]:
                 if output in variables:
-                    raise SystemExit(f"{output}: exactly one unary variable constructor is required")
+                    raise SystemExit(f"{output}: at most one unary variable constructor is allowed")
                 variables[output] = name
-        for sort in self.sorts:
-            if sort not in variables:
-                raise SystemExit(f"{sort}: exactly one unary variable constructor is required")
         self.carriers = carrier_symbols(self.sorts, variables)
         self.lang = Terms(
             {c: Op(c, sig, sort=self.output_sorts[c], kid_sorts=self.child_sorts[c]) for c, sig in self.spec.items()},

@@ -3,7 +3,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (sort {sort})
-(set (SlottedCarrierLayout {sort_name} {index} {var_name}) ())
+(set (SlottedCarrierLayout {sort_name} {index}) ())
 (relation {renames} ({sort} Renaming {sort}))
 (relation {equated} ({sort} Renaming {sort}))
 (function {free_vars} ({sort}) Renaming :merge (map-intersect old new))

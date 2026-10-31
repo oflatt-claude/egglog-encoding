@@ -405,14 +405,9 @@ fn refused_source_forms_have_diagnostics() {
             "cross-sort multipatterns",
         ),
         (
-            "an equality sort without a variable constructor",
-            "(datatype A (A0))",
-            "exactly one unary variable constructor",
-        ),
-        (
             "two variable constructors for the same carrier",
             "(datatype A (X Var) (Y Var))",
-            "exactly one unary variable constructor",
+            "already has variable constructor X",
         ),
         (
             "a declaration shadowing the built-in Var sort",

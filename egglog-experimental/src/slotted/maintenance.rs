@@ -53,7 +53,6 @@ pub(super) fn carrier(s: &Symbols, proofs: bool) -> String {
         include_str!("templates/carrier.egg"),
         sort = s.sort,
         sort_name = quote(&s.sort),
-        var_name = quote(&s.var),
         renames = s.renames,
         equated = s.equated,
         free_vars = s.free_vars,

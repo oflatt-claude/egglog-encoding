@@ -188,26 +188,7 @@ impl Compiler {
                     format!("equality sort {sort:?} is declared more than once"),
                 ));
             }
-            let variables = ctors
-                .iter()
-                .filter_map(|form| {
-                    let (_, args) = form.call().ok()?;
-                    (args.len() >= 3
-                        && args[2].atom().ok()? == sort
-                        && args[1].list().ok()?.len() == 1
-                        && args[1].list().ok()?[0].atom().ok()? == "Var")
-                        .then(|| args[0].atom().unwrap())
-                })
-                .collect::<Vec<_>>();
-            let [variable] = variables.as_slice() else {
-                return Err(ParseError(
-                    fallback.clone(),
-                    format!(
-                        "equality sort {sort:?} requires exactly one unary variable constructor with input Var"
-                    ),
-                ));
-            };
-            let s = Symbols::new(&sort, self.state.lang.carriers.len(), variable);
+            let s = Symbols::new(&sort, self.state.lang.carriers.len());
             self.emit(
                 &mut out,
                 maintenance::carrier(&s, self.options.proof_mode != ProofMode::Disabled),
@@ -367,10 +348,17 @@ impl Compiler {
             }
         }
         let variable = cols == ["Var"] && binders.is_empty();
-        let designated = &self.state.lang.symbols(&sort).var;
-        if variable && !designated.is_empty() && *designated != name {
+        if variable
+            && let Some(previous) = self
+                .state
+                .lang
+                .constructors
+                .values()
+                .find(|op| op.sort == sort && op.columns == [Column::Var])
+        {
             return Err(format!(
-                "equality sort {sort:?} already has variable constructor {designated}"
+                "equality sort {sort:?} already has variable constructor {}",
+                previous.name
             ));
         }
         let mut child = 0;
@@ -984,11 +972,10 @@ impl Compiler {
         let command = match head {
             "sort" if args.len() == 1 => {
                 let sort = args[0].symbol()?;
-                self.state.lang.carriers.push(Symbols::new(
-                    sort,
-                    self.state.lang.carriers.len(),
-                    "",
-                ));
+                self.state
+                    .lang
+                    .carriers
+                    .push(Symbols::new(sort, self.state.lang.carriers.len()));
                 Command::Sort {
                     span: egglog::span!(),
                     name: sort.into(),
@@ -1001,15 +988,6 @@ impl Compiler {
             }
             "constructor" => {
                 let op = self.constructor(&form)?;
-                if op.columns == [Column::Var] {
-                    self.state
-                        .lang
-                        .carriers
-                        .iter_mut()
-                        .find(|s| s.sort == op.sort)
-                        .unwrap()
-                        .var = op.name.clone();
-                }
                 let command = Command::Constructor {
                     span: egglog::span!(),
                     name: op.name.clone(),

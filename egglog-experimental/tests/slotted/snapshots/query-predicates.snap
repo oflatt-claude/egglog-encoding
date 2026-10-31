@@ -34,7 +34,7 @@ input_file: egglog-experimental/tests/slotted/query-predicates.egg
 (function SlottedBinderLayout (String i64 i64 i64 String) Unit :no-merge :internal-hidden)
 (function SlottedPayloadLayout (String i64 String) Unit :no-merge :internal-hidden)
 
-(function SlottedCarrierLayout (String i64 String) Unit :no-merge :internal-hidden)
+(function SlottedCarrierLayout (String i64) Unit :no-merge :internal-hidden)
 (function SlottedSlotLayout (String i64) Unit :no-merge :internal-hidden)
 (GroupIdx 0)
 (GroupIdx 1)
@@ -562,7 +562,7 @@ input_file: egglog-experimental/tests/slotted/query-predicates.egg
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (sort Expr)
-(set (SlottedCarrierLayout "Expr" 0 "VExpr") ())
+(set (SlottedCarrierLayout "Expr" 0) ())
 (relation RenamesToLeader_0 (Expr Renaming Expr))
 (relation Equated_0 (Expr Renaming Expr))
 (function FreeVars_0 (Expr) Renaming :merge (map-intersect old new))
