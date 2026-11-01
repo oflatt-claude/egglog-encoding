@@ -69,6 +69,11 @@ private theorem rebuildRules_unionFree (f : FnName) (k : Nat) :
     subst hro
     exact ⟨trivial, trivial⟩
 
+private theorem exprs_unionFree (f : Expr → Action) (hf : ∀ e, (f e).UnionFree) :
+    ∀ es : List Expr, Actions.UnionFree (es.map f)
+  | [] => trivial
+  | e :: es => ⟨hf e, exprs_unionFree f hf es⟩
+
 private theorem rekeyRules_unionFree (o : Options) (f : FnName) (k : Nat) :
     ∀ ro ∈ rekeyRules o f k, ro.1.UnionFree := by
   intro ro hro
@@ -80,8 +85,11 @@ private theorem rekeyRules_unionFree (o : Options) (f : FnName) (k : Nat) :
     · obtain ⟨i, _, rfl⟩ := List.mem_map.mp hro
       exact ⟨trivial, trivial⟩
   · rcases List.mem_cons.mp hro with rfl | hro
-    · exact ⟨trivial, trivial, trivial⟩
-    · obtain ⟨i, _, rfl⟩ := List.mem_map.mp hro
+    · exact exprs_unionFree
+        (fun c => Action.expr (.app (hasChildName f) (c :: (rebuildVars k ++ [Expr.var "@e"]))))
+        (fun _ => trivial) _
+    · rw [List.mem_singleton] at hro
+      subst hro
       exact ⟨trivial, trivial, trivial⟩
 
 private theorem mergeRules_unionFree (o : Options) (f : FnName) (k : Nat) :
@@ -92,7 +100,7 @@ private theorem mergeRules_unionFree (o : Options) (f : FnName) (k : Nat) :
   · exact rebuildRules_unionFree f k ro hro
   · rw [List.mem_singleton] at hro
     subst hro
-    exact ⟨trivial, trivial, trivial⟩
+    exact ⟨trivial, trivial⟩
 
 private theorem maintenanceGroups_unionFree (o : Options) (P : Program) :
     ∀ ro ∈ (maintenanceGroups o P).flatten, ro.1.UnionFree := by

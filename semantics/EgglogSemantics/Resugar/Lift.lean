@@ -42,7 +42,7 @@ def rebuild (P : Program) (kind : Congruence.RebuildOrigin)
     trans P left py
   -- The canonical node views are an optimization of the congruence pass alone; proofs
   -- are extracted from the base compilation.
-  | .view _ | .stale _ | .eclass _ | .child _ _ | .viewCollide _ => none
+  | .view _ | .stale _ | .index _ | .rekey _ | .viewCongruence _ => none
 
 /-- The proof `k` builds must establish the source claim of the relational fact. -/
 def expect (P : Program) (fact : Term) (k : Claim → Option Proof) : Option Proof := do

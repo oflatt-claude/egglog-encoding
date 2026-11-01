@@ -112,20 +112,26 @@ example : encodeQuery orderedQuery 0 =
 #guard ((maintenanceRules missingPremise).map Prod.snd).count (.rebuild .compress) == 1
 #guard ((rebuildRules "F" 2).map Prod.snd) == [.rebuild (.congruence "F")]
 
--- The optimizations: with a view, an application is one row; the incremental view's rows
+-- The optimizations: with a view, an application is one row; the indexed view's rows
 -- are built with the node; the phased rebuild keeps one origin per rule in schedule order.
-#guard (encodeQueryWith { views := .incremental } [.expr (.app "F" [.app "G" [.var "x"]])] 0).1.map
+#guard (encodeQueryWith { views := .indexed } [.expr (.app "F" [.app "G" [.var "x"]])] 0).1.map
     Pattern.toEgg == ["(@GView x @v0)", "(@FView @v0 @v1)"]
-#guard (encodeBuildWith { views := .incremental } (.app "F" [atom "A"])).map Action.toEgg ==
+#guard (encodeBuildWith { views := .indexed } (.app "F" [atom "A"])).map Action.toEgg ==
   ["(@AView (A))", "(@UF (A) (A))", "(@FView (A) (F (A)))", "(@UF (F (A)) (F (A)))"]
 #guard (encodeBuildWith { views := .naive } (.app "F" [atom "A"])).map Action.toEgg ==
   ["(@UF (A) (A))", "(@UF (F (A)) (F (A)))"]
 #guard ((rekeyRules { views := .naive } "F" 1).map Prod.snd) ==
   [.rebuild (.view "F"), .rebuild (.stale "F"), .rebuild (.stale "F")]
-#guard ((rekeyRules { views := .incremental } "F" 1).map Prod.snd) ==
-  [.rebuild (.eclass "F"), .rebuild (.child "F" 0)]
-#guard [({} : Options), { views := .naive }, { views := .incremental }, { phased := true },
-    { views := .incremental, phased := true }].all fun o =>
+#guard ((rekeyRules { views := .indexed } "F" 1).map Prod.snd) ==
+  [.rebuild (.index "F"), .rebuild (.rekey "F")]
+#guard (rekeyRule "F" 1).query.map Pattern.toEgg ==
+  ["(@FHasChild @x @c0 @e)", "(@UF @x @y)", "(!= @x @y)", "(@UF @c0 @d0)", "(@UF @e @o)"]
+#guard (indexRule "F" 1).actions.map Action.toEgg ==
+  ["(@FHasChild @c0 @c0 @e)", "(@FHasChild @e @c0 @e)"]
+#guard ((mergeRules { views := .naive } "F" 1).map fun rm => rm.1.actions.map Action.toEgg) ==
+  [["(@UF @z @y)"]]
+#guard [({} : Options), { views := .naive }, { views := .indexed }, { phased := true },
+    { views := .indexed, phased := true }].all fun o =>
   (compileWith o nestedUnion).origins.length == (encodeWith o nestedUnion).rules.length &&
     (exec (encodeWith o nestedUnion)).any fun d =>
       idF d (.app "F" [term "A"]) == some (.app "F" [term "A"]) &&
@@ -133,7 +139,7 @@ example : encodeQuery orderedQuery 0 =
 #guard match (rebuildWith { phased := true } nestedUnion).1 with
   | .saturate (.seq (.saturate (.run _)) (.run _)) => true
   | _ => false
-#guard match (rebuildWith { views := .incremental, phased := true } nestedUnion).1 with
+#guard match (rebuildWith { views := .indexed, phased := true } nestedUnion).1 with
   | .saturate (.seq (.saturate (.run _)) (.seq (.saturate (.run _)) (.run _))) => true
   | _ => false
 #guard (rebuildRules "A" 0).isEmpty

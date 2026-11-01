@@ -142,9 +142,9 @@ def ruleComment : RuleOrigin → String
   | .rebuild (.congruence f) => "congruence of $" ++ name f ++ "$"
   | .rebuild (.view f) => "view of $" ++ name f ++ "$"
   | .rebuild (.stale f) => "stale view row of $" ++ name f ++ "$"
-  | .rebuild (.eclass f) => "canonical output of $" ++ name f ++ "$"
-  | .rebuild (.child f i) => s!"canonical child {i + 1} of $" ++ name f ++ "$"
-  | .rebuild (.viewCollide f) => "two outputs of $" ++ name f ++ "$: merge them"
+  | .rebuild (.index f) => "index of $" ++ name f ++ "$'s view"
+  | .rebuild (.rekey f) => "a row of $" ++ name f ++ "$'s view moves"
+  | .rebuild (.viewCongruence f) => "congruence of $" ++ name f ++ "$ over its view"
 
 /-- The expressions a rule head evaluates. -/
 def actionExprs : Action → List Expr

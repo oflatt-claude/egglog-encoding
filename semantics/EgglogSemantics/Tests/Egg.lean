@@ -117,11 +117,33 @@ def Program.arityConflicts (p : Program) : List FnName :=
 /-- Every function `(print-size)` reports, in a stable order. -/
 def Program.fnNames (p : Program) : List FnName := (p.ctors.map Prod.fst).dedup
 
+/-- The names applied inside another application's arguments. -/
+def Expr.nestedFns : Expr → List FnName
+  | .app _ args => Expr.fnsList args
+  | .min a b => a.nestedFns ++ b.nestedFns
+  | _ => []
+
+def Pattern.nestedFns : Pattern → List FnName
+  | .expr e => e.nestedFns
+  | .eq a b | .ne a b => a.nestedFns ++ b.nestedFns
+
+def Action.nestedFns : Action → List FnName
+  | .expr e => e.nestedFns
+  | .union a b => a.nestedFns ++ b.nestedFns
+  | .subsume _ es => Expr.fnsList es
+
+/-- The names the program nests, which egglog needs as constructors even when generated:
+the index of a canonical node view mentions the view's rows. -/
+def Program.nestedFns (p : Program) : List FnName :=
+  ((p.rules.flatMap fun r => r.query.flatMap Pattern.nestedFns ++ r.actions.flatMap Action.nestedFns)
+    ++ p.check.flatMap Pattern.nestedFns).dedup
+
 /-- A `relation` or `constructor` declaration for every name the program applies. -/
 def Program.declsToEgg (p : Program) : List String :=
+  let nested := p.nestedFns
   p.ctors.map fun fa =>
     let sorts := "(" ++ String.intercalate " " (List.replicate fa.2 "Math") ++ ")"
-    if isRelationName fa.1 then "(relation " ++ fa.1 ++ " " ++ sorts ++ ")"
+    if isRelationName fa.1 && !nested.contains fa.1 then "(relation " ++ fa.1 ++ " " ++ sorts ++ ")"
     else "(constructor " ++ fa.1 ++ " " ++ sorts ++ " Math)"
 
 /-! ### The file -/

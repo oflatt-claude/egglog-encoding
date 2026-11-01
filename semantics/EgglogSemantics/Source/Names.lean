@@ -14,6 +14,10 @@ def ufName : FnName := "@UF"
 pass: its key is the tuple of child leaders and its last column the leader of the node. -/
 def viewName (f : FnName) : FnName := "@" ++ f ++ "View"
 
+/-- The index of the canonical node view of `f`: a row per view row and column, mapping the
+column's value to the row that mentions it, with the row's columns written out. -/
+def hasChildName (f : FnName) : FnName := "@" ++ f ++ "HasChild"
+
 /-- The `n`th generated variable. -/
 def freshVar (n : Nat) : Var := "@v" ++ toString n
 

@@ -826,14 +826,14 @@ private def congruenceCheck (fuel : Nat) (o : Congruence.Options) (p : Program) 
   | _, none => errors := errors ++ ["congruence target stuck or exhausted fuel"]
   return errors
 
-/-- Leading `--views=naive|incremental` and `--phased` arguments. -/
+/-- Leading `--views=naive|indexed` and `--phased` arguments. -/
 private def parseOptions : List String → Congruence.Options × List String
   | "--views=naive" :: rest =>
       let (o, names) := parseOptions rest
       ({ o with views := .naive }, names)
-  | "--views=incremental" :: rest =>
+  | "--views=indexed" :: rest =>
       let (o, names) := parseOptions rest
-      ({ o with views := .incremental }, names)
+      ({ o with views := .indexed }, names)
   | "--phased" :: rest =>
       let (o, names) := parseOptions rest
       ({ o with phased := true }, names)
@@ -1033,7 +1033,7 @@ def main (args : List String) : IO UInt32 := do
       | "update" :: names => runEggChecks n true names
       | names => runEggChecks n false names
   | "congruence" :: fuel :: rest =>
-    -- `difftest congruence <fuel> [--views=naive|incremental] [--phased] [names]`
+    -- `difftest congruence <fuel> [--views=naive|indexed] [--phased] [names]`
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
     | some n =>
@@ -1084,7 +1084,7 @@ def main (args : List String) : IO UInt32 := do
       writeCase dir s!"rand-{n}" (prog (genProgram (k + 1)))
       return 0
   | dir :: "compiled" :: rest =>
-    -- `difftest <dir> compiled [--views=naive|incremental] [--phased]`
+    -- `difftest <dir> compiled [--views=naive|indexed] [--phased]`
     let (o, extra) := parseOptions rest
     unless extra.isEmpty do
       IO.eprintln s!"difftest: unknown arguments {extra}"

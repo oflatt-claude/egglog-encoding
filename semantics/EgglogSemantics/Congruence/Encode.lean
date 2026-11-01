@@ -57,21 +57,21 @@ inductive RebuildOrigin where
   | view (constructor : FnName)
   /-- A stale row of the naive view is subsumed. -/
   | stale (constructor : FnName)
-  /-- The incremental view: a row's output moves to its parent. -/
-  | eclass (constructor : FnName)
-  /-- The incremental view: a row is re-keyed when a child gains a parent. -/
-  | child (constructor : FnName) (index : Nat)
-  /-- Two view rows at one key: the congruence detected on views. -/
-  | viewCollide (constructor : FnName)
+  /-- The index of the view: one row per view row and column. -/
+  | index (constructor : FnName)
+  /-- A view row moves with a union-find edge found through the index. -/
+  | rekey (constructor : FnName)
+  /-- The congruence rule read over the view: two rows at one key. -/
+  | viewCongruence (constructor : FnName)
   deriving DecidableEq, Repr
 
 /-- How compiled queries read applications: the terms joined with the union-find, or a
-canonical node view per constructor, maintained naively from the terms or incrementally
-from union-find edges. -/
+canonical node view per constructor, maintained naively from the terms or through an
+index from union-find edges. -/
 inductive ViewMode where
   | none
   | naive
-  | incremental
+  | indexed
   deriving DecidableEq, Repr
 
 /-- The optimizations of the pass. The defaults are the encoding the paper presents;
@@ -171,7 +171,7 @@ def encodeQueryExpr : Expr → Nat → Expr × Query × Nat := encodeQueryExprWi
   -/)
   (latexEnv := "paperfragment")]
 def encodeQueryExprViews : Expr → Nat → Expr × Query × Nat :=
-  encodeQueryExprWith { views := .incremental }
+  encodeQueryExprWith { views := .indexed }
 
 /-- A pattern that is an expression needs no id. Equality and disequality compare the ids
 produced by the two ordered traversals. -/
@@ -204,13 +204,13 @@ mutual
 
 /-- Build children before their parent, and give every value a UF self-loop. A self-loop
 for a value that already has a parent is stale and path compression removes it. The
-incremental view also gets the node's row, keyed by its children as built. -/
+indexed view also gets the node's row, keyed by its children as built. -/
 def encodeBuildWith (o : Options) : Expr → List Action
   | e@(.lit _) | e@(.var _) => [.expr (ufRow e e)]
   | .min a b => encodeBuildWith o a ++ encodeBuildWith o b
   | .app f args =>
       encodeBuildArgsWith o args ++
-        (if o.views = .incremental then [.expr (viewRow f args (.app f args))] else []) ++
+        (if o.views = .indexed then [.expr (viewRow f args (.app f args))] else []) ++
         [.expr (ufRow (.app f args) (.app f args))]
 
 /-- Build argument occurrences in the same left-to-right order as query flattening. -/
@@ -314,20 +314,19 @@ two rows at one key. -/
 def rebuildVars (arity : Nat) : List Expr :=
   (List.range arity).map fun i => .var ("@c" ++ toString i)
 
-/-- The naive view: every application's row, from its children's and its own parents. -/
+/-- The naive view: every application's row, from its children's and its own parents; a
+row with a column that has a parent is stale; and the congruence rule, whose query is the
+pattern the view caches, reads two rows at one key. -/
 @[blueprint "def:view-naive"
   (statement := /--
   \[
   \begin{aligned}
   \textsc{View}_f&:\ f(a_1,\ldots,a_n)\land\textstyle\bigwedge_i\mathtt{UF}(a_i,a'_i)
     \land\mathtt{UF}(f(a_1,\ldots,a_n),c')\Rightarrow\mathtt{View}_f(a'_1,\ldots,a'_n,c')\\
-  \textsc{Stale}_{f,i}&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,c')\land\mathtt{UF}(a'_i,x)\land a'_i\ne x
-    \Rightarrow\kw{subsume}(\mathtt{View}_f(a'_1,\ldots,a'_n,c'))\\
-  \textsc{Stale}_f&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,c')\land\mathtt{UF}(c',x)\land c'\ne x
-    \Rightarrow\kw{subsume}(\mathtt{View}_f(a'_1,\ldots,a'_n,c'))\\
-  \textsc{Collide}_f&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,y)\land\mathtt{View}_f(a'_1,\ldots,a'_n,z)
-    \land y=\min(y,z)\land y\ne z\\
-    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(a'_1,\ldots,a'_n,z)),\ \mathtt{UF}(z,y)
+  \textsc{Stale}_{f,i}&:\ \mathtt{View}_f(c_1,\ldots,c_{n+1})\land\mathtt{UF}(c_i,x)\land c_i\ne x
+    \Rightarrow\kw{subsume}(\mathtt{View}_f(c_1,\ldots,c_{n+1}))\\
+  \textsc{Cong}_f&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,y)\land\mathtt{View}_f(a'_1,\ldots,a'_n,z)
+    \land y=\min(y,z)\land y\ne z\Rightarrow\mathtt{UF}(z,y)
   \end{aligned}
   \]
   -/)
@@ -339,7 +338,8 @@ def viewRule (f : FnName) (arity : Nat) : Rule :=
       ++ [.expr (ufRow (.app f as) (.var "@y"))],
     actions := [.expr (viewRow f rs (.var "@y"))] }
 
-/-- A naive view row whose child or output has a parent is stale. -/
+/-- A naive view row with a column that has a parent is stale. `column` ranges over the
+children and, at `arity`, the output. -/
 def staleRule (f : FnName) (arity : Nat) (column : Nat) : Rule :=
   let cs := rebuildVars arity
   let key : Expr := if column < arity then .var ("@c" ++ toString column) else .var "@e"
@@ -347,48 +347,56 @@ def staleRule (f : FnName) (arity : Nat) (column : Nat) : Rule :=
               .ne key (.var "@x")],
     actions := [subsumeView f cs (.var "@e")] }
 
-/-- The incremental view: a row moves with the parents of its columns, in one binary join
-of the row with a union-find edge; builds write a node's row with the node. -/
-@[blueprint "def:view-incremental"
+/-- The index of the view: a row per column, mapping the column's value to the view row
+that mentions it, so that a union-find edge finds every row it moves by lookup. The row is
+written out, as in egglog's `(index …)`, so every atom stays flat. -/
+@[blueprint "def:view-index"
+  (statement := /--
+  \[
+  \textsc{Idx}_f:\ \mathtt{View}_f(c_1,\ldots,c_{n+1})\Rightarrow
+    \mathtt{HasChild}_f(c_1,\ c_1,\ldots,c_{n+1}),\ \ldots,\
+    \mathtt{HasChild}_f(c_{n+1},\ c_1,\ldots,c_{n+1})
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
+def indexRule (f : FnName) (arity : Nat) : Rule :=
+  let cs := rebuildVars arity ++ [Expr.var "@e"]
+  { query := [.expr (viewRow f (rebuildVars arity) (.var "@e"))],
+    actions := cs.map fun c => .expr (.app (hasChildName f) (c :: cs)) }
+
+/-- The indexed view: a union-find edge joined with the index names every row it moves,
+and the firing re-canonicalizes every column of that row through the union-find, so one
+firing yields the canonical row. Builds write a node's row with the node. -/
+@[blueprint "def:view-indexed"
   (statement := /--
   \[
   \begin{aligned}
-  \textsc{Child}_{f,i}&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,c')\land\mathtt{UF}(a'_i,x)\land a'_i\ne x\\
-    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(a'_1,\ldots,a'_n,c')),\ \mathtt{View}_f(a'_1,\ldots,x,\ldots,a'_n,c')\\
-  \textsc{Out}_f&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,c')\land\mathtt{UF}(c',x)\land c'\ne x\\
-    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(a'_1,\ldots,a'_n,c')),\ \mathtt{View}_f(a'_1,\ldots,a'_n,x)\\
+  \textsc{Rekey}_f&:\ \mathtt{HasChild}_f(x,\ c_1,\ldots,c_{n+1})\land\mathtt{UF}(x,x')\land x\ne x'
+    \land\textstyle\bigwedge_j\mathtt{UF}(c_j,c'_j)\\
+    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(c_1,\ldots,c_{n+1})),\ \mathtt{View}_f(c'_1,\ldots,c'_{n+1})\\
   \operatorname{exist}(f(e_1,\ldots,e_n))&\ni\mathtt{View}_f(e_1,\ldots,e_n,f(e_1,\ldots,e_n))
   \end{aligned}
   \]
   -/)
   (latexEnv := "paperfragment")]
-def childRule (f : FnName) (arity index : Nat) : Rule :=
+def rekeyRule (f : FnName) (arity : Nat) : Rule :=
   let cs := rebuildVars arity
-  { query := [.expr (viewRow f cs (.var "@e")),
-              .expr (ufRow (.var ("@c" ++ toString index)) (.var "@x")),
-              .ne (.var ("@c" ++ toString index)) (.var "@x")],
-    actions := [subsumeView f cs (.var "@e"),
-                .expr (viewRow f (cs.set index (.var "@x")) (.var "@e"))] }
+  let ds := congruenceVars "d" arity
+  { query := [.expr (.app (hasChildName f) (.var "@x" :: cs ++ [Expr.var "@e"])),
+              .expr (ufRow (.var "@x") (.var "@y")), .ne (.var "@x") (.var "@y")] ++
+      (cs.zip ds).map (fun cd => .expr (ufRow cd.1 cd.2)) ++ [.expr (ufRow (.var "@e") (.var "@o"))],
+    actions := [subsumeView f cs (.var "@e"), .expr (viewRow f ds (.var "@o"))] }
 
-/-- Move a view's output to its parent id. -/
-def eclassRule (f : FnName) (arity : Nat) : Rule :=
-  let cs := rebuildVars arity
-  { query := [.expr (viewRow f cs (.var "@e")),
-              .expr (ufRow (.var "@e") (.var "@x")),
-              .ne (.var "@e") (.var "@x")],
-    actions := [subsumeView f cs (.var "@e"),
-                .expr (viewRow f cs (.var "@x"))] }
-
-/-- Two outputs at one key: keep the smaller, subsume the other row, and link the larger
-output under the smaller. This is where congruence becomes an equation on views. -/
-def viewCollideRule (f : FnName) (arity : Nat) : Rule :=
+/-- The congruence rule read over the view: two rows at one key link the larger output
+under the smaller. The losing row is retired by the stale or move rule once its output has
+a parent. -/
+def viewCongruenceRule (f : FnName) (arity : Nat) : Rule :=
   let cs := rebuildVars arity
   { query := [.expr (viewRow f cs (.var "@y")),
               .expr (viewRow f cs (.var "@z")),
               .eq (.var "@y") (.min (.var "@y") (.var "@z")),
               .ne (.var "@y") (.var "@z")],
-    actions := [subsumeView f cs (.var "@z"),
-                .expr (ufRow (.var "@z") (.var "@y"))] }
+    actions := [.expr (ufRow (.var "@z") (.var "@y"))] }
 
 /-- The rules that keep a constructor's view rows canonical, by mode. -/
 def rekeyRules (o : Options) (f : FnName) (arity : Nat) : List (Rule × RuleOrigin) :=
@@ -397,15 +405,14 @@ def rekeyRules (o : Options) (f : FnName) (arity : Nat) : List (Rule × RuleOrig
   | .naive =>
       (viewRule f arity, .rebuild (.view f)) ::
         (List.range (arity + 1)).map fun i => (staleRule f arity i, .rebuild (.stale f))
-  | .incremental =>
-      (eclassRule f arity, .rebuild (.eclass f)) ::
-        (List.range arity).map fun i => (childRule f arity i, .rebuild (.child f i))
+  | .indexed =>
+      [(indexRule f arity, .rebuild (.index f)), (rekeyRule f arity, .rebuild (.rekey f))]
 
 /-- The rule that detects a congruence of `f`, by mode. -/
 def mergeRules (o : Options) (f : FnName) (arity : Nat) : List (Rule × RuleOrigin) :=
   match o.views with
   | .none => rebuildRules f arity
-  | _ => [(viewCollideRule f arity, .rebuild (.viewCollide f))]
+  | _ => [(viewCongruenceRule f arity, .rebuild (.viewCongruence f))]
 
 /-- The maintenance rules in the groups a phased rebuild runs: the union-find rules, the
 view maintenance, and the congruence detection. Empty groups are dropped. -/
@@ -452,13 +459,9 @@ the term rules read it, and the view settles before congruences are looked for. 
 @[blueprint "def:phased"
   (statement := /--
   \[
-  \begin{aligned}
-  &\kw{saturate}\bigl(\kw{saturate}(\kw{run}\ \{\textsc{Compress},\textsc{Collide}\});\
-    \kw{run}\ \{\textsc{Cong}_f\mid f\text{ applied in }P\}\bigr)\\
-  &\kw{saturate}\bigl(\kw{saturate}(\kw{run}\ \{\textsc{Compress},\textsc{Collide}\});\
-    \kw{saturate}(\kw{run}\ \{\textsc{Child}_{f,i},\textsc{Out}_f\mid f,i\});\
-    \kw{run}\ \{\textsc{Collide}_f\mid f\}\bigr)
-  \end{aligned}
+  \kw{saturate}\bigl(\kw{saturate}(\kw{run}\ \{\textsc{Compress},\textsc{Collide}\});\
+    \kw{saturate}(\kw{run}\ \{\textsc{Idx}_f,\textsc{Rekey}_f\mid f\});\
+    \kw{run}\ \{\textsc{Cong}_f\mid f\}\bigr)
   \]
   -/)
   (latexEnv := "paperfragment")]
