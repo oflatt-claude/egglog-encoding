@@ -102,6 +102,17 @@ there is no leader query. An equality or disequality compares the ids of its two
 
 ### Views as an optimization
 
+`Congruence.Options` turns the optimizations on: `views := .naive` derives a canonical
+node view `@fView(leaders…, leader)` from the terms and the union-find each rebuild round
+and subsumes stale rows; `views := .incremental` writes a node's row with the node and
+moves rows with union-find edges, one binary join each (the previous encoding's child and
+output rules); either way compiled queries read one view row per application and a
+congruence is two rows at one key. `phased := true` saturates the union-find rules before
+the term rules inside each rebuild. `difftest congruence 64 --views=incremental --phased`
+and `DIFFTEST_OPTIONS="--views=incremental --phased" scripts/compiled-difftest.sh` check
+that the optimized compilations agree with the source and with egglog; the proof pass works
+on the base compilation.
+
 The previous encoding kept one more table per constructor, `@fView(children…, id)`: the
 application with the parents of its children as key and its own parent as output, which
 is exactly the join a compiled query performs for it, materialized. Rules re-keyed a view

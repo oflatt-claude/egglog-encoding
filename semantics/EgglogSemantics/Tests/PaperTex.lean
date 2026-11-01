@@ -140,6 +140,11 @@ def ruleComment : RuleOrigin → String
   | .rebuild .compress => "path compression"
   | .rebuild .collide => "two parents: keep the smaller"
   | .rebuild (.congruence f) => "congruence of $" ++ name f ++ "$"
+  | .rebuild (.view f) => "view of $" ++ name f ++ "$"
+  | .rebuild (.stale f) => "stale view row of $" ++ name f ++ "$"
+  | .rebuild (.eclass f) => "canonical output of $" ++ name f ++ "$"
+  | .rebuild (.child f i) => s!"canonical child {i + 1} of $" ++ name f ++ "$"
+  | .rebuild (.viewCollide f) => "two outputs of $" ++ name f ++ "$: merge them"
 
 /-- The expressions a rule head evaluates. -/
 def actionExprs : Action → List Expr

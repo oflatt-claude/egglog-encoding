@@ -795,9 +795,11 @@ private def timeCase (fuel : Nat) (p : Program) : IO Unit := do
       (fun _ => if Relational.holds e q.check then some e else none)
 
 /-- Compare the compiled program's reading of every pair of source terms against source
-congruence, and its execution with and without equality reasoning. -/
-private def congruenceCheck (fuel : Nat) (p : Program) : List String := Id.run do
-  let compiled := Congruence.compile p
+congruence, and its execution with and without equality reasoning. `o` selects the
+compiler's optimizations; the reading goes through the union-find either way. -/
+private def congruenceCheck (fuel : Nat) (o : Congruence.Options) (p : Program) :
+    List String := Id.run do
+  let compiled := Congruence.compileWith o p
   let q := compiled.program
   let mut errors : List String := []
   if !q.arityConflicts.isEmpty then errors := errors ++ ["conflicting target arities"]
@@ -824,7 +826,21 @@ private def congruenceCheck (fuel : Nat) (p : Program) : List String := Id.run d
   | _, none => errors := errors ++ ["congruence target stuck or exhausted fuel"]
   return errors
 
-private def runCongruenceChecks (fuel : Nat) (names : List String) : IO UInt32 := do
+/-- Leading `--views=naive|incremental` and `--phased` arguments. -/
+private def parseOptions : List String → Congruence.Options × List String
+  | "--views=naive" :: rest =>
+      let (o, names) := parseOptions rest
+      ({ o with views := .naive }, names)
+  | "--views=incremental" :: rest =>
+      let (o, names) := parseOptions rest
+      ({ o with views := .incremental }, names)
+  | "--phased" :: rest =>
+      let (o, names) := parseOptions rest
+      ({ o with phased := true }, names)
+  | rest => ({}, rest)
+
+private def runCongruenceChecks (fuel : Nat) (o : Congruence.Options) (names : List String) :
+    IO UInt32 := do
   let files ← fileCases
   let available := allCases ++ files ++ probeCases
   let unknown := names.filter fun name => !(available.any fun c => c.1 == name)
@@ -841,7 +857,7 @@ private def runCongruenceChecks (fuel : Nat) (names : List String) : IO UInt32 :
       skipped := skipped + 1
       continue
     tested := tested + 1
-    let errors := congruenceCheck fuel p
+    let errors := congruenceCheck fuel o p
     unless errors.isEmpty do
       failed := failed + 1
       IO.println s!"FAIL {name}: {String.intercalate "; " errors}"
@@ -945,7 +961,7 @@ private def runEggChecks (fuel : Nat) (update : Bool) (names : List String) : IO
             let expected ← IO.FS.readFile path
             if expected != text then
               errors := errors ++ [s!"{suffix} differs, {firstDifference expected text}"]
-      errors := errors ++ congruenceCheck fuel p ++ provenanceCheck fuel p false ++
+      errors := errors ++ congruenceCheck fuel {} p ++ provenanceCheck fuel p false ++
         (provenanceCheck fuel p true).map ("lifting: " ++ ·)
     unless errors.isEmpty do
       failed := failed + 1
@@ -1016,10 +1032,13 @@ def main (args : List String) : IO UInt32 := do
       match rest with
       | "update" :: names => runEggChecks n true names
       | names => runEggChecks n false names
-  | "congruence" :: fuel :: names =>
+  | "congruence" :: fuel :: rest =>
+    -- `difftest congruence <fuel> [--views=naive|incremental] [--phased] [names]`
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
-    | some n => runCongruenceChecks n names
+    | some n =>
+      let (o, names) := parseOptions rest
+      runCongruenceChecks n o names
   | ["paper-tex", src] =>
     -- The congruence pass over a source `.egg` file, in the paper's notation, on stdout.
     let text ← IO.FS.readFile src
@@ -1064,14 +1083,19 @@ def main (args : List String) : IO UInt32 := do
       IO.FS.createDirAll dir
       writeCase dir s!"rand-{n}" (prog (genProgram (k + 1)))
       return 0
-  | [dir, "compiled"] =>
+  | dir :: "compiled" :: rest =>
+    -- `difftest <dir> compiled [--views=naive|incremental] [--phased]`
+    let (o, extra) := parseOptions rest
+    unless extra.isEmpty do
+      IO.eprintln s!"difftest: unknown arguments {extra}"
+      return 1
     IO.FS.createDirAll dir
     let files ← fileCases
     let mut n := 0
     for (name, p₀) in curated ++ files ++ randomCases do
       let p := p₀
       if !p.encodeDomainB then continue
-      writeCompiled dir name (Congruence.encode p)
+      writeCompiled dir name (Congruence.encodeWith o p)
       n := n + 1
     IO.println s!"wrote {n} compiled cases"
     return 0

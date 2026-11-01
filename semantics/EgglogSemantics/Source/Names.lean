@@ -10,6 +10,10 @@ namespace Egglog
 `@UF_<Sort>` per sort there is one table here. -/
 def ufName : FnName := "@UF"
 
+/-- The canonical node view of source constructor `f`, an optimization of the congruence
+pass: its key is the tuple of child leaders and its last column the leader of the node. -/
+def viewName (f : FnName) : FnName := "@" ++ f ++ "View"
+
 /-- The `n`th generated variable. -/
 def freshVar (n : Nat) : Var := "@v" ++ toString n
 

@@ -111,6 +111,31 @@ example : encodeQuery orderedQuery 0 =
 #guard (compile missingPremise).origins.contains (.source 2)
 #guard ((maintenanceRules missingPremise).map Prod.snd).count (.rebuild .compress) == 1
 #guard ((rebuildRules "F" 2).map Prod.snd) == [.rebuild (.congruence "F")]
+
+-- The optimizations: with a view, an application is one row; the incremental view's rows
+-- are built with the node; the phased rebuild keeps one origin per rule in schedule order.
+#guard (encodeQueryWith { views := .incremental } [.expr (.app "F" [.app "G" [.var "x"]])] 0).1.map
+    Pattern.toEgg == ["(@GView x @v0)", "(@FView @v0 @v1)"]
+#guard (encodeBuildWith { views := .incremental } (.app "F" [atom "A"])).map Action.toEgg ==
+  ["(@AView (A))", "(@UF (A) (A))", "(@FView (A) (F (A)))", "(@UF (F (A)) (F (A)))"]
+#guard (encodeBuildWith { views := .naive } (.app "F" [atom "A"])).map Action.toEgg ==
+  ["(@UF (A) (A))", "(@UF (F (A)) (F (A)))"]
+#guard ((rekeyRules { views := .naive } "F" 1).map Prod.snd) ==
+  [.rebuild (.view "F"), .rebuild (.stale "F"), .rebuild (.stale "F")]
+#guard ((rekeyRules { views := .incremental } "F" 1).map Prod.snd) ==
+  [.rebuild (.eclass "F"), .rebuild (.child "F" 0)]
+#guard [({} : Options), { views := .naive }, { views := .incremental }, { phased := true },
+    { views := .incremental, phased := true }].all fun o =>
+  (compileWith o nestedUnion).origins.length == (encodeWith o nestedUnion).rules.length &&
+    (exec (encodeWith o nestedUnion)).any fun d =>
+      idF d (.app "F" [term "A"]) == some (.app "F" [term "A"]) &&
+        idF d (.app "F" [term "B"]) == some (.app "F" [term "A"])
+#guard match (rebuildWith { phased := true } nestedUnion).1 with
+  | .saturate (.seq (.saturate (.run _)) (.run _)) => true
+  | _ => false
+#guard match (rebuildWith { views := .incremental, phased := true } nestedUnion).1 with
+  | .saturate (.seq (.saturate (.run _)) (.seq (.saturate (.run _)) (.run _))) => true
+  | _ => false
 #guard (rebuildRules "A" 0).isEmpty
 -- The congruence rule of a binary constructor: both applications, the shared parents of
 -- their children, both roots, and the orientation guard.

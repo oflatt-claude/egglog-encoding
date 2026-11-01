@@ -47,12 +47,39 @@ optimization of this encoding.
 
 namespace Egglog.Congruence
 
-/-- Generated maintenance rules. -/
+/-- Generated maintenance rules: the union-find rules, the congruence rule of a constructor,
+and the rules of its canonical node view when that optimization is on. -/
 inductive RebuildOrigin where
   | compress
   | collide
   | congruence (constructor : FnName)
+  /-- The naive view: derived from the terms and the union-find. -/
+  | view (constructor : FnName)
+  /-- A stale row of the naive view is subsumed. -/
+  | stale (constructor : FnName)
+  /-- The incremental view: a row's output moves to its parent. -/
+  | eclass (constructor : FnName)
+  /-- The incremental view: a row is re-keyed when a child gains a parent. -/
+  | child (constructor : FnName) (index : Nat)
+  /-- Two view rows at one key: the congruence detected on views. -/
+  | viewCollide (constructor : FnName)
   deriving DecidableEq, Repr
+
+/-- How compiled queries read applications: the terms joined with the union-find, or a
+canonical node view per constructor, maintained naively from the terms or incrementally
+from union-find edges. -/
+inductive ViewMode where
+  | none
+  | naive
+  | incremental
+  deriving DecidableEq, Repr
+
+/-- The optimizations of the pass. The defaults are the encoding the paper presents;
+`phased` runs the union-find rules to a fixpoint before the term rules in every rebuild. -/
+structure Options where
+  views : ViewMode := .none
+  phased : Bool := false
+  deriving Repr
 
 /-- A source rule is identified by its position in `Program.rules` of the original program. -/
 inductive RuleOrigin where
@@ -71,7 +98,45 @@ def ufRow (key parent : Expr) : Expr := .app ufName [key, parent]
 /-- Subsume a union-find row. -/
 def subsumeUf (key parent : Expr) : Action := .subsume ufName [key, parent]
 
+/-- A view row of `f`: the children's leaders and the node's leader. -/
+def viewRow (f : FnName) (children : List Expr) (id : Expr) : Expr :=
+  .app (viewName f) (children ++ [id])
+
+/-- Subsume a view row of `f`. -/
+def subsumeView (f : FnName) (children : List Expr) (id : Expr) : Action :=
+  .subsume (viewName f) (children ++ [id])
+
 mutual
+
+/-- Flatten one expression, returning the expression that stands for it, its ordered atoms,
+and the next fresh variable; see `encodeQueryExpr`. With a view, an application is read as
+one view row over its children's ids, whose last column is its id. -/
+def encodeQueryExprWith (o : Options) : Expr → Nat → Expr × Query × Nat
+  | .app f args, n =>
+      match encodeQueryArgsWith o args n with
+      | (xs, ps, next) =>
+          if o.views = .none then
+            let as := (List.range args.length).map fun i => Expr.var (freshVar (next + i))
+            let y := Expr.var (freshVar (next + args.length))
+            (y,
+              ps ++ .expr (.app f as) :: (as.zip xs).map (fun ax => .expr (ufRow ax.1 ax.2))
+                ++ [.expr (ufRow (.app f as) y)],
+              next + args.length + 1)
+          else
+            let y := Expr.var (freshVar next)
+            (y, ps ++ [.expr (viewRow f xs y)], next + 1)
+  | e, n => (e, [], n)
+
+/-- Visit arguments from left to right. Repeated subexpressions keep distinct positions. -/
+def encodeQueryArgsWith (o : Options) : List Expr → Nat → List Expr × Query × Nat
+  | [], n => ([], [], n)
+  | e :: es, n =>
+      match encodeQueryExprWith o e n with
+      | (x, ps, next) =>
+          match encodeQueryArgsWith o es next with
+          | (xs, qs, last) => (x :: xs, ps ++ qs, last)
+
+end
 
 /-- `e ⇝ Q; x`: flatten one expression into its id and its ordered atoms. A value is its own
 id and needs no atom. An application becomes the application over fresh child variables,
@@ -94,68 +159,69 @@ a fresh root, which is its id. A pattern written as a bare `e` is the paper's sh
   \end{mathpar}
   -/)
   (latexEnv := "paperfragment")]
-def encodeQueryExpr : Expr → Nat → Expr × Query × Nat
-  | .app f args, n =>
-      match encodeQueryArgs args n with
-      | (xs, ps, next) =>
-          let as := (List.range args.length).map fun i => Expr.var (freshVar (next + i))
-          let y := Expr.var (freshVar (next + args.length))
-          (y,
-            ps ++ .expr (.app f as) :: (as.zip xs).map (fun ax => .expr (ufRow ax.1 ax.2))
-              ++ [.expr (ufRow (.app f as) y)],
-            next + args.length + 1)
-  | e, n => (e, [], n)
+def encodeQueryExpr : Expr → Nat → Expr × Query × Nat := encodeQueryExprWith {}
 
-/-- Visit arguments from left to right. Repeated subexpressions keep distinct positions. -/
-def encodeQueryArgs : List Expr → Nat → List Expr × Query × Nat
-  | [], n => ([], [], n)
-  | e :: es, n =>
-      match encodeQueryExpr e n with
-      | (x, ps, next) =>
-          match encodeQueryArgs es next with
-          | (xs, qs, last) => (x :: xs, ps ++ qs, last)
-
-end
+/-- With a canonical node view, an application is one row. -/
+@[blueprint "def:view-query"
+  (statement := /--
+  \begin{mathpar}
+  \ir{App}{e_i\leadsto Q_i;\ x_i\ (\forall i)\\ y\text{ fresh}}
+    {f(e_1,\ldots,e_n)\leadsto Q_1\land\cdots\land Q_n\land\mathtt{View}_f(x_1,\ldots,x_n,y);\ y}
+  \end{mathpar}
+  -/)
+  (latexEnv := "paperfragment")]
+def encodeQueryExprViews : Expr → Nat → Expr × Query × Nat :=
+  encodeQueryExprWith { views := .incremental }
 
 /-- A pattern that is an expression needs no id. Equality and disequality compare the ids
 produced by the two ordered traversals. -/
-def encodePattern : Pattern → Nat → Query × Nat
-  | .expr e, n => ((encodeQueryExpr e n).2.1, (encodeQueryExpr e n).2.2)
+def encodePatternWith (o : Options) : Pattern → Nat → Query × Nat
+  | .expr e, n => ((encodeQueryExprWith o e n).2.1, (encodeQueryExprWith o e n).2.2)
   | .eq lhs rhs, n =>
-      match encodeQueryExpr lhs n with
+      match encodeQueryExprWith o lhs n with
       | (l, ps, next) =>
-          match encodeQueryExpr rhs next with
+          match encodeQueryExprWith o rhs next with
           | (r, qs, last) => (ps ++ qs ++ [.eq l r], last)
   | .ne lhs rhs, n =>
-      match encodeQueryExpr lhs n with
+      match encodeQueryExprWith o lhs n with
       | (l, ps, next) =>
-          match encodeQueryExpr rhs next with
+          match encodeQueryExprWith o rhs next with
           | (r, qs, last) => (ps ++ qs ++ [.ne l r], last)
 
 /-- Preserve source conjunct order. -/
-def encodeQuery : Query → Nat → Query × Nat
+def encodeQueryWith (o : Options) : Query → Nat → Query × Nat
   | [], n => ([], n)
   | p :: ps, n =>
-      match encodePattern p n with
+      match encodePatternWith o p n with
       | (qs, next) =>
-          match encodeQuery ps next with
+          match encodeQueryWith o ps next with
           | (rest, last) => (qs ++ rest, last)
+
+def encodePattern : Pattern → Nat → Query × Nat := encodePatternWith {}
+def encodeQuery : Query → Nat → Query × Nat := encodeQueryWith {}
 
 mutual
 
 /-- Build children before their parent, and give every value a UF self-loop. A self-loop
-for a value that already has a parent is stale and path compression removes it. -/
-def encodeBuild : Expr → List Action
+for a value that already has a parent is stale and path compression removes it. The
+incremental view also gets the node's row, keyed by its children as built. -/
+def encodeBuildWith (o : Options) : Expr → List Action
   | e@(.lit _) | e@(.var _) => [.expr (ufRow e e)]
-  | .min a b => encodeBuild a ++ encodeBuild b
-  | .app f args => encodeBuildArgs args ++ [.expr (ufRow (.app f args) (.app f args))]
+  | .min a b => encodeBuildWith o a ++ encodeBuildWith o b
+  | .app f args =>
+      encodeBuildArgsWith o args ++
+        (if o.views = .incremental then [.expr (viewRow f args (.app f args))] else []) ++
+        [.expr (ufRow (.app f args) (.app f args))]
 
 /-- Build argument occurrences in the same left-to-right order as query flattening. -/
-def encodeBuildArgs : List Expr → List Action
+def encodeBuildArgsWith (o : Options) : List Expr → List Action
   | [] => []
-  | e :: es => encodeBuild e ++ encodeBuildArgs es
+  | e :: es => encodeBuildWith o e ++ encodeBuildArgsWith o es
 
 end
+
+def encodeBuild : Expr → List Action := encodeBuildWith {}
+def encodeBuildArgs : List Expr → List Action := encodeBuildArgsWith {}
 
 /-- A source union links both ids to the smaller one; for the smaller one that is a
 self-loop. A bare action `e` is the paper's shorthand for `union(e, e)`, whose extra edge
@@ -174,20 +240,27 @@ compile to nothing. -/
   \end{mathpar}
   -/)
   (latexEnv := "paperfragment")]
-def encodeAction : Action → List Action
-  | .expr e => encodeBuild e
-  | .union a b => encodeBuild a ++ encodeBuild b ++
+def encodeActionWith (o : Options) : Action → List Action
+  | .expr e => encodeBuildWith o e
+  | .union a b => encodeBuildWith o a ++ encodeBuildWith o b ++
       [.expr (ufRow a (.min a b)), .expr (ufRow b (.min a b))]
   | .subsume _ _ => []
 
+def encodeAction : Action → List Action := encodeActionWith {}
+
 /-- No justification argument is needed for compiling a head. -/
-def encodeActions (as : List Action) : List Action := as.flatMap encodeAction
+def encodeActionsWith (o : Options) (as : List Action) : List Action :=
+  as.flatMap (encodeActionWith o)
+
+def encodeActions (as : List Action) : List Action := encodeActionsWith {} as
 
 /-- Variable supplies are local to a rule; source names cannot use the `@` namespace.
 Query variables are bound to parents through union-find edges, which are roots once
 rebuilding has completed, so the head needs no leader lookup. -/
-def encodeRule (r : Rule) : Rule :=
-  { query := (encodeQuery r.query 0).1, actions := encodeActions r.actions }
+def encodeRuleWith (o : Options) (r : Rule) : Rule :=
+  { query := (encodeQueryWith o r.query 0).1, actions := encodeActionsWith o r.actions }
+
+def encodeRule (r : Rule) : Rule := encodeRuleWith {} r
 
 /-- Replace a parent edge by the edge to the parent's own parent. With `@a = @b` this
 removes the stale self-loop of a value that acquired a parent. -/
@@ -230,6 +303,117 @@ needs none. -/
 def rebuildRules (f : FnName) (arity : Nat) : List (Rule × RuleOrigin) :=
   if arity = 0 then [] else [(congruenceRule f arity, .rebuild (.congruence f))]
 
+/-! ### Canonical node views
+
+An optimization of the pass: a row `View_f(a'₁, …, a'ₙ, c')` per application of `f`, holding
+the leaders of its children and of itself, so that a compiled query reads one row per
+application instead of the application and `n + 1` union-find edges, and a congruence is
+two rows at one key. -/
+
+/-- The key variables of a generated view rule. -/
+def rebuildVars (arity : Nat) : List Expr :=
+  (List.range arity).map fun i => .var ("@c" ++ toString i)
+
+/-- The naive view: every application's row, from its children's and its own parents. -/
+@[blueprint "def:view-naive"
+  (statement := /--
+  \[
+  \begin{aligned}
+  \textsc{View}_f&:\ f(a_1,\ldots,a_n)\land\textstyle\bigwedge_i\mathtt{UF}(a_i,a'_i)
+    \land\mathtt{UF}(f(a_1,\ldots,a_n),c')\Rightarrow\mathtt{View}_f(a'_1,\ldots,a'_n,c')\\
+  \textsc{Stale}_{f,i}&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,c')\land\mathtt{UF}(a'_i,x)\land a'_i\ne x
+    \Rightarrow\kw{subsume}(\mathtt{View}_f(a'_1,\ldots,a'_n,c'))\\
+  \textsc{Stale}_f&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,c')\land\mathtt{UF}(c',x)\land c'\ne x
+    \Rightarrow\kw{subsume}(\mathtt{View}_f(a'_1,\ldots,a'_n,c'))\\
+  \textsc{Collide}_f&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,y)\land\mathtt{View}_f(a'_1,\ldots,a'_n,z)
+    \land y=\min(y,z)\land y\ne z\\
+    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(a'_1,\ldots,a'_n,z)),\ \mathtt{UF}(z,y)
+  \end{aligned}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
+def viewRule (f : FnName) (arity : Nat) : Rule :=
+  let as := congruenceVars "a" arity
+  let rs := congruenceVars "r" arity
+  { query := .expr (.app f as) :: (as.zip rs).map (fun ar => .expr (ufRow ar.1 ar.2))
+      ++ [.expr (ufRow (.app f as) (.var "@y"))],
+    actions := [.expr (viewRow f rs (.var "@y"))] }
+
+/-- A naive view row whose child or output has a parent is stale. -/
+def staleRule (f : FnName) (arity : Nat) (column : Nat) : Rule :=
+  let cs := rebuildVars arity
+  let key : Expr := if column < arity then .var ("@c" ++ toString column) else .var "@e"
+  { query := [.expr (viewRow f cs (.var "@e")), .expr (ufRow key (.var "@x")),
+              .ne key (.var "@x")],
+    actions := [subsumeView f cs (.var "@e")] }
+
+/-- The incremental view: a row moves with the parents of its columns, in one binary join
+of the row with a union-find edge; builds write a node's row with the node. -/
+@[blueprint "def:view-incremental"
+  (statement := /--
+  \[
+  \begin{aligned}
+  \textsc{Child}_{f,i}&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,c')\land\mathtt{UF}(a'_i,x)\land a'_i\ne x\\
+    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(a'_1,\ldots,a'_n,c')),\ \mathtt{View}_f(a'_1,\ldots,x,\ldots,a'_n,c')\\
+  \textsc{Out}_f&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,c')\land\mathtt{UF}(c',x)\land c'\ne x\\
+    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(a'_1,\ldots,a'_n,c')),\ \mathtt{View}_f(a'_1,\ldots,a'_n,x)\\
+  \operatorname{exist}(f(e_1,\ldots,e_n))&\ni\mathtt{View}_f(e_1,\ldots,e_n,f(e_1,\ldots,e_n))
+  \end{aligned}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
+def childRule (f : FnName) (arity index : Nat) : Rule :=
+  let cs := rebuildVars arity
+  { query := [.expr (viewRow f cs (.var "@e")),
+              .expr (ufRow (.var ("@c" ++ toString index)) (.var "@x")),
+              .ne (.var ("@c" ++ toString index)) (.var "@x")],
+    actions := [subsumeView f cs (.var "@e"),
+                .expr (viewRow f (cs.set index (.var "@x")) (.var "@e"))] }
+
+/-- Move a view's output to its parent id. -/
+def eclassRule (f : FnName) (arity : Nat) : Rule :=
+  let cs := rebuildVars arity
+  { query := [.expr (viewRow f cs (.var "@e")),
+              .expr (ufRow (.var "@e") (.var "@x")),
+              .ne (.var "@e") (.var "@x")],
+    actions := [subsumeView f cs (.var "@e"),
+                .expr (viewRow f cs (.var "@x"))] }
+
+/-- Two outputs at one key: keep the smaller, subsume the other row, and link the larger
+output under the smaller. This is where congruence becomes an equation on views. -/
+def viewCollideRule (f : FnName) (arity : Nat) : Rule :=
+  let cs := rebuildVars arity
+  { query := [.expr (viewRow f cs (.var "@y")),
+              .expr (viewRow f cs (.var "@z")),
+              .eq (.var "@y") (.min (.var "@y") (.var "@z")),
+              .ne (.var "@y") (.var "@z")],
+    actions := [subsumeView f cs (.var "@z"),
+                .expr (ufRow (.var "@z") (.var "@y"))] }
+
+/-- The rules that keep a constructor's view rows canonical, by mode. -/
+def rekeyRules (o : Options) (f : FnName) (arity : Nat) : List (Rule × RuleOrigin) :=
+  match o.views with
+  | .none => []
+  | .naive =>
+      (viewRule f arity, .rebuild (.view f)) ::
+        (List.range (arity + 1)).map fun i => (staleRule f arity i, .rebuild (.stale f))
+  | .incremental =>
+      (eclassRule f arity, .rebuild (.eclass f)) ::
+        (List.range arity).map fun i => (childRule f arity i, .rebuild (.child f i))
+
+/-- The rule that detects a congruence of `f`, by mode. -/
+def mergeRules (o : Options) (f : FnName) (arity : Nat) : List (Rule × RuleOrigin) :=
+  match o.views with
+  | .none => rebuildRules f arity
+  | _ => [(viewCollideRule f arity, .rebuild (.viewCollide f))]
+
+/-- The maintenance rules in the groups a phased rebuild runs: the union-find rules, the
+view maintenance, and the congruence detection. Empty groups are dropped. -/
+def maintenanceGroups (o : Options) (P : Program) : List (List (Rule × RuleOrigin)) :=
+  [[(pathCompressRule, .rebuild .compress), (ufCollideRule, .rebuild .collide)],
+   P.ctors.flatMap fun fk => rekeyRules o fk.1 fk.2,
+   P.ctors.flatMap fun fk => mergeRules o fk.1 fk.2].filter fun g => !g.isEmpty
+
 /-- The maintenance rules, with their origins. -/
 @[blueprint "def:maintenance"
   (statement := /--
@@ -256,13 +440,40 @@ def maintenanceRules (P : Program) : List (Rule × RuleOrigin) :=
 
 /-- The compiled rules of a source command's rules, numbered from `index` in
 `Program.rules` of the source. -/
-def encodeRules (index : Nat) (rs : List Rule) : List (Rule × RuleOrigin) :=
-  rs.zipIdx.map fun ri => (encodeRule ri.1, .source (index + ri.2))
+def encodeRulesWith (o : Options) (index : Nat) (rs : List Rule) : List (Rule × RuleOrigin) :=
+  rs.zipIdx.map fun ri => (encodeRuleWith o ri.1, .source (index + ri.2))
 
-/-- The maintenance saturation, with its origins. -/
-def rebuild (P : Program) : Schedule × List RuleOrigin :=
-  let m := maintenanceRules P
-  (.saturate (.run (m.map Prod.fst)), m.map Prod.snd)
+def encodeRules (index : Nat) (rs : List Rule) : List (Rule × RuleOrigin) :=
+  encodeRulesWith {} index rs
+
+/-- The maintenance saturation, with its origins. A phased rebuild saturates each group
+but the last before the next, inside an outer saturation: the union-find settles before
+the term rules read it, and the view settles before congruences are looked for. -/
+@[blueprint "def:phased"
+  (statement := /--
+  \[
+  \begin{aligned}
+  &\kw{saturate}\bigl(\kw{saturate}(\kw{run}\ \{\textsc{Compress},\textsc{Collide}\});\
+    \kw{run}\ \{\textsc{Cong}_f\mid f\text{ applied in }P\}\bigr)\\
+  &\kw{saturate}\bigl(\kw{saturate}(\kw{run}\ \{\textsc{Compress},\textsc{Collide}\});\
+    \kw{saturate}(\kw{run}\ \{\textsc{Child}_{f,i},\textsc{Out}_f\mid f,i\});\
+    \kw{run}\ \{\textsc{Collide}_f\mid f\}\bigr)
+  \end{aligned}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
+def rebuildWith (o : Options) (P : Program) : Schedule × List RuleOrigin :=
+  let groups := maintenanceGroups o P
+  let origins := (groups.flatten).map Prod.snd
+  if o.phased then
+    let runs := groups.map fun g => Schedule.run (g.map Prod.fst)
+    match runs.getLast? with
+    | some last =>
+        (.saturate (Schedule.seqAll (runs.dropLast.map Schedule.saturate ++ [last])), origins)
+    | none => (.saturate (.run []), origins)
+  else (.saturate (.run (groups.flatten.map Prod.fst)), origins)
+
+def rebuild (P : Program) : Schedule × List RuleOrigin := rebuildWith {} P
 
 /-- Compile a schedule, numbering source rules from `index` in `Program.rules`. Every run
 is followed by a rebuild, so a compiled saturation's body ends at a rebuild fixpoint and
@@ -283,25 +494,35 @@ each of its passes is one source pass. -/
   \end{mathpar}
   -/)
   (latexEnv := "paperfragment")]
-def encodeSchedule (P : Program) : Schedule → Nat → Schedule × List RuleOrigin × Nat
+def encodeScheduleWith (o : Options) (P : Program) :
+    Schedule → Nat → Schedule × List RuleOrigin × Nat
   | .run rs, index =>
-      let compiled := encodeRules index rs
-      let (m, mo) := rebuild P
+      let compiled := encodeRulesWith o index rs
+      let (m, mo) := rebuildWith o P
       (.seq (.run (compiled.map Prod.fst)) m, compiled.map Prod.snd ++ mo, index + rs.length)
   | .saturate S, index =>
-      let (S', os, next) := encodeSchedule P S index
+      let (S', os, next) := encodeScheduleWith o P S index
       (.saturate S', os, next)
   | .seq S₁ S₂, index =>
-      let (T₁, o₁, next) := encodeSchedule P S₁ index
-      let (T₂, o₂, last) := encodeSchedule P S₂ next
+      let (T₁, o₁, next) := encodeScheduleWith o P S₁ index
+      let (T₂, o₂, last) := encodeScheduleWith o P S₂ next
       (.seq T₁ T₂, o₁ ++ o₂, last)
 
-/-- The congruence pass with origins for later proof resugaring. -/
-def compile (P : Program) : Compiled :=
-  let (S, os, _) := encodeSchedule P P.schedule 0
-  { program := { schedule := S, check := (encodeQuery P.check 0).1 }, origins := os }
+def encodeSchedule (P : Program) : Schedule → Nat → Schedule × List RuleOrigin × Nat :=
+  encodeScheduleWith {} P
+
+/-- The congruence pass with origins for later proof resugaring, under the options. -/
+def compileWith (o : Options) (P : Program) : Compiled :=
+  let (S, os, _) := encodeScheduleWith o P P.schedule 0
+  { program := { schedule := S, check := (encodeQueryWith o P.check 0).1 }, origins := os }
+
+/-- The congruence pass the paper presents: no views, one maintenance set. -/
+def compile (P : Program) : Compiled := compileWith {} P
 
 /-- The executable program, independent of all proof instrumentation. -/
 def encode (P : Program) : Program := (compile P).program
+
+/-- The executable program under the options. -/
+def encodeWith (o : Options) (P : Program) : Program := (compileWith o P).program
 
 end Egglog.Congruence

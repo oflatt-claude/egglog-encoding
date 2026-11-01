@@ -30,7 +30,9 @@ gen=".lake/build/bin/difftest"
 
 rm -rf -- "$out"
 mkdir -p -- "$out"
-"$gen" "$out" compiled || exit 1
+# DIFFTEST_OPTIONS selects the compiler's optimizations, e.g. "--views=incremental --phased".
+# shellcheck disable=SC2086
+"$gen" "$out" compiled ${DIFFTEST_OPTIONS:-} || exit 1
 
 pass=0
 fail=0
