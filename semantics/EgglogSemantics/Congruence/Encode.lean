@@ -1,5 +1,6 @@
 import EgglogSemantics.Source.Domain
 import EgglogSemantics.Source.Names
+import Architect
 
 /-!
 # Congruence compilation
@@ -22,11 +23,14 @@ the term order.
 
 A query matches the terms themselves and joins the union-find in between. Flattening is
 left-to-right postorder: visit every child before emitting its parent's atoms. An
-application becomes the application over fresh child variables followed by one edge from
-each child variable to the child's id, where a child that is itself an application is given
-a fresh root variable by an edge from that application. An equality visits its left side,
-then its right side, then equates the resulting ids. Later resugaring traverses the
-original query in this same order; no separate flattening tree is needed.
+application becomes the application over fresh child variables, one edge from each child
+variable to the child's id, and one edge from the application to a fresh root, which is
+its id; a value is its own id. An equality visits its left side, then its right side,
+then equates the resulting ids. Later resugaring traverses the original query in this same
+order; no separate flattening tree is needed.
+
+The paper displays the pass as inference rules; they are the `@[blueprint]` statements of
+the definitions below, so the paper and the compiler change together.
 
 A source run becomes the run of the compiled rules followed by a saturation of the
 maintenance rules, and sequences and saturations compile structurally, so every pass of a
@@ -67,60 +71,65 @@ def ufRow (key parent : Expr) : Expr := .app ufName [key, parent]
 /-- Subsume a union-find row. -/
 def subsumeUf (key parent : Expr) : Action := .subsume ufName [key, parent]
 
-/-- The id of a flattened expression: a value is its own id; an application's id is a fresh
-root variable, reached by an edge from the application. -/
-def idOf : Expr → Nat → Expr × Query × Nat
-  | node@(.app _ _), n => (.var (freshVar n), [.expr (ufRow node (.var (freshVar n)))], n + 1)
-  | e, n => (e, [], n)
-
 mutual
 
-/-- Flatten one expression, returning the expression that stands for it (a value, or the
-application over fresh child variables), its ordered atoms, and the next fresh variable. -/
+/-- `e ⇝ Q; x`: flatten one expression into its id and its ordered atoms. A value is its own
+id and needs no atom. An application becomes the application over fresh child variables,
+one edge from each child variable to the child's id, and one edge from the application to
+a fresh root, which is its id. A pattern written as a bare `e` is the paper's shorthand for
+`e = e` and compiles to `Q` alone. -/
+@[blueprint "def:compile-query"
+  (statement := /--
+  \begin{mathpar}
+  \ir{Value}{v\in\mathit{Var}\cup\mathit{Lit}}{v\leadsto\top;\ v}
+  \and
+  \ir{App}{e_i\leadsto Q_i;\ x_i\ (\forall i)\\ a_1,\ldots,a_n,y\text{ fresh}}
+    {f(e_1,\ldots,e_n)\leadsto Q_1\land\cdots\land Q_n\land f(a_1,\ldots,a_n)
+      \land\textstyle\bigwedge_i\mathtt{UF}(a_i,x_i)\land\mathtt{UF}(f(a_1,\ldots,a_n),y);\ y}
+  \and
+  \ir{Compare}{e_1\leadsto Q_1;\ x_1\\e_2\leadsto Q_2;\ x_2}
+    {(e_1\bowtie e_2)\leadsto Q_1\land Q_2\land x_1\bowtie x_2}
+  \and
+  \ir{Query}{p_i\leadsto Q_i\ (\forall i)}{p_1\land\cdots\land p_n\leadsto Q_1\land\cdots\land Q_n}
+  \end{mathpar}
+  -/)
+  (latexEnv := "paperfragment")]
 def encodeQueryExpr : Expr → Nat → Expr × Query × Nat
   | .app f args, n =>
       match encodeQueryArgs args n with
       | (xs, ps, next) =>
           let as := (List.range args.length).map fun i => Expr.var (freshVar (next + i))
-          (.app f as,
-            ps ++ .expr (.app f as) :: (as.zip xs).map (fun ax => .expr (ufRow ax.1 ax.2)),
-            next + args.length)
+          let y := Expr.var (freshVar (next + args.length))
+          (y,
+            ps ++ .expr (.app f as) :: (as.zip xs).map (fun ax => .expr (ufRow ax.1 ax.2))
+              ++ [.expr (ufRow (.app f as) y)],
+            next + args.length + 1)
   | e, n => (e, [], n)
 
-/-- Visit arguments from left to right, each reduced to its id. Repeated subexpressions keep
-distinct positions. -/
+/-- Visit arguments from left to right. Repeated subexpressions keep distinct positions. -/
 def encodeQueryArgs : List Expr → Nat → List Expr × Query × Nat
   | [], n => ([], [], n)
   | e :: es, n =>
       match encodeQueryExpr e n with
-      | (node, ps, next) =>
-          match idOf node next with
-          | (x, rs, next') =>
-              match encodeQueryArgs es next' with
-              | (xs, qs, last) => (x :: xs, ps ++ rs ++ qs, last)
+      | (x, ps, next) =>
+          match encodeQueryArgs es next with
+          | (xs, qs, last) => (x :: xs, ps ++ qs, last)
 
 end
 
-/-- The id of a whole expression: flatten it, then reach its root. -/
-def encodeQueryId (e : Expr) (n : Nat) : Expr × Query × Nat :=
-  match encodeQueryExpr e n with
-  | (node, ps, next) =>
-      match idOf node next with
-      | (x, rs, last) => (x, ps ++ rs, last)
-
-/-- A pattern that is an expression needs no id. Equality and disequality join the ids
+/-- A pattern that is an expression needs no id. Equality and disequality compare the ids
 produced by the two ordered traversals. -/
 def encodePattern : Pattern → Nat → Query × Nat
   | .expr e, n => ((encodeQueryExpr e n).2.1, (encodeQueryExpr e n).2.2)
   | .eq lhs rhs, n =>
-      match encodeQueryId lhs n with
+      match encodeQueryExpr lhs n with
       | (l, ps, next) =>
-          match encodeQueryId rhs next with
+          match encodeQueryExpr rhs next with
           | (r, qs, last) => (ps ++ qs ++ [.eq l r], last)
   | .ne lhs rhs, n =>
-      match encodeQueryId lhs n with
+      match encodeQueryExpr lhs n with
       | (l, ps, next) =>
-          match encodeQueryId rhs next with
+          match encodeQueryExpr rhs next with
           | (r, qs, last) => (ps ++ qs ++ [.ne l r], last)
 
 /-- Preserve source conjunct order. -/
@@ -149,7 +158,22 @@ def encodeBuildArgs : List Expr → List Action
 end
 
 /-- A source union links both ids to the smaller one; for the smaller one that is a
-self-loop. Source subsumes are outside the fragment and compile to nothing. -/
+self-loop. A bare action `e` is the paper's shorthand for `union(e, e)`, whose extra edge
+is the self-loop `exist(e)` already holds. Source subsumes are outside the fragment and
+compile to nothing. -/
+@[blueprint "def:compile-head"
+  (statement := /--
+  \[
+  \operatorname{exist}(e)\triangleq\{\mathtt{UF}(e',e')\mid e'\text{ a subexpression of }e\}
+  \]
+  \begin{mathpar}
+  \ir{Union}{ }{\kw{union}(e_1,e_2)\leadsto\operatorname{exist}(e_1)\cup\operatorname{exist}(e_2)
+    \cup\{\mathtt{UF}(e_1,\min(e_1,e_2)),\ \mathtt{UF}(e_2,\min(e_1,e_2))\}}
+  \and
+  \ir{Head}{h_i\leadsto H_i\ (\forall i)}{\{h_1,\ldots,h_n\}\leadsto H_1\cup\cdots\cup H_n}
+  \end{mathpar}
+  -/)
+  (latexEnv := "paperfragment")]
 def encodeAction : Action → List Action
   | .expr e => encodeBuild e
   | .union a b => encodeBuild a ++ encodeBuild b ++
@@ -207,6 +231,23 @@ def rebuildRules (f : FnName) (arity : Nat) : List (Rule × RuleOrigin) :=
   if arity = 0 then [] else [(congruenceRule f arity, .rebuild (.congruence f))]
 
 /-- The maintenance rules, with their origins. -/
+@[blueprint "def:maintenance"
+  (statement := /--
+  \[
+  \begin{aligned}
+  M&\triangleq\{\textsc{Compress},\ \textsc{Collide}\}\cup\{\textsc{Cong}_f\mid f\text{ applied in }P\}\\[.2em]
+  \textsc{Compress}&:\ \mathtt{UF}(a,b)\land\mathtt{UF}(b,c)\land b\ne c
+    \Rightarrow\kw{subsume}(\mathtt{UF}(a,b)),\ \mathtt{UF}(a,c)\\
+  \textsc{Collide}&:\ \mathtt{UF}(a,b)\land\mathtt{UF}(a,c)\land b=\min(b,c)\land b\ne c
+    \Rightarrow\kw{subsume}(\mathtt{UF}(a,c)),\ \mathtt{UF}(c,b)\\
+  \textsc{Cong}_f&:\ f(a_1,\ldots,a_n)\land f(b_1,\ldots,b_n)
+    \land\textstyle\bigwedge_i\bigl(\mathtt{UF}(a_i,r_i)\land\mathtt{UF}(b_i,r_i)\bigr)\\
+  &\quad\land\ \mathtt{UF}(f(a_1,\ldots,a_n),y)\land\mathtt{UF}(f(b_1,\ldots,b_n),z)
+    \land y=\min(y,z)\land y\ne z\Rightarrow\mathtt{UF}(z,y)
+  \end{aligned}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 def maintenanceRules (P : Program) : List (Rule × RuleOrigin) :=
   (pathCompressRule, .rebuild .compress) :: (ufCollideRule, .rebuild .collide) ::
     P.ctors.flatMap fun fk => rebuildRules fk.1 fk.2
@@ -224,6 +265,22 @@ def rebuild (P : Program) : Schedule × List RuleOrigin :=
 /-- Compile a schedule, numbering source rules from `index` in `Program.rules`. Every run
 is followed by a rebuild, so a compiled saturation's body ends at a rebuild fixpoint and
 each of its passes is one source pass. -/
+@[blueprint "def:compile-schedule"
+  (statement := /--
+  \begin{mathpar}
+  \ir{Rule}{Q\leadsto Q'\\H\leadsto H'}{(Q\Rightarrow H)\leadsto(Q'\Rightarrow H')}
+  \and
+  \ir{Run}{r_i\leadsto r_i'\ (\forall i)}
+    {\kw{run}\ \{r_1,\ldots,r_n\}\leadsto\kw{run}\ \{r_1',\ldots,r_n'\};\ \kw{saturate}\ (\kw{run}\ M)}
+  \and
+  \ir{Saturate}{S\leadsto S'}{\kw{saturate}\ S\leadsto\kw{saturate}\ S'}
+  \and
+  \ir{Seq}{S_1\leadsto S_1'\\S_2\leadsto S_2'}{S_1;S_2\leadsto S_1';S_2'}
+  \and
+  \ir{Program}{S\leadsto S'\\Q\leadsto Q'}{(S;\ \kw{check}\ Q)\leadsto(S';\ \kw{check}\ Q')}
+  \end{mathpar}
+  -/)
+  (latexEnv := "paperfragment")]
 def encodeSchedule (P : Program) : Schedule → Nat → Schedule × List RuleOrigin × Nat
   | .run rs, index =>
       let compiled := encodeRules index rs

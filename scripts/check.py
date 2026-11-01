@@ -27,6 +27,7 @@ PAPER_MODULES = (
     "EgglogSemantics.Source.WellFormed",
     "EgglogSemantics.Proofs.OrderFinite",
     "EgglogSemantics.Congruence.Correctness",
+    "EgglogSemantics.Congruence.Encode",
 )
 
 

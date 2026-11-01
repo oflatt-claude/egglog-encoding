@@ -93,9 +93,9 @@ move down the term order, so leaving it subsumed in the table is harmless.
 
 A compiled query matches the terms themselves and joins the union-find in between. A
 source application `f(e₁, …, eₙ)` becomes the atom `(f a₁ … aₙ)` over fresh child
-variables and one edge `(@UF aᵢ xᵢ)` per child, where `xᵢ` is the child's id: a source
-variable or literal is its own id, and a child that is itself an application is given a
-fresh root variable `y` by the edge `(@UF (g b̄) y)` from its atom. At a rebuild fixpoint
+variables, one edge `(@UF aᵢ xᵢ)` per child, where `xᵢ` is the child's id, and the edge
+`(@UF (f a₁ … aₙ) y)` to a fresh root `y`, the application's id; a source variable or
+literal is its own id. At a rebuild fixpoint
 every key has one live edge, to its root, so a source variable is bound to the
 representative of its class and a source rule head already builds canonical spellings;
 there is no leader query. An equality or disequality compares the ids of its two sides.
@@ -223,12 +223,13 @@ ordinary union-find entries; target `(= x y)` is just an identity test with exis
 ## Query traversal
 
 Flattening visits conjuncts left to right. Within an application it recursively visits
-children left to right, each reduced to its id, then emits the application over fresh
-child variables and one union-find edge per child; a child that is an application gets a
-fresh root variable through an edge from its atom. Within equality it visits the left
-expression, then the right, each reduced to its id, then emits equality of the ids. Each
+children left to right, then emits the application over fresh child variables, one
+union-find edge per child, and the edge to its fresh root, its id. Within equality it
+visits the left expression, then the right, then emits equality of their ids. Each
 occurrence gets its own fresh variables, including repeated subexpressions. Variable
-supplies are local to a rule; source names cannot use the generated `@` prefix.
+supplies are local to a rule; source names cannot use the generated `@` prefix. The paper
+shows the pass as inference rules, written as the `@[blueprint]` statements of the
+compiler's definitions.
 
 For example, `(= (F (G x)) (H x))` becomes:
 

@@ -12,7 +12,7 @@
 (rule ((@UF @a @b) (@UF @a @c) (= @b (min @b @c)) (!= @b @c)) ((subsume (@UF @a @c)) (@UF @c @b)) :ruleset r1)
 (rule ((Add @a0 @a1) (Add @b0 @b1) (@UF @a0 @r0) (@UF @b0 @r0) (@UF @a1 @r1) (@UF @b1 @r1) (@UF (Add @a0 @a1) @y) (@UF (Add @b0 @b1) @z) (= @y (min @y @z)) (!= @y @z)) ((@UF @z @y)) :ruleset r1)
 (run-schedule (seq (run r0) (saturate (run r1))))
-(rule ((Add @v0 @v1) (@UF @v0 a) (@UF @v1 b)) ((@UF a a) (@UF b b) (@UF (Add a b) (Add a b)) (@UF b b) (@UF a a) (@UF (Add b a) (Add b a)) (@UF (Add a b) (min (Add a b) (Add b a))) (@UF (Add b a) (min (Add a b) (Add b a)))) :ruleset r2)
+(rule ((Add @v0 @v1) (@UF @v0 a) (@UF @v1 b) (@UF (Add @v0 @v1) @v2)) ((@UF a a) (@UF b b) (@UF (Add a b) (Add a b)) (@UF b b) (@UF a a) (@UF (Add b a) (Add b a)) (@UF (Add a b) (min (Add a b) (Add b a))) (@UF (Add b a) (min (Add a b) (Add b a)))) :ruleset r2)
 (rule ((@UF @a @b) (@UF @b @c) (!= @b @c)) ((subsume (@UF @a @b)) (@UF @a @c)) :ruleset r3)
 (rule ((@UF @a @b) (@UF @a @c) (= @b (min @b @c)) (!= @b @c)) ((subsume (@UF @a @c)) (@UF @c @b)) :ruleset r3)
 (rule ((Add @a0 @a1) (Add @b0 @b1) (@UF @a0 @r0) (@UF @b0 @r0) (@UF @a1 @r1) (@UF @b1 @r1) (@UF (Add @a0 @a1) @y) (@UF (Add @b0 @b1) @z) (= @y (min @y @z)) (!= @y @z)) ((@UF @z @y)) :ruleset r3)

@@ -13,25 +13,13 @@ def idForm (P : Program) (node root : Proof) : Option Proof := do
   let rev ← symm P root
   trans P rev node
 
-/-- An expression's proof in id form. An application's `node = instance` is turned around
-through its root edge, the next premise; a value is already its id. -/
-def rootStep (P : Program) (e : Expr) (p : Proof) (next : List Proof) :
-    Option (Proof × List Proof) :=
-  match e with
-  | .app _ _ => do
-    let root :: rest := next | none
-    let q ← idForm P p root
-    some (q, rest)
-  | _ => some (p, next)
-
 mutual
 
 /-- The compiler's left-to-right postorder, repeated on the original expression: the
-children, each followed by its root edge when it is an application, then the application's
-own atom and one union-find edge per child. The result's claim is `node = instance`, where
-`node` is the application the target matched and `instance` the source instance under `σ`;
-a value is its own witness. The unconsumed premise proofs are threaded through in that
-order. -/
+children, then the application's own atom, one union-find edge per child, and the edge to
+its root. The result's claim is `id = instance`: the target's id for the expression equals
+the source instance under `σ`; a value is its own witness. The unconsumed premise proofs
+are threaded through in that order. -/
 def queryExpr (P : Program) (σ : Env) (allPremises : List Proof) :
     Expr → List Proof → Option (Proof × List Proof)
   | .app f args, remaining => do
@@ -43,38 +31,33 @@ def queryExpr (P : Program) (σ : Env) (allPremises : List Proof) :
     if edges.length != args.length then none else
     let children ← (edges.zip ids).mapM fun ei =>
       if ei.2.claim.lhs == ei.2.claim.rhs then some ei.1 else trans P ei.1 ei.2
-    let result ← replaceChildren P children node
-    some (result, rest.drop args.length)
+    let built ← replaceChildren P children node
+    let root :: rest := rest.drop args.length | none
+    let result ← idForm P built root
+    some (result, rest)
   | e, remaining => do
     let t ← e.eval σ
     let p ← witness P t allPremises
     some (p, remaining)
 
-/-- The children in id form, left to right. -/
+/-- The children, left to right. -/
 def queryArgs (P : Program) (σ : Env) (allPremises : List Proof) :
     List Expr → List Proof → Option (List Proof × List Proof)
   | [], remaining => some ([], remaining)
   | e :: es, remaining => do
     let (p, next) ← queryExpr P σ allPremises e remaining
-    let (p', next') ← rootStep P e p next
-    let (ps, last) ← queryArgs P σ allPremises es next'
-    some (p' :: ps, last)
+    let (ps, last) ← queryArgs P σ allPremises es next
+    some (p :: ps, last)
 
 end
-
-/-- An equation side: its proof in id form. -/
-def queryId (P : Program) (σ : Env) (allPremises : List Proof) (e : Expr)
-    (remaining : List Proof) : Option (Proof × List Proof) := do
-  let (p, next) ← queryExpr P σ allPremises e remaining
-  rootStep P e p next
 
 def queryPattern (P : Program) (σ : Env) (allPremises : List Proof)
     (p : Pattern) (remaining : List Proof) : Option (Proof × List Proof) := do
   match p with
   | .expr e => queryExpr P σ allPremises e remaining
   | .eq lhs rhs =>
-    let (a, next) ← queryId P σ allPremises lhs remaining
-    let (z, last) ← queryId P σ allPremises rhs next
+    let (a, next) ← queryExpr P σ allPremises lhs remaining
+    let (z, last) ← queryExpr P σ allPremises rhs next
     let equality :: rest := last | none
     if equality.claim != (⟨a.claim.lhs, z.claim.lhs⟩ : SourceProof.Claim) then none else do
       let rev ← symm P a

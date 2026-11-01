@@ -89,8 +89,8 @@ private def orderedQuery : Query :=
 
 -- Repeated subexpressions are separate occurrences, visited children-first and
 -- left-to-right on both sides: an application over fresh child variables, one edge per
--- child to the child's id, and, where the id is needed, an edge to a fresh root. These are
--- the positions resugaring will consume.
+-- child to the child's id, and an edge to a fresh root, its id. These are the positions
+-- resugaring will consume.
 example : encodeQuery orderedQuery 0 =
   ([.expr (.app "G" [.var "@v0"]), .expr (ufRow (.var "@v0") (.var "x")),
     .expr (ufRow (.app "G" [.var "@v0"]) (.var "@v1")),
@@ -127,10 +127,10 @@ example : encodeQuery orderedQuery 0 =
      .saturate (.seq (.run _) (.saturate (.run _)))] => true
   | _ => false
 #guard (encode ⟨.run [⟨[], [.expr (atom "A")]⟩], [.expr (atom "A")]⟩).check.map Pattern.toEgg ==
-  ["(A)"]
+  ["(A)", "(@UF (A) @v0)"]
 -- A nested check reads the inner application's root through the outer child's edge.
 #guard (encode ⟨.run [⟨[], [.expr (.app "F" [atom "A"])]⟩],
     [.expr (.app "F" [atom "A"])]⟩).check.map Pattern.toEgg ==
-  ["(A)", "(@UF (A) @v0)", "(F @v1)", "(@UF @v1 @v0)"]
+  ["(A)", "(@UF (A) @v0)", "(F @v1)", "(@UF @v1 @v0)", "(@UF (F @v1) @v2)"]
 
 end Egglog.Congruence

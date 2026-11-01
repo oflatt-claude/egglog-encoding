@@ -18,4 +18,4 @@
 (rule ((@UF @a @b) (@UF @a @c) (= @b (min @b @c)) (!= @b @c)) ((subsume (@UF @a @c)) (@UF @c @b)) :ruleset r3)
 (rule ((F @a0) (F @b0) (@UF @a0 @r0) (@UF @b0 @r0) (@UF (F @a0) @y) (@UF (F @b0) @z) (= @y (min @y @z)) (!= @y @z)) ((@UF @z @y)) :ruleset r3)
 (run-schedule (saturate (run r3)))
-(check (F @v0) (@UF @v0 x) (B) (@UF (B) @v1) (= x @v1) (A) (@UF (A) @v2) (F @v3) (@UF @v3 @v2) (@UF (F @v3) @v4) (B) (@UF (B) @v5) (F @v6) (@UF @v6 @v5) (@UF (F @v6) @v7) (= @v4 @v7))
+(check (F @v0) (@UF @v0 x) (@UF (F @v0) @v1) (B) (@UF (B) @v2) (= x @v2) (A) (@UF (A) @v3) (F @v4) (@UF @v4 @v3) (@UF (F @v4) @v5) (B) (@UF (B) @v6) (F @v7) (@UF @v7 @v6) (@UF (F @v7) @v8) (= @v5 @v8))

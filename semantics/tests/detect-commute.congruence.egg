@@ -23,7 +23,7 @@
 (rule ((Wrapper @a0) (Wrapper @b0) (@UF @a0 @r0) (@UF @b0 @r0) (@UF (Wrapper @a0) @y) (@UF (Wrapper @b0) @z) (= @y (min @y @z)) (!= @y @z)) ((@UF @z @y)) :ruleset r3)
 (rule ((Add @a0 @a1) (Add @b0 @b1) (@UF @a0 @r0) (@UF @b0 @r0) (@UF @a1 @r1) (@UF @b1 @r1) (@UF (Add @a0 @a1) @y) (@UF (Add @b0 @b1) @z) (= @y (min @y @z)) (!= @y @z)) ((@UF @z @y)) :ruleset r3)
 (run-schedule (seq (run r2) (saturate (run r3))))
-(rule ((Add @v0 @v1) (@UF @v0 a) (@UF @v1 b)) ((@UF a a) (@UF b b) (@UF (Add a b) (Add a b)) (@UF b b) (@UF a a) (@UF (Add b a) (Add b a)) (@UF (Add a b) (min (Add a b) (Add b a))) (@UF (Add b a) (min (Add a b) (Add b a)))) :ruleset r4)
+(rule ((Add @v0 @v1) (@UF @v0 a) (@UF @v1 b) (@UF (Add @v0 @v1) @v2)) ((@UF a a) (@UF b b) (@UF (Add a b) (Add a b)) (@UF b b) (@UF a a) (@UF (Add b a) (Add b a)) (@UF (Add a b) (min (Add a b) (Add b a))) (@UF (Add b a) (min (Add a b) (Add b a)))) :ruleset r4)
 (rule ((One) (@UF (One) @v0) (Two) (@UF (Two) @v1) (Add @v2 @v3) (@UF @v2 @v0) (@UF @v3 @v1) (@UF (Add @v2 @v3) @v4) (Wrapper @v5) (@UF @v5 @v4) (@UF (Wrapper @v5) @v6) (Two) (@UF (Two) @v7) (One) (@UF (One) @v8) (Add @v9 @v10) (@UF @v9 @v7) (@UF @v10 @v8) (@UF (Add @v9 @v10) @v11) (Wrapper @v12) (@UF @v12 @v11) (@UF (Wrapper @v12) @v13) (= @v6 @v13)) ((@UF (Success) (Success))) :ruleset r4)
 (rule ((@UF @a @b) (@UF @b @c) (!= @b @c)) ((subsume (@UF @a @b)) (@UF @a @c)) :ruleset r5)
 (rule ((@UF @a @b) (@UF @a @c) (= @b (min @b @c)) (!= @b @c)) ((subsume (@UF @a @c)) (@UF @c @b)) :ruleset r5)
