@@ -21,7 +21,7 @@ def validates (P : Program) : Bool := (certificates P).any fun cs =>
 
 #guard lifted.all fun np => validates np.2
 #guard (certificates nestedUnion).any fun cs => cs.any fun c => c.nodes.any fun n =>
-  match n with | .congr _ _ _ _ => true | _ => false
+  match n with | .congr _ _ _ => true | _ => false
 #guard (certificates ruleChain).any fun cs => cs.any fun c => c.nodes.any fun n =>
   match n with | .rule _ 1 _ _ => true | _ => false
 #guard (certificates missingPremise).any fun cs => cs.all fun c =>
@@ -37,8 +37,7 @@ def validates (P : Program) : Bool := (certificates P).any fun cs =>
 
 -- A transformed enclosing term's child still needs the derivation that introduced it.
 private def supportProof : Proof :=
-  .congr ⟨.app "F" [term "A"], .app "F" [.app "G" [term "B"]]⟩ (initial (.app "F" [term "A"])) 0
-    (.rule ⟨term "A", .app "G" [term "B"]⟩ 1 [] [])
+  .congr (initial (.app "F" [term "A"])) 0 (.rule ⟨term "A", .app "G" [term "B"]⟩ 1 [] [])
 
 #guard (support supportCase (term "B") supportProof).any fun result =>
   SourceProof.check supportCase result == some (⟨term "B", term "B"⟩ : SourceProof.Claim)

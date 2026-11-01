@@ -28,6 +28,8 @@ PAPER_MODULES = (
     "EgglogSemantics.Proofs.OrderFinite",
     "EgglogSemantics.Congruence.Correctness",
     "EgglogSemantics.Congruence.Encode",
+    "EgglogSemantics.SourceProof.Format",
+    "EgglogSemantics.SourceProof.Checker",
 )
 
 

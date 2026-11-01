@@ -25,16 +25,17 @@ private def rejects (P : Program) (pf : Proof) : Bool := (check P pf).isNone
 #guard rejects seed (fact fb)
 #guard rejects (⟨.run [], []⟩ : Program) (fact (.lit (.int 3)))
 
-private def rewrite : Proof := .congr ⟨fa, fb⟩ (fact fa) 0 (unionFact a b)
-private def childRewrite : Proof := .trans ⟨fb, fb⟩ (.symm ⟨fb, fa⟩ rewrite) rewrite
+private def rewrite : Proof := .congr (fact fa) 0 (unionFact a b)
+private def childRewrite : Proof := .trans (.symm rewrite) rewrite
 
+#guard accepts seed rewrite ⟨fa, fb⟩
 #guard accepts seed childRewrite ⟨fb, fb⟩
-#guard rejects seed (.symm ⟨a, a⟩ (fact fa))
-#guard rejects seed (.congr ⟨fa, fb⟩ (fact fa) 1 (unionFact a b))
-#guard rejects seed (.congr ⟨fa, fb⟩ (fact fa) 0 (unionFact b a))
-#guard rejects seed (.trans ⟨a, b⟩ (fact a) (fact b))
+#guard (Proof.symm (fact fa)).claim == ⟨fa, fa⟩
+#guard rejects seed (.congr (fact fa) 1 (unionFact a b))
+#guard rejects seed (.congr (fact fa) 0 (unionFact b a))
+#guard rejects seed (.trans (fact a) (fact b))
 -- Every node is checked, not only the root.
-#guard rejects seed (.trans ⟨fb, fb⟩ (.symm ⟨fb, fa⟩ rewrite) (.rule ⟨fa, fb⟩ 0 [] []))
+#guard rejects seed (.trans (.symm rewrite) (.rule ⟨fa, fb⟩ 0 [] []))
 
 private def create : Rule :=
   ⟨[.expr (.app "F" [.var "x"])], [.expr (.app "G" [.var "x"])]⟩

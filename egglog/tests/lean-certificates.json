@@ -552,7 +552,7 @@
       "reason":
       {"subst": [], "rule": "lean-rule-1", "premises": [], "kind": "rule"},
       "lhs": ["B", []]},
-     {"rhs": ["F", [["B", []]]],
+     {"rhs": ["F", [["A", []]]],
       "reason": {"kind": "congr", "index": 0, "child": 1, "base": 0},
       "lhs": ["F", [["A", []]]]}],
     "accepted": false}],
@@ -560,14 +560,18 @@
  {"program":
   "(sort Math)\n(ruleset r0)\n(ruleset r1)\n(constructor A () Math)\n(constructor B () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(rule () ((F (A))) :name \"lean-rule-0\" :ruleset r0)\n(rule () ((union (A) (B))) :name \"lean-rule-1\" :ruleset r0)\n(run r0 1)\n(rule ((F x)) ((G x)) :name \"lean-rule-2\" :ruleset r1)\n(run-schedule (saturate (run r1)))\n",
   "certificates":
-  [{"root": 1,
+  [{"root": 2,
     "nodes":
     [{"rhs": ["F", [["A", []]]],
       "reason":
       {"subst": [], "rule": "lean-rule-0", "premises": [], "kind": "rule"},
       "lhs": ["F", [["A", []]]]},
-     {"rhs": ["A", []],
-      "reason": {"proof": 0, "kind": "symm"},
-      "lhs": ["A", []]}],
+     {"rhs": ["B", []],
+      "reason":
+      {"subst": [], "rule": "lean-rule-1", "premises": [], "kind": "rule"},
+      "lhs": ["A", []]},
+     {"rhs": ["F", [["A", []]]],
+      "reason": {"kind": "congr", "index": 1, "child": 1, "base": 0},
+      "lhs": ["F", [["A", []]]]}],
     "accepted": false}],
-  "case": "symmetry-claim"}]
+  "case": "congruence-index"}]

@@ -11,17 +11,15 @@ def node (P : Program) (pf : Proof) : Option Proof :=
   if SourceProof.checkNode P pf then some pf else none
 
 def symm (P : Program) : Proof → Option Proof
-  | .symm _ p => some p
-  | p => node P (.symm ⟨p.claim.rhs, p.claim.lhs⟩ p)
+  | .symm p => some p
+  | p => node P (.symm p)
 
 def trans (P : Program) (p q : Proof) : Option Proof :=
-  if p.claim.rhs != q.claim.lhs then none else
-    node P (.trans ⟨p.claim.lhs, q.claim.rhs⟩ p q)
+  if p.claim.rhs != q.claim.lhs then none else node P (.trans p q)
 
 def congr (P : Program) (p : Proof) (k : Nat) (q : Proof) : Option Proof := do
-  let .app f args := p.claim.rhs | none
-  if args[k]? != some q.claim.lhs then none else
-    node P (.congr ⟨p.claim.lhs, .app f (args.set k q.claim.rhs)⟩ p k q)
+  let .app _ args := p.claim.rhs | none
+  if args[k]? != some q.claim.lhs then none else node P (.congr p k q)
 
 def orient (P : Program) (p : Proof) (c : Claim) : Option Proof :=
   if p.claim == c then some p else
@@ -46,8 +44,8 @@ def endpoints (P : Program) (t : Term) (p : Proof)
 def support (P : Program) (t : Term) : Proof → Option Proof
   | p@(.rule _ command σ ps) => endpoints P t p fun _ =>
       node P (.rule ⟨t, t⟩ command σ ps)
-  | p@(.symm _ q) => endpoints P t p fun _ => support P t q
-  | p@(.trans _ q r) | p@(.congr _ q _ r) => endpoints P t p fun _ =>
+  | p@(.symm q) => endpoints P t p fun _ => support P t q
+  | p@(.trans q r) | p@(.congr q _ r) => endpoints P t p fun _ =>
       support P t q <|> support P t r
 
 def witness (P : Program) (t : Term) : List Proof → Option Proof

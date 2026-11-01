@@ -47,14 +47,14 @@ def emit (pf : SourceProof.Proof) (reason : Json) : StateM Flat Nat := do
 mutual
 
 def flatten : SourceProof.Proof → StateM Flat Nat
-  | p@(.symm _ q) => do
+  | p@(.symm q) => do
     let i ← flatten q
     emit p (Json.mkObj [("kind", "symm"), ("proof", toJson i)])
-  | p@(.trans _ q r) => do
+  | p@(.trans q r) => do
     let i ← flatten q
     let j ← flatten r
     emit p (Json.mkObj [("kind", "trans"), ("left", toJson i), ("right", toJson j)])
-  | p@(.congr _ q k r) => do
+  | p@(.congr q k r) => do
     let i ← flatten q
     let j ← flatten r
     emit p (Json.mkObj [("kind", "congr"), ("base", toJson i), ("index", toJson k),

@@ -93,7 +93,8 @@ def accepted : List Fixture :=
    one "nested-premise" nested (.rule ⟨ga, ga⟩ 1 [("x", a)] [fact (.app "F" [fa])])]
 
 /-- Rejected hand-written proofs: invented initial facts, an absent premise, malformed
-substitutions, wrong premise order or count, and wrong endpoints and conclusions. -/
+substitutions, wrong premise order or count, a wrong conclusion, and mismatched
+transitivity and congruence. -/
 def rejected : List Fixture :=
   [one "invented-initial-fact" create (fact missing),
    one "invented-application" create (fact fb),
@@ -103,9 +104,9 @@ def rejected : List Fixture :=
    one "missing-premise-proof" create (.rule ⟨ga, ga⟩ 2 [("x", a)] []),
    one "premise-order" ordered (.rule ⟨ga, ga⟩ 2 [("x", a)] [unionFact a b, fact fa]),
    one "wrong-conclusion" create (.rule ⟨a, b⟩ 2 [("x", a)] [fact fa]),
-   one "transitivity-endpoints" create (.trans ⟨a, b⟩ (fact a) (fact b)),
-   one "congruence-child" create (.congr ⟨fa, fb⟩ (fact fa) 0 (unionFact b a)),
-   one "symmetry-claim" create (.symm ⟨a, a⟩ (fact fa))]
+   one "transitivity-endpoints" create (.trans (fact a) (fact b)),
+   one "congruence-child" create (.congr (fact fa) 0 (unionFact b a)),
+   one "congruence-index" create (.congr (fact fa) 1 (unionFact a b))]
 
 /-- Every fixture, with the lifted ones first. `none` if a program fails to lift. A
 function, so that running the fixture programs is not part of program start-up. -/

@@ -31,16 +31,16 @@ theorem ruleFacts_supported {P : Program} {db : Database}
   unfold ruleFacts at hf
   split at hf
   · rename_i hchecks
-    simp only [Bool.and_eq_true_iff, decide_eq_true_eq, List.all_eq_true] at hchecks
+    simp only [Bool.and_eq_true_iff, decide_eq_true_eq] at hchecks
     have hh : ∀ c ∈ premises, c.Holds db.completion :=
       fun c hc => (hp c hc).completion hw
-    have hval : ∀ b ∈ σ, b.2 ∈ db.completion.terms := fun b hb =>
-      supportedValue_sound hw.completion hh (hchecks.1.2 b hb)
     have hn := (sourceOk_fragment hok).noMin.1 r (hmem r hr)
+    have hval : ∀ b ∈ σ, b.2 ∈ db.completion.terms :=
+      premisesMatch_values hw.completion hn.1 hh hchecks.1 hchecks.2
     have hsmean := (db.sameMeaning_completion hw).symm
     obtain ⟨τ, hτ, hrel⟩ := SourceMeaning.querySubst_of_matches_transport
       hw.completion hw hsmean (Database.hasReps_of_finite hs.finite_from_empty)
-      hchecks.1.1 hval hn.1 (premisesMatch_sound hX hn.1 hh hchecks.2)
+      hchecks.1 hval hn.1 (premisesMatch_sound hX hn.1 hh hchecks.2)
     obtain ⟨d, hd, hfacts⟩ := actionsFacts_sound (db := db.completion) hf
     obtain ⟨out, hout, hsame⟩ := SourceMeaning.evalLocalActions_transport
       hw.completion hw hsmean rfl hrel hn.2 (hdf r hr) hd

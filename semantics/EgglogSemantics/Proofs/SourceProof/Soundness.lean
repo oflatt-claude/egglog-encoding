@@ -14,29 +14,26 @@ theorem checkNode_supported {P : Program} {db : Database}
     {pf : Proof} (hp : ∀ q ∈ pf.subproofs, q.claim.Supported db)
     (h : checkNode P pf = true) : pf.claim.Supported db := by
   cases pf with
-  | symm c p =>
-      simp only [checkNode, beq_iff_eq] at h
-      change Claim.Supported db c
-      rw [h]
+  | symm p =>
+      change Claim.Supported db ⟨p.claim.rhs, p.claim.lhs⟩
       exact (hp p (by simp [Proof.subproofs])).symm
-  | trans c p q =>
-      simp only [checkNode, Bool.and_eq_true_iff, beq_iff_eq] at h
-      change Claim.Supported db c
-      rw [h.2]
+  | trans p q =>
+      simp only [checkNode, beq_iff_eq] at h
+      change Claim.Supported db ⟨p.claim.lhs, q.claim.rhs⟩
       have hq : Claim.Supported db ⟨p.claim.rhs, q.claim.rhs⟩ := by
-        rw [h.1]; exact hp q (by simp [Proof.subproofs])
+        rw [h]; exact hp q (by simp [Proof.subproofs])
       exact Claim.Supported.trans (hp p (by simp [Proof.subproofs])) hq
-  | congr c p k q =>
+  | congr p k q =>
       simp only [checkNode] at h
       cases he : p.claim.rhs with
       | lit l => simp [he] at h
       | app f args =>
-          simp only [he, Bool.and_eq_true_iff, beq_iff_eq] at h
+          simp only [he, beq_iff_eq] at h
           have hbase : Claim.Supported db ⟨p.claim.lhs, .app f args⟩ := by
             rw [← he]; exact hp p (by simp [Proof.subproofs])
-          change Claim.Supported db c
-          rw [h.2]
-          exact hbase.congr (hp q (by simp [Proof.subproofs])) h.1
+          have hk : k < args.length := (List.getElem?_eq_some_iff.mp h).1
+          simp only [Proof.claim, he, if_pos hk]
+          exact hbase.congr (hp q (by simp [Proof.subproofs])) h
   | rule c i σ ps =>
       simp only [checkNode] at h
       obtain ⟨r, hr, h⟩ := Option.bind_eq_some_iff.mp (option_true h)
@@ -53,7 +50,7 @@ theorem valid_supported {P : Program} {db : Database}
     (hs : Reach Database.empty P.schedule db) (hw : db.WF)
     (hclosed : ∀ rs ∈ P.runs, RunSaturated rs db) (hok : sourceOk P = true) :
     (pf : Proof) → valid P pf = true → pf.claim.Supported db
-  | .symm c p, h => by
+  | .symm p, h => by
       simp only [valid, Bool.and_eq_true_iff] at h
       have ih := valid_supported hs hw hclosed hok p h.1
       refine checkNode_supported hs hw hclosed hok ?_ h.2
@@ -61,7 +58,7 @@ theorem valid_supported {P : Program} {db : Database}
       simp only [Proof.subproofs, List.mem_singleton] at hq
       subst hq
       exact ih
-  | .trans c p q, h => by
+  | .trans p q, h => by
       simp only [valid, Bool.and_eq_true_iff] at h
       have ihp := valid_supported hs hw hclosed hok p h.1.1
       have ihq := valid_supported hs hw hclosed hok q h.1.2
@@ -71,7 +68,7 @@ theorem valid_supported {P : Program} {db : Database}
       rcases hr with rfl | rfl
       · exact ihp
       · exact ihq
-  | .congr c p k q, h => by
+  | .congr p k q, h => by
       simp only [valid, Bool.and_eq_true_iff] at h
       have ihp := valid_supported hs hw hclosed hok p h.1.1
       have ihq := valid_supported hs hw hclosed hok q h.1.2
