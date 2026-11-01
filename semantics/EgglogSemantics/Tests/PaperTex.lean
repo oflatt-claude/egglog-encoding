@@ -143,7 +143,7 @@ def ruleComment : RuleOrigin → String
   | .rebuild (.view f) => "view of $" ++ name f ++ "$"
   | .rebuild (.stale f) => "stale view row of $" ++ name f ++ "$"
   | .rebuild (.index f) => "index of $" ++ name f ++ "$'s view"
-  | .rebuild (.rekey f) => "a row of $" ++ name f ++ "$'s view moves"
+  | .rebuild (.rekey f i) => s!"column {i + 1} of $" ++ name f ++ "$'s view moves"
   | .rebuild (.viewCongruence f) => "congruence of $" ++ name f ++ "$ over its view"
 
 /-- The expressions a rule head evaluates. -/

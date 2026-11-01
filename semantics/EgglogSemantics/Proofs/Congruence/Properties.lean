@@ -86,10 +86,9 @@ private theorem rekeyRules_unionFree (o : Options) (f : FnName) (k : Nat) :
       exact ⟨trivial, trivial⟩
   · rcases List.mem_cons.mp hro with rfl | hro
     · exact exprs_unionFree
-        (fun c => Action.expr (.app (hasChildName f) (c :: (rebuildVars k ++ [Expr.var "@e"]))))
+        (fun c => Action.expr (.app hasChildName [viewRow f (rebuildVars k) (.var "@e"), c]))
         (fun _ => trivial) _
-    · rw [List.mem_singleton] at hro
-      subst hro
+    · obtain ⟨i, _, rfl⟩ := List.mem_map.mp hro
       exact ⟨trivial, trivial, trivial⟩
 
 private theorem mergeRules_unionFree (o : Options) (f : FnName) (k : Nat) :

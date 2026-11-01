@@ -104,9 +104,9 @@ there is no leader query. An equality or disequality compares the ids of its two
 
 `Congruence.Options` turns the optimizations on: `views := .naive` derives a canonical
 node view `@fView(leaders…, leader)` from the terms and the union-find each rebuild round
-and subsumes stale rows; `views := .indexed` writes a node's row with the node, derives an index
-`@fHasChild(column value, columns…)` from it (egglog's `(index …)`, flat), and re-keys a row
-in one firing of a union-find edge joined with the index; either way compiled queries read one view row per application and
+and subsumes stale rows; `views := .indexed` writes a node's row with the node, derives the index
+`@HasChild(view row, column value)` from it, and moves a row to a column's parent in one
+binary join of the index entry with the column's union-find edge; either way compiled queries read one view row per application and
 the congruence rule, whose query is the pattern the view caches, reads two rows at one key. `phased := true` saturates the union-find rules before
 the term rules inside each rebuild. `difftest congruence 64 --views=indexed --phased`
 and `DIFFTEST_OPTIONS="--views=indexed --phased" scripts/compiled-difftest.sh` check

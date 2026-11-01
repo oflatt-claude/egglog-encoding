@@ -67,22 +67,40 @@ def joinConsistent (ks : List (Option Term)) (xs : List Term) : Bool :=
     | none => true
     | some t => t == p.2
 
-/-- `joinPlan` at identity, over the rows that are not subsumed. -/
-def joinPlan (d : FDatabase) (pre : Env) (v : Var) : Pattern → Option JoinAtom
-  | .expr e =>
-    match e.ctorAtom with
-    | none => none
-    | some (f, as) =>
-      let vars := (Pattern.expr e).freeVars []
-      if joinDrivable as && decide (v ∈ vars) then
-        let ρ := Env.canon vars pre
-        let ka := joinKnown ρ as
-        if d.holdsAll (ka.filterMap id) then
-          some ⟨vars, as, d.rows.filter fun r =>
-            (r.fn == f) && !d.subsumed.contains (.app r.fn r.args) && joinConsistent ka r.args⟩
-        else none
-      else none
-  | _ => none
+/-- A determined application read at identity, over rows that are not subsumed. -/
+def joinAtomPlan (d : FDatabase) (pre : Env) (v : Var) (vars : List Var)
+    (f : FnName) (as : List Expr) : Option JoinAtom :=
+  let ρ := Env.canon vars pre
+  if joinDrivable as && joinReady ρ as &&
+      (as.any fun e => match e with | .var w => w == v | _ => false) then
+    let ka := joinKnown ρ as
+    if d.holdsAll (ka.filterMap id) then
+      some ⟨vars, as, d.rows.filter fun r =>
+        (r.fn == f) && !d.subsumed.contains (.app r.fn r.args) && joinConsistent ka r.args⟩
+    else none
+  else none
+
+mutual
+
+/-- Recursive reads drive the variables of a nested application before its enclosing
+row is ready. Keep the original pattern's environment restriction, as the general join does. -/
+def joinExprPlans (d : FDatabase) (pre : Env) (v : Var) (vars : List Var) :
+    Expr → List JoinAtom
+  | .app f as =>
+      (joinAtomPlan d pre v vars f as).toList ++ joinArgsPlans d pre v vars as
+  | _ => []
+
+def joinArgsPlans (d : FDatabase) (pre : Env) (v : Var) (vars : List Var) :
+    List Expr → List JoinAtom
+  | [] => []
+  | e :: es => joinExprPlans d pre v vars e ++ joinArgsPlans d pre v vars es
+
+end
+
+/-- `joinPlan` at identity, including the atom's nested application reads. -/
+def joinPlan (d : FDatabase) (pre : Env) (v : Var) : Pattern → List JoinAtom
+  | .expr e => joinExprPlans d pre v ((Pattern.expr e).freeVars []) e
+  | _ => []
 
 /-- The values a plan's surviving rows admit for `v`: the column at each position where
 `v` occurs, when those positions agree. This is `JoinAtom.keeps` projected once per level,
@@ -100,7 +118,7 @@ def admits (a : JoinAtom) (v : Var) : List Term :=
 def joinCands (d : FDatabase) (q : Query) (held : Bool) (ts : List Term) (pre : Env)
     (v : Var) : List Term :=
   if held then
-    let sets := ((q.filterMap (joinPlan d pre v)).map (admits · v)).mergeSort fun a b =>
+    let sets := ((q.flatMap (joinPlan d pre v)).map (admits · v)).mergeSort fun a b =>
       decide (a.length ≤ b.length)
     ts.filter fun t => sets.all fun s => s.contains t
   else ts

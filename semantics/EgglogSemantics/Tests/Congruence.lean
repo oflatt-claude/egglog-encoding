@@ -123,11 +123,13 @@ example : encodeQuery orderedQuery 0 =
 #guard ((rekeyRules { views := .naive } "F" 1).map Prod.snd) ==
   [.rebuild (.view "F"), .rebuild (.stale "F"), .rebuild (.stale "F")]
 #guard ((rekeyRules { views := .indexed } "F" 1).map Prod.snd) ==
-  [.rebuild (.index "F"), .rebuild (.rekey "F")]
-#guard (rekeyRule "F" 1).query.map Pattern.toEgg ==
-  ["(@FHasChild @x @c0 @e)", "(@UF @x @y)", "(!= @x @y)", "(@UF @c0 @d0)", "(@UF @e @o)"]
+  [.rebuild (.index "F"), .rebuild (.rekey "F" 0), .rebuild (.rekey "F" 1)]
+#guard (rekeyRule "F" 1 0).query.map Pattern.toEgg ==
+  ["(@HasChild (@FView @c0 @e) @c0)", "(@UF @c0 @x)", "(!= @c0 @x)"]
+#guard (rekeyRule "F" 1 1).actions.map Action.toEgg ==
+  ["(subsume (@FView @c0 @e))", "(@FView @c0 @x)"]
 #guard (indexRule "F" 1).actions.map Action.toEgg ==
-  ["(@FHasChild @c0 @c0 @e)", "(@FHasChild @e @c0 @e)"]
+  ["(@HasChild (@FView @c0 @e) @c0)", "(@HasChild (@FView @c0 @e) @e)"]
 #guard ((mergeRules { views := .naive } "F" 1).map fun rm => rm.1.actions.map Action.toEgg) ==
   [["(@UF @z @y)"]]
 #guard [({} : Options), { views := .naive }, { views := .indexed }, { phased := true },

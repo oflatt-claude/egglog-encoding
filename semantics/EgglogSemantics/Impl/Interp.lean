@@ -703,23 +703,43 @@ is looked up in the index first — the rows of its head that `pre` has not alre
 — and the candidates for `v` are cut down to the terms one of *those* rows admits in the
 column `v` sits in. Everything else is `matchPrune`, so `matchJoin_eq` is an equality on
 the nose. The narrowing is confined to where it provably agrees with the pattern test:
-every operand a variable or a literal, every determined operand's value held, and every
-candidate held. -/
+every application operand determined, every determined operand's value held, and every
+candidate held. Nested application reads supply their own plans while their enclosing
+application is not yet determined. -/
 /-- What a join reads off one operand: a literal's own term, or a variable's binding.
-`none` at an operand the prefix has yet to determine, and at an application or `min`,
-whose value is a term the database need not hold. -/
+`none` at an operand the prefix has yet to determine, and at `min`. An application
+can be read once its variables are bound; `joinPlan` also checks that its value is held. -/
 def joinOperand (ρ : Env) : Expr → Option Term
   | .lit l => some (.lit l)
   | .var w => Env.lookup w ρ
-  | .app _ _ => none
+  | .app f as => Expr.eval (.app f as) ρ
   | .min _ _ => none
 
 /-- `joinOperand` over an atom's operand list. -/
 def joinKnown (ρ : Env) (es : List Expr) : List (Option Term) := es.map (joinOperand ρ)
 
-/-- Whether every operand is one a join can read. -/
-def joinDrivable (es : List Expr) : Bool :=
-  es.all fun e => match e with | .app _ _ => false | .min _ _ => false | _ => true
+mutual
+
+/-- An operand a join can read structurally; ordering operations are excluded. -/
+def joinExprDrivable : Expr → Bool
+  | .lit _ | .var _ => true
+  | .app _ as => joinDrivable as
+  | .min _ _ => false
+
+/-- Whether all operands, including their nested applications, avoid `min`. -/
+def joinDrivable : List Expr → Bool
+  | [] => true
+  | e :: es => joinExprDrivable e && joinDrivable es
+
+end
+
+/-- Application operands must already have a value before the enclosing row is read.
+Their recursive reads can drive the still-unbound variables independently. -/
+def joinReady (ρ : Env) (es : List Expr) : Bool :=
+  es.all fun e => match e with
+    | .app f as => (Expr.eval (.app f as) ρ).isSome
+    | .min _ _ => false
+    | _ => true
 
 /-- Whether a row is consistent with what the operands are known to be: at every determined
 operand, the row's column there is congruent to it. -/
@@ -739,26 +759,43 @@ structure JoinAtom where
   /-- The rows the prefix has not ruled out, rescanned for every candidate. -/
   rows : List Row
 
-/-- `p` as a narrowing step for `v`, or `none` where the index cannot speak: a pattern that
-is not an application atom, an operand a join cannot read, an atom `v` does not occur in,
-or a determined operand naming a term the database does not hold. -/
+/-- One application read as a narrowing step. The environment is restricted to the
+original pattern's variables, also for plans obtained from nested reads. -/
+def joinAtomPlan (cl : Finset (Term × Term)) (d : FDatabase) (pre : Env) (v : Var)
+    (vars : List Var) (f : FnName) (as : List Expr) : Option JoinAtom :=
+  let ρ := Env.canon vars pre
+  if joinDrivable as && joinReady ρ as &&
+      (as.any fun e => match e with | .var w => w == v | _ => false) then
+    let ka := joinKnown ρ as
+    if d.holdsAll (ka.filterMap id) then
+      some ⟨vars, as,
+        d.rows.filter fun r =>
+          (r.fn == f) && !d.subsumed.contains (.app r.fn r.args) && joinConsistent cl ka r.args⟩
+    else none
+  else none
+
+mutual
+
+/-- Every application read is necessary for an expression to match. Plan those reads
+independently, so an undetermined nested value does not prevent its children driving. -/
+def joinExprPlans (cl : Finset (Term × Term)) (d : FDatabase) (pre : Env) (v : Var)
+    (vars : List Var) : Expr → List JoinAtom
+  | .app f as =>
+      (joinAtomPlan cl d pre v vars f as).toList ++ joinArgsPlans cl d pre v vars as
+  | _ => []
+
+def joinArgsPlans (cl : Finset (Term × Term)) (d : FDatabase) (pre : Env) (v : Var)
+    (vars : List Var) : List Expr → List JoinAtom
+  | [] => []
+  | e :: es => joinExprPlans cl d pre v vars e ++ joinArgsPlans cl d pre v vars es
+
+end
+
+/-- The application reads of an expression atom; equality and ordering do not drive. -/
 def joinPlan (cl : Finset (Term × Term)) (d : FDatabase) (pre : Env) (v : Var) :
-    Pattern → Option JoinAtom
-  | .expr e =>
-    match e.ctorAtom with
-    | none => none
-    | some (f, as) =>
-      let vars := (Pattern.expr e).freeVars []
-      if joinDrivable as && decide (v ∈ vars) then
-        let ρ := Env.canon vars pre
-        let ka := joinKnown ρ as
-        if d.holdsAll (ka.filterMap id) then
-          some ⟨vars, as,
-            d.rows.filter fun r =>
-              (r.fn == f) && !d.subsumed.contains (.app r.fn r.args) && joinConsistent cl ka r.args⟩
-        else none
-      else none
-  | _ => none
+    Pattern → List JoinAtom
+  | .expr e => joinExprPlans cl d pre v ((Pattern.expr e).freeVars []) e
+  | _ => []
 
 /-- Whether the atom's surviving rows still admit `v ↦ t`. -/
 def JoinAtom.keeps (a : JoinAtom) (cl : Finset (Term × Term)) (pre : Env)
@@ -771,7 +808,7 @@ fewest surviving rows first. `held` is `d.holdsAll ts`, computed once per query.
 def joinCands (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) (held : Bool)
     (ts : List Term) (pre : Env) (v : Var) : List Term :=
   if held then
-    let plans := (q.filterMap (joinPlan cl d pre v)).mergeSort fun a b =>
+    let plans := (q.flatMap (joinPlan cl d pre v)).mergeSort fun a b =>
       decide (a.rows.length ≤ b.rows.length)
     ts.filter fun t => plans.all fun a => a.keeps cl pre v t
   else ts
@@ -898,6 +935,45 @@ private theorem evalList_cons {e : Expr} {es : List Expr} {ρ : Env}
       intro h
       exact ⟨x, ks', rfl, rfl, h.symm⟩
 
+mutual
+
+/-- An extension cannot change a value the prefix already determined. -/
+private theorem eval_mono {ρ ρ' : Env}
+    (hmono : ∀ w y, Env.lookup w ρ = some y → Env.lookup w ρ' = some y) :
+    ∀ (e : Expr) {t : Term}, Expr.eval e ρ = some t → Expr.eval e ρ' = some t
+  | .lit _, _, h => h
+  | .var w, _, h => hmono w _ h
+  | .app f as, _, h => by
+      obtain ⟨ts, hs, rfl⟩ := Option.map_eq_some_iff.mp h
+      simp only [Expr.eval, evalList_mono hmono as hs, Option.map_some]
+  | .min a b, _, h => by
+      obtain ⟨x, hx, h⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp h
+      simp only [Expr.eval, eval_mono hmono a hx, eval_mono hmono b hy,
+        Option.bind_some, Option.map_some]
+
+private theorem evalList_mono {ρ ρ' : Env}
+    (hmono : ∀ w y, Env.lookup w ρ = some y → Env.lookup w ρ' = some y) :
+    ∀ (es : List Expr) {ts : List Term}, Expr.evalList es ρ = some ts →
+      Expr.evalList es ρ' = some ts
+  | [], _, h => h
+  | e :: es, _, h => by
+      obtain ⟨t, ts, he, hes, rfl⟩ := evalList_cons h
+      simp only [Expr.evalList, eval_mono hmono e he, evalList_mono hmono es hes,
+        Option.bind_some, Option.map_some]
+
+end
+
+/-- A determined join key is the full instance's value. -/
+private theorem joinOperand_eval {ρ ρ' : Env}
+    (hmono : ∀ w y, Env.lookup w ρ = some y → Env.lookup w ρ' = some y)
+    {e : Expr} {t : Term} (h : joinOperand ρ e = some t) : Expr.eval e ρ' = some t := by
+  cases e with
+  | lit _ => exact h
+  | var w => exact hmono w _ h
+  | app f as => exact eval_mono hmono (.app f as) h
+  | min _ _ => simp [joinOperand] at h
+
 /-- `holdsAll` is a `List.all`. -/
 private theorem holdsAll_of_mem {d : FDatabase} {L : List Term} {x : Term}
     (h : d.holdsAll L = true) (hx : x ∈ L) : d.holdsAll [x] = true := by
@@ -919,7 +995,7 @@ private theorem joinKnown_holds {d : FDatabase} {ρ ρ' : Env}
     (hmono : ∀ w y, Env.lookup w ρ = some y → Env.lookup w ρ' = some y)
     (hnew : ∀ w y, Env.lookup w ρ = none → Env.lookup w ρ' = some y →
       d.holdsAll [y] = true) :
-    ∀ {es : List Expr} {ks : List Term}, joinDrivable es = true →
+    ∀ {es : List Expr} {ks : List Term}, joinReady ρ es = true →
       Expr.evalList es ρ' = some ks →
       d.holdsAll ((joinKnown ρ es).filterMap id) = true →
       ∀ x ∈ ks, d.holdsAll [x] = true := by
@@ -930,7 +1006,7 @@ private theorem joinKnown_holds {d : FDatabase} {ρ ρ' : Env}
   | cons e es ih =>
     intro ks hdr hev hk x hx
     obtain ⟨y, ks', hey, hes, rfl⟩ := evalList_cons hev
-    simp only [joinDrivable, List.all_cons, Bool.and_eq_true] at hdr
+    simp only [joinReady, List.all_cons, Bool.and_eq_true] at hdr
     have hknown : d.holdsAll ((joinKnown ρ es).filterMap id) = true := by
       refine holdsAll_of_forall fun z hz => holdsAll_of_mem hk ?_
       simp only [joinKnown, List.map_cons, List.filterMap_cons] at hz ⊢
@@ -939,7 +1015,13 @@ private theorem joinKnown_holds {d : FDatabase} {ρ ρ' : Env}
       | some w => simp only [id]; exact List.mem_cons_of_mem _ hz
     have hhead : d.holdsAll [y] = true := by
       match e with
-      | .app _ _ => simp at hdr
+      | .app f as =>
+        obtain ⟨z, hz⟩ := Option.isSome_iff_exists.mp hdr.1
+        have hzy := (eval_mono hmono (.app f as) hz).symm.trans hey
+        cases Option.some.inj hzy
+        refine holdsAll_of_mem hk ?_
+        simp only [joinKnown, List.map_cons, List.filterMap_cons, joinOperand, hz, id]
+        exact List.mem_cons_self ..
       | .min _ _ => simp at hdr
       | .lit l =>
         simp only [Expr.eval, Option.some.injEq] at hey
@@ -979,14 +1061,14 @@ private theorem congrTuple_cons {cl : Finset (Term × Term)} {x : Term} {ks xs :
 to the whole instance is consistent with the part of it the prefix has determined. -/
 private theorem joinConsistent_of_congrTuple {cl : Finset (Term × Term)}
     {ρ ρ' : Env} (hmono : ∀ w y, Env.lookup w ρ = some y → Env.lookup w ρ' = some y) :
-    ∀ {es : List Expr} {ks xs : List Term}, joinDrivable es = true →
+    ∀ {es : List Expr} {ks xs : List Term},
       Expr.evalList es ρ' = some ks →
       FDatabase.congrTuple cl ks xs = true →
       joinConsistent cl (joinKnown ρ es) xs = true := by
   intro es
   induction es with
   | nil =>
-    intro ks xs _ hev hct
+    intro ks xs hev hct
     simp only [Expr.evalList, Option.some.injEq] at hev
     subst hev
     simp only [FDatabase.congrTuple, List.length_nil, beq_iff_eq, Bool.and_eq_true] at hct
@@ -994,27 +1076,15 @@ private theorem joinConsistent_of_congrTuple {cl : Finset (Term × Term)}
     | nil => simp [joinConsistent, joinKnown]
     | cons _ _ => simp at hct
   | cons e es ih =>
-    intro ks xs hdr hev hct
+    intro ks xs hev hct
     obtain ⟨y, ks', hey, hes, rfl⟩ := evalList_cons hev
     obtain ⟨z, xs', rfl, hzy, hct'⟩ := congrTuple_cons hct
-    simp only [joinDrivable, List.all_cons, Bool.and_eq_true] at hdr
-    have htail := ih hdr.2 hes hct'
+    have htail := ih hes hct'
     have hhead : ∀ s, joinOperand ρ e = some s → (s, z) ∈ cl := by
       intro s hs
-      match e with
-      | .app _ _ => simp [joinOperand] at hs
-      | .min _ _ => simp [joinOperand] at hs
-      | .lit l =>
-        simp only [joinOperand, Option.some.injEq] at hs
-        simp only [Expr.eval, Option.some.injEq] at hey
-        subst hs; subst hey; exact hzy
-      | .var w =>
-        simp only [joinOperand] at hs
-        have hey : Env.lookup w ρ' = some y := by simpa only [Expr.eval] using hey
-        have := hmono w s hs
-        rw [hey] at this
-        cases (Option.some.injEq .. ▸ this)
-        exact hzy
+      have he := (joinOperand_eval hmono hs).symm.trans hey
+      cases Option.some.inj he
+      exact hzy
     simp only [joinKnown, List.map_cons, joinConsistent, List.length_cons, beq_iff_eq,
       List.zip_cons_cons, List.all_cons, Bool.and_eq_true] at htail ⊢
     refine ⟨?_, ?_, ?_⟩
@@ -1024,31 +1094,59 @@ private theorem joinConsistent_of_congrTuple {cl : Finset (Term × Term)}
       | some s => simpa using hhead s hop
     · exact htail.2
 
-/-- What `joinPlan` promises when it produces an atom. -/
-private theorem joinPlan_ctor {cl : Finset (Term × Term)} {d : FDatabase} {pre : Env}
-    {v : Var} {e : Expr} {as : List Expr} {f : FnName} {a : JoinAtom}
-    (hc : e.ctorAtom = some (f, as))
-    (h : joinPlan cl d pre v (.expr e) = some a) :
-    joinDrivable as = true ∧ a.vars = (Pattern.expr e).freeVars [] ∧ a.keys = as ∧
+/-- What one ready application plan promises. -/
+private theorem joinAtomPlan_ctor {cl : Finset (Term × Term)} {d : FDatabase} {pre : Env}
+    {v : Var} {vars : List Var} {as : List Expr} {f : FnName} {a : JoinAtom}
+    (h : joinAtomPlan cl d pre v vars f as = some a) :
+    joinReady (Env.canon vars pre) as = true ∧ a.vars = vars ∧ a.keys = as ∧
       d.holdsAll ((joinKnown (Env.canon a.vars pre) as).filterMap id) = true ∧
       ∀ r ∈ d.rows, r.fn = f → d.subsumed.contains (.app r.fn r.args) = false →
         joinConsistent cl (joinKnown (Env.canon a.vars pre) as) r.args = true →
         r ∈ a.rows := by
-  simp only [joinPlan, hc] at h
+  simp only [joinAtomPlan] at h
   split at h
   · rename_i hg
     split at h
     · rename_i hh
       simp only [Option.some.injEq] at h
       subst h
-      simp only [Bool.and_eq_true, decide_eq_true_eq] at hg
-      refine ⟨hg.1, rfl, rfl, hh, ?_⟩
+      simp only [Bool.and_eq_true] at hg
+      refine ⟨hg.1.2, rfl, rfl, hh, ?_⟩
       intro r hr hf hs h1
       have hbf : (r.fn == f) = true := by simp [hf]
       have hs' : Term.app r.fn r.args ∉ d.subsumed := by simpa using hs
-      exact List.mem_filter.mpr ⟨hr, by simp [hbf, hs, hs', h1]⟩
+      exact List.mem_filter.mpr ⟨hr, by simp [hbf, hs', h1]⟩
     · simp at h
   · simp at h
+
+mutual
+
+/-- A matching expression satisfies every application read its plans use. -/
+private theorem joinExprPlans_holds {cl : Finset (Term × Term)} {d : FDatabase}
+    {pre σ : Env} {v : Var} {vars : List Var} {a : JoinAtom} : ∀ (e : Expr),
+    exprHoldsWith cl d σ e = true → a ∈ joinExprPlans cl d pre v vars e →
+    ∃ f as, joinAtomPlan cl d pre v vars f as = some a ∧
+      patternHoldsWith cl d (.expr (.app f as)) σ = true
+  | .lit _, _, ha => by simp [joinExprPlans] at ha
+  | .var _, _, ha => by simp [joinExprPlans] at ha
+  | .min _ _, _, ha => by simp [joinExprPlans] at ha
+  | .app f as, hh, ha => by
+      rcases List.mem_append.mp ha with ha | ha
+      · exact ⟨f, as, by simpa using ha, hh⟩
+      · exact joinArgsPlans_holds as (Bool.and_eq_true_iff.mp hh).1 ha
+
+private theorem joinArgsPlans_holds {cl : Finset (Term × Term)} {d : FDatabase}
+    {pre σ : Env} {v : Var} {vars : List Var} {a : JoinAtom} : ∀ (es : List Expr),
+    exprsHoldWith cl d σ es = true → a ∈ joinArgsPlans cl d pre v vars es →
+    ∃ f as, joinAtomPlan cl d pre v vars f as = some a ∧
+      patternHoldsWith cl d (.expr (.app f as)) σ = true
+  | [], _, ha => by simp [joinArgsPlans] at ha
+  | e :: es, hh, ha => by
+      rcases List.mem_append.mp ha with ha | ha
+      · exact joinExprPlans_holds e (Bool.and_eq_true_iff.mp hh).1 ha
+      · exact joinArgsPlans_holds es (Bool.and_eq_true_iff.mp hh).2 ha
+
+end
 
 /-- What `patternHoldsWith` promises at an application atom: its operands evaluate, and
 once their values are all held, a held application of the head with congruent children
@@ -1101,60 +1199,57 @@ theorem joinCands_mem {cl : Finset (Term × Term)} {d : FDatabase} {q : Query} {
   split
   · rename_i hb
     refine List.mem_filter.mpr ⟨htm, List.all_eq_true.mpr fun a ha => ?_⟩
-    have ha' : a ∈ q.filterMap (joinPlan cl d pre v) :=
+    have ha' : a ∈ q.flatMap (joinPlan cl d pre v) :=
       ((List.mergeSort_perm _ _).mem_iff).mp ha
-    obtain ⟨p, hp, hpa⟩ := List.mem_filterMap.mp ha'
+    obtain ⟨p, hp, hpa⟩ := List.mem_flatMap.mp ha'
     have hph := List.all_eq_true.mp hall p hp
     match p, hpa, hph with
     | .eq _ _, hpa, _ => simp [joinPlan] at hpa
     | .ne _ _, hpa, _ => simp [joinPlan] at hpa
     | .expr e, hpa, hph =>
-      cases hc : e.ctorAtom with
-      | none => simp [joinPlan, hc] at hpa
-      | some fa =>
-        obtain ⟨f, as⟩ := fa
-        obtain ⟨hda, hav, hak, hka, hrow⟩ := joinPlan_ctor hc hpa
-        obtain ⟨ks, hek, hrows⟩ := patternHoldsWith_ctor hc hph
-        -- the three environments: the node's, the candidate's, and the full substitution's
-        set vars := (Pattern.expr e).freeVars [] with hvars
-        set ρ₀ := Env.canon vars pre with hρ₀
-        set ρ₁ := Env.canon vars (pre ++ [(v, t)]) with hρ₁
-        set ρ₂ := Env.canon vars (pre ++ [(v, t)] ++ σ) with hρ₂
-        have mono₀ : ∀ w y, Env.lookup w ρ₀ = some y → Env.lookup w ρ₂ = some y := by
-          rw [hρ₀, hρ₂]
-          exact lookup_canon_mono (E := [])
-            fun w y hw => lookup_append_some (lookup_append_some hw)
-        have mono₁ : ∀ w y, Env.lookup w ρ₁ = some y → Env.lookup w ρ₂ = some y := by
-          rw [hρ₁, hρ₂]
-          exact lookup_canon_mono (E := []) fun w y hw => lookup_append_some hw
-        have hnew : ∀ w y, Env.lookup w ρ₀ = none → Env.lookup w ρ₂ = some y →
-            d.holdsAll [y] = true := by
-          intro w y h0 h2
-          rw [hρ₀, Env.lookup_canon_eq] at h0
-          rw [hρ₂, Env.lookup_canon_eq] at h2
-          by_cases hmv : w ∈ vars
-          · rw [if_pos hmv] at h0 h2
-            rw [List.append_assoc, lookup_append_none h0, List.singleton_append,
-              Env.lookup] at h2
-            by_cases hwv : w = v
-            · rw [if_pos hwv, Option.some.injEq] at h2
-              subst h2; exact hheld hb t htm
-            · rw [if_neg hwv] at h2
-              exact hheld hb y (hσ (w, y) (mem_of_lookup h2))
-          · rw [if_neg hmv] at h2; simp at h2
-        -- every operand's value is held, so the atom took the index branch
-        have hks : ∀ x ∈ ks, d.holdsAll [x] = true := by
-          rw [hav] at hka
-          exact joinKnown_holds mono₀ hnew hda hek hka
-        obtain ⟨r, hr, hrf, hcm, hns⟩ := hrows (holdsAll_of_forall hks)
-        -- the row survives the prefix, so it is one of the atom's, and it admits `t`
-        have hin : r ∈ a.rows := by
-          refine hrow r hr hrf hns ?_
-          rw [hav]
-          exact joinConsistent_of_congrTuple mono₀ hda hek hcm
-        refine List.any_eq_true.mpr ⟨r, hin, ?_⟩
-        rw [hak, hav]
-        exact joinConsistent_of_congrTuple mono₁ hda hek hcm
+      obtain ⟨f, as, hplan, hph⟩ := joinExprPlans_holds e hph hpa
+      obtain ⟨hda, hav, hak, hka, hrow⟩ := joinAtomPlan_ctor hplan
+      obtain ⟨ks, hek, hrows⟩ := patternHoldsWith_ctor rfl hph
+      -- the three environments: the node's, the candidate's, and the full substitution's
+      set vars := (Pattern.expr e).freeVars [] with hvars
+      set ρ₀ := Env.canon vars pre with hρ₀
+      set ρ₁ := Env.canon vars (pre ++ [(v, t)]) with hρ₁
+      set ρ₂ := Env.canon vars (pre ++ [(v, t)] ++ σ) with hρ₂
+      have mono₀ : ∀ w y, Env.lookup w ρ₀ = some y → Env.lookup w ρ₂ = some y := by
+        rw [hρ₀, hρ₂]
+        exact lookup_canon_mono (E := [])
+          fun w y hw => lookup_append_some (lookup_append_some hw)
+      have mono₁ : ∀ w y, Env.lookup w ρ₁ = some y → Env.lookup w ρ₂ = some y := by
+        rw [hρ₁, hρ₂]
+        exact lookup_canon_mono (E := []) fun w y hw => lookup_append_some hw
+      have hnew : ∀ w y, Env.lookup w ρ₀ = none → Env.lookup w ρ₂ = some y →
+          d.holdsAll [y] = true := by
+        intro w y h0 h2
+        rw [hρ₀, Env.lookup_canon_eq] at h0
+        rw [hρ₂, Env.lookup_canon_eq] at h2
+        by_cases hmv : w ∈ vars
+        · rw [if_pos hmv] at h0 h2
+          rw [List.append_assoc, lookup_append_none h0, List.singleton_append,
+            Env.lookup] at h2
+          by_cases hwv : w = v
+          · rw [if_pos hwv, Option.some.injEq] at h2
+            subst h2; exact hheld hb t htm
+          · rw [if_neg hwv] at h2
+            exact hheld hb y (hσ (w, y) (mem_of_lookup h2))
+        · rw [if_neg hmv] at h2; simp at h2
+      -- every operand's value is held, so the atom took the index branch
+      have hks : ∀ x ∈ ks, d.holdsAll [x] = true := by
+        rw [hav] at hka
+        exact joinKnown_holds mono₀ hnew hda hek hka
+      obtain ⟨r, hr, hrf, hcm, hns⟩ := hrows (holdsAll_of_forall hks)
+      -- the row survives the prefix, so it is one of the atom's, and it admits `t`
+      have hin : r ∈ a.rows := by
+        refine hrow r hr hrf hns ?_
+        rw [hav]
+        exact joinConsistent_of_congrTuple mono₀ hek hcm
+      refine List.any_eq_true.mpr ⟨r, hin, ?_⟩
+      rw [hak, hav]
+      exact joinConsistent_of_congrTuple mono₁ hek hcm
   · exact htm
 
 /-- `filter` past a `flatMap` that is empty wherever the filter rejects. -/

@@ -59,8 +59,9 @@ inductive RebuildOrigin where
   | stale (constructor : FnName)
   /-- The index of the view: one row per view row and column. -/
   | index (constructor : FnName)
-  /-- A view row moves with a union-find edge found through the index. -/
-  | rekey (constructor : FnName)
+  /-- A view row moves with the union-find edge of one of its columns, found through the
+  index. -/
+  | rekey (constructor : FnName) (column : Nat)
   /-- The congruence rule read over the view: two rows at one key. -/
   | viewCongruence (constructor : FnName)
   deriving DecidableEq, Repr
@@ -347,45 +348,47 @@ def staleRule (f : FnName) (arity : Nat) (column : Nat) : Rule :=
               .ne key (.var "@x")],
     actions := [subsumeView f cs (.var "@e")] }
 
-/-- The index of the view: a row per column, mapping the column's value to the view row
-that mentions it, so that a union-find edge finds every row it moves by lookup. The row is
-written out, as in egglog's `(index …)`, so every atom stays flat. -/
+/-- The index of the view: a row per column, relating the view row to each value it
+mentions, so that a union-find edge finds every row it moves by lookup. -/
 @[blueprint "def:view-index"
   (statement := /--
   \[
-  \textsc{Idx}_f:\ \mathtt{View}_f(c_1,\ldots,c_{n+1})\Rightarrow
-    \mathtt{HasChild}_f(c_1,\ c_1,\ldots,c_{n+1}),\ \ldots,\
-    \mathtt{HasChild}_f(c_{n+1},\ c_1,\ldots,c_{n+1})
+  \begin{aligned}
+  \textsc{Idx}_f&:\ \mathtt{View}_f(c_1,\ldots,c_{n+1})\\
+    &\qquad\Rightarrow\mathtt{HasChild}(\mathtt{View}_f(c_1,\ldots,c_{n+1}),c_1),\ \ldots,\
+    \mathtt{HasChild}(\mathtt{View}_f(c_1,\ldots,c_{n+1}),c_{n+1})
+  \end{aligned}
   \]
   -/)
   (latexEnv := "paperfragment")]
 def indexRule (f : FnName) (arity : Nat) : Rule :=
   let cs := rebuildVars arity ++ [Expr.var "@e"]
-  { query := [.expr (viewRow f (rebuildVars arity) (.var "@e"))],
-    actions := cs.map fun c => .expr (.app (hasChildName f) (c :: cs)) }
+  let row := viewRow f (rebuildVars arity) (.var "@e")
+  { query := [.expr row],
+    actions := cs.map fun c => .expr (.app hasChildName [row, c]) }
 
-/-- The indexed view: a union-find edge joined with the index names every row it moves,
-and the firing re-canonicalizes every column of that row through the union-find, so one
-firing yields the canonical row. Builds write a node's row with the node. -/
+/-- The indexed view: the index entry of column `i` of a row, joined with the union-find
+edge of that column, moves the row to the column's parent. One binary join; builds write a
+node's row with the node. -/
 @[blueprint "def:view-indexed"
   (statement := /--
   \[
   \begin{aligned}
-  \textsc{Rekey}_f&:\ \mathtt{HasChild}_f(x,\ c_1,\ldots,c_{n+1})\land\mathtt{UF}(x,x')\land x\ne x'
-    \land\textstyle\bigwedge_j\mathtt{UF}(c_j,c'_j)\\
-    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(c_1,\ldots,c_{n+1})),\ \mathtt{View}_f(c'_1,\ldots,c'_{n+1})\\
+  \textsc{Rekey}_{f,i}&:\ \mathtt{HasChild}(\mathtt{View}_f(c_1,\ldots,c_{n+1}),c_i)\land\mathtt{UF}(c_i,x)\land c_i\ne x\\
+    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(c_1,\ldots,c_{n+1})),\ \mathtt{View}_f(c_1,\ldots,x,\ldots,c_{n+1})\\
   \operatorname{exist}(f(e_1,\ldots,e_n))&\ni\mathtt{View}_f(e_1,\ldots,e_n,f(e_1,\ldots,e_n))
   \end{aligned}
   \]
   -/)
   (latexEnv := "paperfragment")]
-def rekeyRule (f : FnName) (arity : Nat) : Rule :=
+def rekeyRule (f : FnName) (arity : Nat) (column : Nat) : Rule :=
   let cs := rebuildVars arity
-  let ds := congruenceVars "d" arity
-  { query := [.expr (.app (hasChildName f) (.var "@x" :: cs ++ [Expr.var "@e"])),
-              .expr (ufRow (.var "@x") (.var "@y")), .ne (.var "@x") (.var "@y")] ++
-      (cs.zip ds).map (fun cd => .expr (ufRow cd.1 cd.2)) ++ [.expr (ufRow (.var "@e") (.var "@o"))],
-    actions := [subsumeView f cs (.var "@e"), .expr (viewRow f ds (.var "@o"))] }
+  let key : Expr := if column < arity then .var ("@c" ++ toString column) else .var "@e"
+  let moved := if column < arity then viewRow f (cs.set column (.var "@x")) (.var "@e")
+    else viewRow f cs (.var "@x")
+  { query := [.expr (.app hasChildName [viewRow f cs (.var "@e"), key]),
+              .expr (ufRow key (.var "@x")), .ne key (.var "@x")],
+    actions := [subsumeView f cs (.var "@e"), .expr moved] }
 
 /-- The congruence rule read over the view: two rows at one key link the larger output
 under the smaller. The losing row is retired by the stale or move rule once its output has
@@ -406,7 +409,8 @@ def rekeyRules (o : Options) (f : FnName) (arity : Nat) : List (Rule × RuleOrig
       (viewRule f arity, .rebuild (.view f)) ::
         (List.range (arity + 1)).map fun i => (staleRule f arity i, .rebuild (.stale f))
   | .indexed =>
-      [(indexRule f arity, .rebuild (.index f)), (rekeyRule f arity, .rebuild (.rekey f))]
+      (indexRule f arity, .rebuild (.index f)) ::
+        (List.range (arity + 1)).map fun i => (rekeyRule f arity i, .rebuild (.rekey f i))
 
 /-- The rule that detects a congruence of `f`, by mode. -/
 def mergeRules (o : Options) (f : FnName) (arity : Nat) : List (Rule × RuleOrigin) :=
@@ -460,7 +464,7 @@ the term rules read it, and the view settles before congruences are looked for. 
   (statement := /--
   \[
   \kw{saturate}\bigl(\kw{saturate}(\kw{run}\ \{\textsc{Compress},\textsc{Collide}\});\
-    \kw{saturate}(\kw{run}\ \{\textsc{Idx}_f,\textsc{Rekey}_f\mid f\});\
+    \kw{saturate}(\kw{run}\ \{\textsc{Idx}_f,\textsc{Rekey}_{f,i}\mid f,i\});\
     \kw{run}\ \{\textsc{Cong}_f\mid f\}\bigr)
   \]
   -/)
