@@ -234,8 +234,10 @@ def rebuildRules (f : FnName) (arity : Nat) : List (Rule × RuleOrigin) :=
 @[blueprint "def:maintenance"
   (statement := /--
   \[
+  M_P\triangleq\{\textsc{Compress},\ \textsc{Collide}\}\cup\{\textsc{Cong}_f\mid f\text{ applied in }P\}
+  \]
+  \[
   \begin{aligned}
-  M&\triangleq\{\textsc{Compress},\ \textsc{Collide}\}\cup\{\textsc{Cong}_f\mid f\text{ applied in }P\}\\[.2em]
   \textsc{Compress}&:\ \mathtt{UF}(a,b)\land\mathtt{UF}(b,c)\land b\ne c
     \Rightarrow\kw{subsume}(\mathtt{UF}(a,b)),\ \mathtt{UF}(a,c)\\
   \textsc{Collide}&:\ \mathtt{UF}(a,b)\land\mathtt{UF}(a,c)\land b=\min(b,c)\land b\ne c
@@ -271,7 +273,7 @@ each of its passes is one source pass. -/
   \ir{Rule}{Q\leadsto Q'\\H\leadsto H'}{(Q\Rightarrow H)\leadsto(Q'\Rightarrow H')}
   \and
   \ir{Run}{r_i\leadsto r_i'\ (\forall i)}
-    {\kw{run}\ \{r_1,\ldots,r_n\}\leadsto\kw{run}\ \{r_1',\ldots,r_n'\};\ \kw{saturate}\ (\kw{run}\ M)}
+    {\kw{run}\ \{r_1,\ldots,r_n\}\leadsto\kw{run}\ \{r_1',\ldots,r_n'\};\ \kw{saturate}\ (\kw{run}\ M_P)}
   \and
   \ir{Saturate}{S\leadsto S'}{\kw{saturate}\ S\leadsto\kw{saturate}\ S'}
   \and
