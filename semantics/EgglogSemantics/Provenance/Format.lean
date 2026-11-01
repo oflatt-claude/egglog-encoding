@@ -5,6 +5,11 @@ namespace Egglog.Provenance
 /-- Relational facts have existence evidence, without equality axioms. Every node states
 its fact: `rule` cites a firing with one proof per premise, and `subterm` an established
 fact containing it. -/
+@[blueprint "def:relational-proofs"
+  (statement := /--
+  \syntaxline{Proofs}{\rho ::= \kw{rule}_i(t,\sigma;\rho_1,\ldots,\rho_n)\mid\kw{sub}(t,\rho)}
+  -/)
+  (latexEnv := "paperfragment")]
 inductive Proof where
   | rule (fact : Term) (ruleIndex : Nat) (subst : Env) (premises : List Proof)
   | subterm (fact : Term) (parent : Proof)

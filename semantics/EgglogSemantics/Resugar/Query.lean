@@ -1,84 +1,115 @@
 import EgglogSemantics.Resugar.Builder
 
+/-!
+# Source premises from compiled premises
+
+A source rule's compiled query is its flattening (`Congruence.encodeQueryExpr`). Given the
+lifted proofs of the compiled premises, in that order, this rebuilds one source proof per
+source pattern by walking the pattern in the same order. A lifted compiled premise states
+`b = x` for an edge `UF(b, x)`, and `t = t` for a matched application or for the value a
+comparison compares, so nothing is evaluated: an application's rebuilt proof states
+`y = instance` for its root `y`, and a comparison's the equation of its two sides.
+-/
+
 namespace Egglog.Resugar
 
 open SourceProof (Proof)
 
+/-- `cong` over every child in order. -/
 def replaceChildren (P : Program) (children : List Proof) (parent : Proof) : Option Proof :=
   children.zipIdx.foldlM (fun acc child => congr P acc child.2 child.1) parent
 
-/-- `id = instance` from `node = instance` and the node's root edge `node = id`. -/
-def idForm (P : Program) (node root : Proof) : Option Proof := do
-  if root.claim.lhs != node.claim.lhs then none else
-  let rev ← symm P root
-  trans P rev node
-
 mutual
 
-/-- The compiler's left-to-right postorder, repeated on the original expression: the
-children, then the application's own atom, one union-find edge per child, and the edge to
-its root. The result's claim is `id = instance`: the target's id for the expression equals
-the source instance under `σ`; a value is its own witness. The unconsumed premise proofs
-are threaded through in that order. -/
-def queryExpr (P : Program) (σ : Env) (allPremises : List Proof) :
-    Expr → List Proof → Option (Proof × List Proof)
+/-- The children's proofs, then the application's own atom, one edge per child and the edge
+to its root. A value child needs no proof of its own: its edge already ends at it. A
+reflexive proof is not chained in, which keeps lifted proofs small; the claim is the same. -/
+@[blueprint "def:lift-query"
+  (statement := /--
+  \begin{mathpar}
+  \ir{App}{e_i\Uparrow\pi_i:x_i=\eval{e_i}\text{ for each application child}\\
+    \pi_0:f(b_1,\ldots,b_n)=f(b_1,\ldots,b_n)\\ \pi'_i:b_i=x_i\ (\forall i)\\ \pi_r:f(b_1,\ldots,b_n)=y}
+    {f(e_1,\ldots,e_n)\Uparrow\kw{trans}(\kw{sym}(\pi_r),\kw{cong}_n(\cdots\kw{cong}_1(\pi_0,\pi''_1)\cdots,\pi''_n))
+      :y=\eval{f(e_1,\ldots,e_n)}}
+  \and
+  \ir{Compare}{e_1\Uparrow\pi_1:x=\eval{e_1}\\e_2\Uparrow\pi_2:x=\eval{e_2}}
+    {(e_1=e_2)\Uparrow\kw{trans}(\kw{sym}(\pi_1),\pi_2):\eval{e_1}=\eval{e_2}}
+  \end{mathpar}
+  where $\pi''_i=\kw{trans}(\pi'_i,\pi_i)$ for an application child and $\pi'_i$ for a value
+  child, and a value side of a comparison is proved by the comparison's own premise $x=x$.
+  -/)
+  (latexEnv := "paperfragment")]
+def queryExpr (P : Program) : Expr → List Proof → Option (Proof × List Proof)
   | .app f args, remaining => do
-    let (ids, rest) ← queryArgs P σ allPremises args remaining
+    let (ids, rest) ← queryArgs P args remaining
     let node :: rest := rest | none
     let .app g bs := node.claim.rhs | none
     if g != f || bs.length != args.length || node.claim.lhs != node.claim.rhs then none else
     let edges := rest.take args.length
     if edges.length != args.length then none else
     let children ← (edges.zip ids).mapM fun ei =>
-      if ei.2.claim.lhs == ei.2.claim.rhs then some ei.1 else trans P ei.1 ei.2
+      match ei.2 with
+      | some p => if p.claim.lhs == p.claim.rhs then some ei.1 else trans P ei.1 p
+      | none => some ei.1
     let built ← replaceChildren P children node
     let root :: rest := rest.drop args.length | none
-    let result ← idForm P built root
+    if root.claim.lhs == root.claim.rhs then some (built, rest) else
+    let rev ← symm P root
+    let result ← trans P rev built
     some (result, rest)
-  | e, remaining => do
-    let t ← e.eval σ
-    let p ← witness P t allPremises
-    some (p, remaining)
+  | _, _ => none
 
-/-- The children, left to right. -/
-def queryArgs (P : Program) (σ : Env) (allPremises : List Proof) :
-    List Expr → List Proof → Option (List Proof × List Proof)
+/-- The children left to right: an application's proof, or nothing for a value. -/
+def queryArgs (P : Program) : List Expr → List Proof → Option (List (Option Proof) × List Proof)
   | [], remaining => some ([], remaining)
   | e :: es, remaining => do
-    let (p, next) ← queryExpr P σ allPremises e remaining
-    let (ps, last) ← queryArgs P σ allPremises es next
+    let (p, next) ← match e with
+      | .app _ _ => do
+        let (p, next) ← queryExpr P e remaining
+        some (some p, next)
+      | _ => some (none, remaining)
+    let (ps, last) ← queryArgs P es next
     some (p :: ps, last)
 
 end
 
-def queryPattern (P : Program) (σ : Env) (allPremises : List Proof)
-    (p : Pattern) (remaining : List Proof) : Option (Proof × List Proof) := do
+/-- A comparison's side: an application's proof, or nothing for a value. -/
+def querySide (P : Program) (e : Expr) (remaining : List Proof) :
+    Option (Option Proof × List Proof) :=
+  match e with
+  | .app _ _ => do
+    let (p, next) ← queryExpr P e remaining
+    some (some p, next)
+  | _ => some (none, remaining)
+
+def queryPattern (P : Program) (p : Pattern) (remaining : List Proof) :
+    Option (Proof × List Proof) := do
   match p with
-  | .expr e => queryExpr P σ allPremises e remaining
+  | .expr e => queryExpr P e remaining
   | .eq lhs rhs =>
-    let (a, next) ← queryExpr P σ allPremises lhs remaining
-    let (z, last) ← queryExpr P σ allPremises rhs next
-    let equality :: rest := last | none
-    if equality.claim != (⟨a.claim.lhs, z.claim.lhs⟩ : SourceProof.Claim) then none else do
-      let rev ← symm P a
-      let left ← trans P rev equality
-      let result ← trans P left z
-      some (result, rest)
+    let (a, next) ← querySide P lhs remaining
+    let (z, next) ← querySide P rhs next
+    let equality :: rest := next | none
+    let a := a.getD equality
+    let z := z.getD equality
+    if a.claim.lhs != z.claim.lhs then none else
+    if a.claim.lhs == a.claim.rhs then some (z, rest) else
+    let rev ← symm P a
+    let result ← trans P rev z
+    some (result, rest)
   -- Source queries carry no disequality; the fragment excludes it.
   | .ne _ _ => none
 
-def queryPatterns (P : Program) (σ : Env) (allPremises : List Proof) :
-    Query → List Proof → Option (List Proof × List Proof)
+def queryPatterns (P : Program) : Query → List Proof → Option (List Proof × List Proof)
   | [], remaining => some ([], remaining)
   | p :: ps, remaining => do
-    let (a, next) ← queryPattern P σ allPremises p remaining
-    let (as, last) ← queryPatterns P σ allPremises ps next
+    let (a, next) ← queryPattern P p remaining
+    let (as, last) ← queryPatterns P ps next
     some (a :: as, last)
 
 /-- One source premise proof per original query conjunct, consuming every lifted premise. -/
-def query (P : Program) (σ : Env) (q : Query) (premises : List Proof) :
-    Option (List Proof) := do
-  let (ps, remaining) ← queryPatterns P σ premises q premises
+def query (P : Program) (q : Query) (premises : List Proof) : Option (List Proof) := do
+  let (ps, remaining) ← queryPatterns P q premises
   if remaining.isEmpty then some ps else none
 
 end Egglog.Resugar

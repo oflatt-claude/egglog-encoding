@@ -87,7 +87,17 @@ def extractEach (P : Program) (terms : List Term) : List (Term × Option Proof) 
     (t, (facts.find? (·.1 == t)).bind fun fp =>
       if check P fp.2 == some t then some fp.2 else none)
 
-/-- A checked proof of every data row. -/
+/-- A checked proof of every data row. The proofs found are exactly derivations of the
+checker whose rule nodes are logged firings; the passes above find one per row. -/
+@[blueprint "def:extract"
+  (statement := /--
+  \[
+  L\vdash\rho:t\ \triangleq\ P'\vdash\rho:t\ \text{ and every }
+  \kw{rule}_i(t',\sigma;\ldots)\text{ in }\rho\text{ has }
+  \mathtt{fire}_i(\sigma(x_1),\ldots,\sigma(x_n))\in L
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 def extract (P : Program) (terms : List Term) : Option (List (Term × Proof)) := do
   if !programOk P then none else
     (extractEach P terms).mapM fun tp => tp.2.map (tp.1, ·)

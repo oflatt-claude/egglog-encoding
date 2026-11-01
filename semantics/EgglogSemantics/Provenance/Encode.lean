@@ -51,6 +51,15 @@ def programOk (P : Program) : Bool :=
 def fireAction (k : Nat) (r : Rule) : Action :=
   .expr (.app (fireName k) (r.query.vars.map Expr.var))
 
+/-- Rule `k` with its firing log action; the `fire` rows of a run are its log `L`. -/
+@[blueprint "def:instrument"
+  (statement := /--
+  \[
+  (Q\Rightarrow H)_i\ \leadsto\ Q\Rightarrow H\cup\{\mathtt{fire}_i(x_1,\ldots,x_n)\}
+  \qquad\text{where }\{x_1,\ldots,x_n\}=\operatorname{FV}(Q)
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 def encodeRule (k : Nat) (r : Rule) : Rule :=
   { r with actions := r.actions ++ [fireAction k r] }
 

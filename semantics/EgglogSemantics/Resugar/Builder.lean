@@ -40,7 +40,22 @@ def endpoints (P : Program) (t : Term) (p : Proof)
     trans P s p
   else descend ()
 
-/-- Recover subterm existence from a source derivation, without a new proof axiom. -/
+/-- Recover subterm existence from a source derivation, without a new proof axiom: an
+endpoint by transitivity with its own symmetry, a subterm a firing built from that firing,
+and otherwise from a subproof. -/
+@[blueprint "def:lift-exist"
+  (statement := /--
+  \[
+  \begin{aligned}
+  \operatorname{exist}_s(\pi)&=\kw{trans}(\pi,\kw{sym}(\pi))&&\text{if }P\vdash\pi:s=t\\
+  \operatorname{exist}_s(\pi)&=\kw{trans}(\kw{sym}(\pi),\pi)&&\text{if }P\vdash\pi:t=s\\
+  \operatorname{exist}_s(\kw{rule}_i(c,\sigma;\pi_1,\ldots,\pi_n))&=\kw{rule}_i((s=s),\sigma;\pi_1,\ldots,\pi_n)
+    &&\text{if }(s=s)\in\operatorname{facts}_\sigma(H_i)\\
+  \operatorname{exist}_s(\pi)&=\operatorname{exist}_s(\pi')&&\text{for a subproof }\pi'\text{ of }\pi\text{, otherwise}
+  \end{aligned}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 def support (P : Program) (t : Term) : Proof → Option Proof
   | p@(.rule _ command σ ps) => endpoints P t p fun _ =>
       node P (.rule ⟨t, t⟩ command σ ps)

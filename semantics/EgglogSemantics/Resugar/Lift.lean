@@ -1,6 +1,7 @@
 import EgglogSemantics.Resugar.Query
 import EgglogSemantics.Provenance.Extract
 import EgglogSemantics.Resugar.Claim
+import Architect
 
 namespace Egglog.Resugar
 
@@ -12,7 +13,7 @@ def sourceSubst (vars : List Var) (σ : Env) : Option Env :=
 /-- A maintenance firing's written row, justified from its premises in query order. Path
 compression chains two edges; a UF collision chains the two parents through their key; a
 congruence firing turns the second application into the first by congruence on each child,
-and chains the two roots through them. -/
+and chains the two roots through them. The paper shows these with `liftProof` below. -/
 def rebuild (P : Program) (kind : Congruence.RebuildOrigin)
     (ps : List Proof) : Option Proof := do
   match kind with
@@ -48,8 +49,34 @@ def expect (P : Program) (fact : Term) (k : Claim → Option Proof) : Option Pro
 
 mutual
 
-/-- Lift relational provenance to a source proof of the same fact's claim. `origins` has
-one entry per rule of the compiled program, in the order of `Program.rules`. -/
+/-- Lift relational provenance to a source proof of the same fact's claim: `ρ ⇑ π` with
+`P ⊢ π : ⌈fact(ρ)⌉`. `origins` has one entry per rule of the compiled program, in the order
+of `Program.rules`; `i'` below is the compiled copy of source rule `i`. -/
+@[blueprint "def:lift"
+  (statement := /--
+  \begin{mathpar}
+  \ir{Sub}{\rho\Uparrow\pi}{\kw{sub}(s,\rho)\Uparrow\operatorname{exist}_s(\pi)}
+  \and
+  \ir{Compress}{\rho_1\Uparrow\pi_1\\\rho_2\Uparrow\pi_2}
+    {\kw{rule}_{\textsc{Compress}}(\mathtt{UF}(a,c),\sigma;\rho_1,\rho_2,\rho_3)\Uparrow\kw{trans}(\pi_1,\pi_2)}
+  \and
+  \ir{Collide}{\rho_1\Uparrow\pi_1\\\rho_2\Uparrow\pi_2}
+    {\kw{rule}_{\textsc{Collide}}(\mathtt{UF}(c,b),\sigma;\rho_1,\ldots,\rho_4)\Uparrow\kw{trans}(\kw{sym}(\pi_2),\pi_1)}
+  \and
+  \ir{Cong}{\rho_b\Uparrow\pi_b\\\rho_{a_i}\Uparrow\pi_{a_i}\\\rho_{b_i}\Uparrow\pi_{b_i}\ (\forall i)\\
+    \rho_y\Uparrow\pi_y\\\rho_z\Uparrow\pi_z}
+    {\kw{rule}_{\textsc{Cong}_f}(\mathtt{UF}(z,y),\sigma;\rho_a,\rho_b,\rho_{a_1},\rho_{b_1},\ldots,\rho_{a_n},\rho_{b_n},\rho_y,\rho_z,\ldots)\\
+      \Uparrow\kw{trans}(\kw{sym}(\pi_z),\kw{trans}(\kw{cong}_n(\cdots\kw{cong}_1(\pi_b,\pi_1)\cdots,\pi_n),\pi_y))}
+  \and
+  \ir{Source}{r_i=(Q\Rightarrow H)\\\rho_j\Uparrow\pi_j\ (\forall j)\\
+    Q\text{ read against }\pi_1,\ldots,\pi_m\text{ gives }\pi'_1,\ldots,\pi'_k\\
+    \lceil t\rceil\in\operatorname{facts}_{\sigma|_{\operatorname{FV}(Q)}}(H)}
+    {\kw{rule}_{i'}(t,\sigma;\rho_1,\ldots,\rho_m)\Uparrow
+      \kw{rule}_i(\lceil t\rceil,\sigma|_{\operatorname{FV}(Q)};\pi'_1,\ldots,\pi'_k)}
+  \end{mathpar}
+  where, in \textsc{Cong}, $\pi_i=\kw{trans}(\pi_{b_i},\kw{sym}(\pi_{a_i}))$.
+  -/)
+  (latexEnv := "paperfragment")]
 def liftProof (P : Program) (origins : List Congruence.RuleOrigin) :
     Provenance.Proof → Option Proof
   | .subterm t parent => expect P t fun c => do
@@ -62,7 +89,7 @@ def liftProof (P : Program) (origins : List Congruence.RuleOrigin) :
       | .source index => do
         let r ← P.rules[index]?
         let σ' ← sourceSubst r.query.vars σ
-        let sourcePremises ← query P σ' r.query ps
+        let sourcePremises ← query P r.query ps
         node P (.rule c index σ' sourcePremises)
       | .rebuild kind => do
         let p ← rebuild P kind ps
