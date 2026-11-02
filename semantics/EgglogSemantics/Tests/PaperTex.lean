@@ -216,11 +216,12 @@ def compiled (source : Program) : String :=
 
 A source proof in the syntax of the paper's proof figure, `rule_i(c, σ; π₁, …, πₙ)`,
 `sym(π)`, `trans(π, π)` and `cong_k(π, π)`, with rule indices and child positions counted
-from one as the paper does. A node that fits on a line is printed inline; otherwise its
-arguments go on the following lines, one level in. A `where` clause names what recurs:
-nested terms mentioned in more than one place as `t₁, t₂, …`, substitutions of more than
-one rule node as `σ₁, σ₂, …`, and rule nodes with premises that occur more than once as
-`π₁, π₂, …`. -/
+from one as the paper does. What recurs is bound first by a `let`: nested terms mentioned in
+more than one place as `t₁, t₂, …`, substitutions of more than one rule node as
+`σ₁, σ₂, …`, and rule nodes with premises that occur more than once as `π₁, π₂, …`. A node
+that fits on a line is printed inline; otherwise its arguments go on the following lines,
+one level in. Every line carries a comment saying what its node proves, or what a firing
+matched, in the arithmetic reading of the example's constructors. -/
 
 open SourceProof (Proof Claim)
 
@@ -231,6 +232,53 @@ def term (abbrevs : List Expr) (t : Term) : String :=
 
 def claim (abbrevs : List Expr) (c : Claim) : String :=
   term abbrevs c.lhs ++ " = " ++ term abbrevs c.rhs
+
+/-- The arithmetic reading of the paper's example, for comments: `Num(n)` is `n`,
+`Var("i")` is `i`, `Mul(a, b)` is `a·b` and `Sum0-10("i", b)` is a sum over `i`; any other
+constructor applies to the readings of its arguments. -/
+partial def math : Expr → String
+  | .app "Num" [.lit (.int n)] => toString n
+  | .app "Var" [.lit (.str v)] => v
+  | .app "Mul" [a, b] =>
+    let left := match a with
+      | .app "Sum0-10" _ => "(" ++ math a ++ ")"
+      | _ => math a
+    left ++ "\\cdot " ++ math b
+  | .app "Sum0-10" [.lit (.str v), b] => "\\sum_{" ++ v ++ "=0}^{10}" ++ math b
+  | .app f args =>
+    if args.isEmpty then name f ++ "()"
+    else name f ++ "(" ++ String.intercalate ",\\," (args.map math) ++ ")"
+  | .lit (.int n) => toString n
+  | .lit (.str s) => strLit s
+  | .var v => var v
+  | .min a b => "\\min(" ++ math a ++ ",\\," ++ math b ++ ")"
+
+/-- Whether a term is arithmetic in that reading, so that its reflexive claim reads as
+existence rather than as a relation holding. -/
+def arithmetic : Expr → Bool
+  | .app f _ => f == "Num" || f == "Var" || f == "Mul" || f == "Sum0-10"
+  | .lit _ => true
+  | _ => false
+
+/-- Math inside a comment, in text style so that a sum stays on the line. -/
+def inMath (s : String) : String := "$\\textstyle " ++ s ++ "$"
+
+/-- What a node proves. -/
+def proves (c : Claim) : String :=
+  let l := c.lhs.toExpr
+  if c.lhs == c.rhs then
+    "proves " ++ inMath (math l) ++ " " ++ (if arithmetic l then "exists" else "holds")
+  else "proves " ++ inMath (math l ++ " = " ++ math c.rhs.toExpr)
+
+/-- What a firing of rule `i` under `σ` matched: the instances of its query. -/
+def matched (P : Program) (i : Nat) (σ : Env) : Option String := do
+  let r ← P.rules[i]?
+  if r.query.isEmpty then none else
+  let parts ← r.query.mapM fun p => match p with
+    | .expr e => (e.eval σ).map fun t => math t.toExpr
+    | .eq a b => do some (math (← a.eval σ).toExpr ++ " = " ++ math (← b.eval σ).toExpr)
+    | .ne a b => do some (math (← a.eval σ).toExpr ++ " \\ne " ++ math (← b.eval σ).toExpr)
+  some ("matches " ++ inMath (String.intercalate " \\land " parts))
 
 /-- The variables of a query, left to right, each once. -/
 partial def queryVars (q : Query) : List Var :=
@@ -256,18 +304,18 @@ def subst (abbrevs : List Expr) (order : List Var) (σ : Env) : String :=
   else "[" ++ String.intercalate ",\\ " (σ.map fun b => var b.1 ++ "\\mapsto " ++ term abbrevs b.2)
     ++ "]"
 
-/-- Names for what recurs: terms (an abbreviation list), substitutions and rule nodes, the
-latter two by their rendered text. -/
+/-- Names for what recurs: terms (an abbreviation list), substitutions (with a rule and
+substitution that uses each) and rule nodes, the latter two keyed by their rendered text. -/
 structure Names where
   terms : List Expr
-  substs : List (String × Nat)
+  substs : List (String × Nat × Nat × Env)
   proofs : List (String × Nat × Proof)
 
 /-- A substitution, by its name when it has one. -/
 def substNamed (P : Program) (names : Names) (i : Nat) (σ : Env) : String :=
   let text := subst names.terms (ruleOrder P i) σ
   match names.substs.find? (·.1 == text) with
-  | some (_, k) => "\\sigma_{" ++ toString k ++ "}"
+  | some (_, k, _, _) => "\\sigma_{" ++ toString k ++ "}"
   | none => text
 
 /-- The nested applications of a term under the leaf shorthand, innermost first: an
@@ -325,52 +373,58 @@ def names (P : Program) (pf : Proof) : Names :=
     (positions.filter fun t =>
       t.subtermList.any fun s => same s.toExpr e).length ≥ 2
   let nodes := ruleNodes pf
-  let distinct := (recurring (nodes.map fun p => (inlineProof P terms p, p)) ++
-    nodes.map fun p => (inlineProof P terms p, p)).foldl
-      (fun acc kp => if acc.any (·.1 == kp.1) then acc else acc ++ [kp]) []
+  let distinct := (nodes.map fun p => (inlineProof P terms p, p)).foldl
+    (fun acc kp => if acc.any (·.1 == kp.1) then acc else acc ++ [kp]) []
   let substs := recurring (distinct.filterMap fun kp => match kp.2 with
-    | .rule _ i σ _ => if σ.isEmpty then none else some (subst terms (ruleOrder P i) σ, ())
+    | .rule _ i σ _ => if σ.isEmpty then none else some (subst terms (ruleOrder P i) σ, (i, σ))
     | _ => none)
   let proofs := recurring (nodes.filterMap fun p => match p with
     | .rule _ _ _ ps => if ps.isEmpty then none else some (inlineProof P terms p, p)
     | _ => none)
   { terms := terms
-    substs := substs.zipIdx.map fun (kp, k) => (kp.1, k + 1)
+    substs := substs.zipIdx.map fun (kp, k) => (kp.1, k + 1, kp.2.1, kp.2.2)
     proofs := proofs.zipIdx.map fun (kp, k) => (kp.1, k + 1, kp.2) }
 
 mutual
 
-/-- A proof at a depth, ending in `suffix`: one line if it fits, else spread over lines. -/
-partial def proofLines (P : Program) (names : Names) (depth : Nat) (suffix : String)
+/-- A proof at a depth, after `lead` and ending in `suffix`: one line if it fits, else
+spread over lines. The first line says what the node proves; a substitution on a line of
+its own says what the firing matched. -/
+partial def proofLines (P : Program) (names : Names) (depth : Nat) (lead suffix : String)
     (p : Proof) : String :=
+  let comment := proves p.claim
   match names.proofs.find? (·.1 == inlineProof P names.terms p) with
-  | some (_, k, _) => line depth ("\\pi_{" ++ toString k ++ "}" ++ suffix)
+  | some (_, k, _) => line depth (lead ++ "\\pi_{" ++ toString k ++ "}" ++ suffix) (some comment)
   | none =>
-    let budget := 74 - 4 * depth
-    let one := inlineNamed P names p ++ suffix
-    if visible one ≤ budget then line depth one else
+    let budget := 74 - 4 * depth - (visible comment + 4)
+    let one := lead ++ inlineNamed P names p ++ suffix
+    if visible one ≤ budget then line depth one (some comment) else
     match p with
     | .rule c i σ ps =>
-      let head := "\\kw{rule}_{" ++ toString (i + 1) ++ "}(" ++ claim names.terms c ++ ","
+      let head := lead ++ "\\kw{rule}_{" ++ toString (i + 1) ++ "}(" ++ claim names.terms c ++ ","
       let bindings := substNamed P names i σ ++ (if ps.isEmpty then ")" ++ suffix else ";")
       -- The claim and the substitution share a line when they fit.
       let opening :=
-        if visible (head ++ " " ++ bindings) ≤ budget then line depth (head ++ "\\ " ++ bindings)
-        else line depth head ++ line (depth + 1) bindings
+        if visible (head ++ " " ++ bindings) ≤ budget then
+          line depth (head ++ "\\ " ++ bindings) (some comment)
+        else line depth head (some comment) ++ line (depth + 1) bindings (matched P i σ)
       opening ++ argLines P names (depth + 1) (")" ++ suffix) ps
-    | .symm q => line depth "\\kw{sym}(" ++ proofLines P names (depth + 1) (")" ++ suffix) q
+    | .symm q =>
+      line depth (lead ++ "\\kw{sym}(") (some comment)
+        ++ proofLines P names (depth + 1) "" (")" ++ suffix) q
     | .trans q r =>
-      line depth "\\kw{trans}(" ++ argLines P names (depth + 1) (")" ++ suffix) [q, r]
+      line depth (lead ++ "\\kw{trans}(") (some comment)
+        ++ argLines P names (depth + 1) (")" ++ suffix) [q, r]
     | .congr q k r =>
-      line depth ("\\kw{cong}_{" ++ toString (k + 1) ++ "}(")
+      line depth (lead ++ "\\kw{cong}_{" ++ toString (k + 1) ++ "}(") (some comment)
         ++ argLines P names (depth + 1) (")" ++ suffix) [q, r]
 
 /-- Arguments on their own lines, comma-separated, the last closing with `close`. -/
 partial def argLines (P : Program) (names : Names) (depth : Nat) (close : String) :
     List Proof → String
   | [] => ""
-  | [p] => proofLines P names depth close p
-  | p :: ps => proofLines P names depth "," p ++ argLines P names depth close ps
+  | [p] => proofLines P names depth "" close p
+  | p :: ps => proofLines P names depth "" "," p ++ argLines P names depth close ps
 
 /-- A proof on one line, with the names in use. -/
 partial def inlineNamed (P : Program) (names : Names) (p : Proof) : String :=
@@ -392,26 +446,25 @@ partial def inlineNamed (P : Program) (names : Names) (p : Proof) : String :=
 
 end
 
-/-- A proof as an `eggprogram`: the proof, then the named terms, substitutions and shared
-subproofs. -/
+/-- A proof as an `eggprogram`: `let`s for the named terms, substitutions and shared
+subproofs, then the proof. -/
 def proof (P : Program) (pf : Proof) : String :=
   let ns := names P pf
-  let main := proofLines P ns 0 "" pf
-  let defs := ns.terms.zipIdx.map fun (e, k) =>
-    "t_{" ++ toString (k + 1) ++ "} = " ++ expr (ns.terms.take k) e
-  let lead (first : Bool) : String := if first then "\\text{where }" else "\\text{and }"
-  let terms := if defs.isEmpty then "" else pack 0 (lead true) ",\\ " defs none
-  let substs := String.join <| ns.substs.zipIdx.map fun ((text, k), j) =>
-    line 0 (lead (defs.isEmpty && j = 0) ++ "\\sigma_{" ++ toString k ++ "} = " ++ text)
-  let proofs := String.join <| ns.proofs.zipIdx.map fun ((_, k, p), j) =>
-    let earlier := { ns with proofs := ns.proofs.filter (·.2.1 < k) }
-    let head := lead (defs.isEmpty && ns.substs.isEmpty && j = 0)
-      ++ "\\pi_{" ++ toString k ++ "} = "
-    -- The body starts on the lead's line when it fits, else below it.
-    let one := inlineNamed P earlier p
-    if visible (head ++ one) ≤ 74 then line 0 (head ++ one)
-    else line 0 head ++ proofLines P earlier 1 "" p
-  "\\begingroup\\small\n\\begin{eggprogram}\n" ++ main ++ terms ++ substs ++ proofs
+  let letKw := "\\kw{let}\\ "
+  let terms := ns.terms.zipIdx.map fun (e, k) =>
+    line 0 (letKw ++ "t_{" ++ toString (k + 1) ++ "} = " ++ expr (ns.terms.take k) e)
+      (some (inMath (math e)))
+  let substs := ns.substs.map fun (text, k, i, σ) =>
+    line 0 (letKw ++ "\\sigma_{" ++ toString k ++ "} = " ++ text) (matched P i σ)
+  let proofs := ns.proofs.map fun (_, k, p) =>
+    proofLines P { ns with proofs := ns.proofs.filter (·.2.1 < k) } 0
+      (letKw ++ "\\pi_{" ++ toString k ++ "} = ") "" p
+  let breakable (l : String) : String := (l.dropRight "&&\\\\*\n".length) ++ "&&\\\\\n"
+  let lets := String.join ((terms ++ substs).map breakable ++ proofs)
+  -- A little room between the last `let` and the proof.
+  let lets := if lets.isEmpty then lets
+    else lets.dropRight "&&\\\\*\n".length ++ "&&\\\\[.3em]\n"
+  "\\begingroup\\small\n\\begin{eggprogram}\n" ++ lets ++ proofLines P ns 0 "" "" pf
     ++ "\\end{eggprogram}\n\\endgroup\n"
 
 end Egglog.PaperTex
