@@ -77,6 +77,14 @@ Saved inputs need only the release `egglog-experimental` executable. Optional
 Yosys/plugin arguments regenerate the native frontend input and independently
 check the mapped circuit against the original Verilog.
 
+The independent [Churchroad DSP evaluation](slotted/churchroad/EVALUATION.md)
+compares native, current named, typed named, and slotted mapping, then measures
+Lakeroad and solver-query time with explicit parity and RTL-validation results:
+
+```bash
+./churchroad-eval.py --output-dir /tmp/churchroad-eval --samples 3
+```
+
 The reusable Rust checker accepts `egraph-serialize` JSON from either engine,
 with optional annotations for slotted graphs:
 

@@ -11,6 +11,13 @@ This does not yet port Churchroad's e-graph-based module enumeration or its norm
 DSP mapping pipeline. Candidate parity with a native run and comparative runtime
 have not been established.
 
+The separate [DSP evaluation](EVALUATION.md), invoked through
+`./churchroad-eval.py`, now measures native DSP mapping against matched named and
+slotted adapters, compares complete mapped graphs, and continues through
+Lakeroad with solver profiling and RTL simulation. Its measurements and native
+validation blocker are documented separately; the claims above concern this
+bounded module-discovery prototype.
+
 Run from the repository root:
 
 ```sh
@@ -79,9 +86,10 @@ Python candidate enumeration/export, frontend import, and Yosys verification.
 Single-run observations of approximately 0.15 s (half-adder), 0.50 s (ripple-adder),
 and 0.15 s (wide multiply) are execution diagnostics, not a comparative benchmark.
 
-The next research step is to port the actual enumeration rules into the slotted
-e-graph, using the same input expressions and explicit search bounds as a native
-enumeration harness. Compare canonical module/application sets, including input
+For this module-discovery prototype, the next research step is to port the actual
+enumeration rules into the slotted e-graph, using the same input expressions and
+explicit search bounds as a native enumeration harness. Compare canonical
+module/application sets, including input
 aliasing, before timing repeated runs with matched build profiles and phase
 boundaries. Evaluate multi-output recognition separately as an extension. Only
 then integrate the resulting modules with DSP mapping and Lakeroad; a full driver
