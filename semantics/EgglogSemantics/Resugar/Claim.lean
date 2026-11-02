@@ -10,7 +10,7 @@ application the target matched, is its own reflexive claim. -/
 @[blueprint "def:lift-claim"
   (statement := /--
   \[
-  \lceil\mathtt{UF}(a,b)\rceil=(a=b)\qquad\lceil t\rceil=(t=t)\ \text{ otherwise}
+  \lceil\mathtt{UF}(a,b)\rceil\triangleq(a=b)\qquad\lceil t\rceil\triangleq(t=t)\ \text{ otherwise}
   \]
   -/)
   (latexEnv := "paperfragment")]
