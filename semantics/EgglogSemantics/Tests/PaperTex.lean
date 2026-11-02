@@ -272,6 +272,16 @@ def proves (c : Claim) : String :=
     "proves " ++ inMath (math l) ++ " " ++ (if arithmetic l then "exists" else "holds")
   else "proves " ++ inMath (math l ++ " = " ++ math c.rhs.toExpr)
 
+/-- What a node proves, and for a congruence, where: the argument it rewrites. -/
+def provesNode (p : Proof) : String :=
+  match p with
+  | .congr q k _ =>
+    match q.claim.rhs with
+    | .app f _ =>
+      proves p.claim ++ " by congruence in argument " ++ toString (k + 1) ++ " of $" ++ name f ++ "$"
+    | _ => proves p.claim
+  | _ => proves p.claim
+
 /-- What a firing of rule `i` under `σ` matched: the instances of its query. -/
 def matched (P : Program) (i : Nat) (σ : Env) : Option String := do
   let r ← P.rules[i]?
@@ -433,7 +443,7 @@ spread over lines. The first line says what the node proves; a substitution on a
 its own says what the firing matched. `top` is the root of a rendering, never elided. -/
 partial def proofLines (P : Program) (names : Names) (depth : Nat) (top : Bool)
     (lead suffix : String) (p : Proof) : String :=
-  let comment := proves p.claim
+  let comment := provesNode p
   let e := names.elision
   match names.proofs.find? (·.1 == inlineProof P p) with
   | some (_, k, _) => line depth (lead ++ "\\pi_{" ++ toString k ++ "}" ++ suffix) (some comment)
