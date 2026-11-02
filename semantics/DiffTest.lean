@@ -747,6 +747,23 @@ private def traceInstrumented (fuel : Nat) (p : Program) : IO Unit := do
         d := d'
   IO.println s!"  data rows {(Provenance.dataRows q d.terms).length}, firings {(Provenance.firings q d.terms).length}, check {Relational.holds d inst.check}"
 
+/-- `difftest paper-proof <file.egg> [--elide]`: the proof of the file's final check in the
+paper's notation, simplified for presentation and checked again, on stdout. -/
+private def paperProof (src : String) (e : PaperTex.Elision) : IO UInt32 := do
+    let text ← IO.FS.readFile src
+    match Program.ofEgg text with
+    | .error e => IO.eprintln s!"difftest: {src}: {e}"; return 1
+    | .ok p =>
+      let some pfs := Resugar.prove
+          (fun Q => relationalExecAt runFuel FDatabase.empty Q.schedule) p
+        | IO.eprintln "difftest: no proof of the check"; return 1
+      -- Simplified for presentation, and checked again.
+      for pf in pfs do
+        let simple := pf.simplify p
+        let shown := if SourceProof.check p simple == some pf.claim then simple else pf
+        IO.print (PaperTex.proof p shown e)
+      return 0
+
 /-- `difftest time <fuel> <case>`: time the stages of the congruence gate, and run the
 source schedule pass by pass under the general interpreter, reporting the state's size. -/
 private def timeCase (fuel : Nat) (p : Program) : IO Unit := do
@@ -1050,21 +1067,9 @@ def main (args : List String) : IO UInt32 := do
         IO.eprintln s!"difftest: {src} is outside the source fragment"
       IO.print (PaperTex.compiled p)
       return 0
-  | ["paper-proof", src] =>
-    -- The lifted proofs of the final check of a source `.egg` file, on stdout.
-    let text ← IO.FS.readFile src
-    match Program.ofEgg text with
-    | .error e => IO.eprintln s!"difftest: {src}: {e}"; return 1
-    | .ok p =>
-      let some pfs := Resugar.prove
-          (fun Q => relationalExecAt runFuel FDatabase.empty Q.schedule) p
-        | IO.eprintln "difftest: no proof of the check"; return 1
-      -- Simplified for presentation, and checked again.
-      for pf in pfs do
-        let simple := pf.simplify p
-        let shown := if SourceProof.check p simple == some pf.claim then simple else pf
-        IO.print (PaperTex.proof p shown)
-      return 0
+  | ["paper-proof", src] => paperProof src {}
+  | ["paper-proof", src, "--elide"] | ["paper-proof", "--elide", src] =>
+    paperProof src PaperTex.elideAll
   | ["time", fuel, name] =>
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1

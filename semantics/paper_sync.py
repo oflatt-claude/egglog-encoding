@@ -31,11 +31,12 @@ PACKAGES = ("mathpartir", "stmaryrd", "placeins")
 GENERATED_DIR = "generated"
 SECTION_FILE = "semantics.tex"
 # Programs rendered in the paper's notation by `difftest`: (generated file stem, source
-# program, difftest subcommand). `paper-tex` is the congruence pass over the program and
-# `paper-proof` the lifted proof of its final check.
+# program, difftest arguments). `paper-tex` is the congruence pass over the program and
+# `paper-proof` the lifted proof of its final check, in full or with `--elide`.
 EXAMPLES = (
-    ("congruence_example", ROOT / "paper" / "background.egg", "paper-tex"),
-    ("proof_example", ROOT / "paper" / "background.egg", "paper-proof"),
+    ("congruence_example", ROOT / "paper" / "background.egg", ["paper-tex"]),
+    ("proof_example", ROOT / "paper" / "background.egg", ["paper-proof"]),
+    ("proof_example_elided", ROOT / "paper" / "background.egg", ["paper-proof", "--elide"]),
 )
 LEAN_BIN = Path(os.environ.get("LEAN_BIN_DIR") or "~/.elan/bin").expanduser()
 SECTION_ANCHOR = "\\input{disequality}"
@@ -180,13 +181,13 @@ def section_skeleton(entries: list[tuple[str, bool, str]]) -> str:
     return "\n".join(parts)
 
 
-def compiled_example(program: Path, subcommand: str) -> str:
-    """`difftest <subcommand>` over `program`, in the paper's notation."""
+def compiled_example(program: Path, args: list[str]) -> str:
+    """`difftest <args>` over `program`, in the paper's notation."""
     semantics = ROOT / "semantics"
     env = dict(os.environ, PATH=f"{LEAN_BIN}{os.pathsep}{os.environ.get('PATH', '')}")
     subprocess.run(["lake", "build", "difftest"], cwd=semantics, env=env, check=True, capture_output=True)
     run = subprocess.run(
-        [str(semantics / ".lake" / "build" / "bin" / "difftest"), subcommand, str(program)],
+        [str(semantics / ".lake" / "build" / "bin" / "difftest"), *args, str(program)],
         cwd=semantics,
         env=env,
         check=True,
@@ -226,8 +227,8 @@ def main() -> int:
     entries = blocks(SOURCE.read_text(), node_paths())
     for name, _, text in entries:
         (generated / f"{name}.tex").write_text(GENERATED_HEADER + text)
-    for stem, program, subcommand in EXAMPLES:
-        (generated / f"{stem}.tex").write_text(GENERATED_HEADER + compiled_example(program, subcommand))
+    for stem, program, difftest_args in EXAMPLES:
+        (generated / f"{stem}.tex").write_text(GENERATED_HEADER + compiled_example(program, difftest_args))
     section = paper / SECTION_FILE
     if not section.exists():
         section.write_text(section_skeleton(entries))
