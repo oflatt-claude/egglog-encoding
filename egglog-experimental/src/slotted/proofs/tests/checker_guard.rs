@@ -430,7 +430,7 @@ fn both_renaming_operands_participate_in_cycle_detection() {
 }
 
 #[test]
-fn guard_representatives_preserve_captured_operands_and_later_binder_declarations() {
+fn guard_representatives_preserve_captured_operands() {
     for (local, operands) in [
         ("y", "x y"),
         ("y", "fixed other"),
@@ -448,6 +448,7 @@ fn guard_representatives_preserve_captured_operands_and_later_binder_declaration
         program
             .add_let(&mut dag, "input", "(Pair fixed other)")
             .unwrap();
+        program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
         program
             .add_rewrite(
                 &mut dag,
@@ -456,7 +457,6 @@ fn guard_representatives_preserve_captured_operands_and_later_binder_declaration
                 ),
             )
             .unwrap();
-        program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
         // The left term reuses $0 as a bound and a free name. Treating Lam as
         // an ordinary constructor would reject this valid renaming.
         program

@@ -249,6 +249,9 @@ supply the prefix visible at the query, with includes resolved from the working
 directory. Rewrites become typed rules with their root fact, original conditions,
 and union action; popped commands are removed. Nested terms and the distinction
 between local variables and global references are preserved.
+Guard primitives are registered with validators before rule resolution. Their
+binding scopes include every constructor visible at the query, including those
+declared after a rule. The ordinary checker uses the resolved calls' validators.
 
 The checker derives its axiom and global context from the resolved commands.
 The resolved program can be reused across proof stores; each store associates its

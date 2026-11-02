@@ -3,7 +3,7 @@
 use super::HashMap;
 use super::bindings::GlobalNames;
 use super::context::{ColumnKind, Constructor, ProofContext, SourceError, check_term_sort};
-use super::guards::{GUARDS, GuardSignature};
+use super::guards::{self, GUARDS, validator_name};
 use super::program::ResolvedSlottedProgram;
 use crate::slotted::frontend::{
     declarations, expand_includes, name_rewrite, source_constructor, source_rewrite,
@@ -20,6 +20,7 @@ use egglog::util::{FreshGen, INTERNAL_SYMBOL_PREFIX, IndexMap, SymbolGen};
 use egglog::{Context, EGraph, ResolvedCall, TermDag};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
+use std::sync::Arc;
 
 #[derive(Clone, Default)]
 struct Scope {
@@ -47,7 +48,13 @@ pub(super) fn resolve_rewrite(
             })
             .collect::<Result<_, SourceError>>()?,
     }
-    .resolve_rewrite(source)
+    .resolve_rewrite(
+        source,
+        &Arc::new(ProofContext {
+            constructors: context.constructors.clone(),
+            ..Default::default()
+        }),
+    )
 }
 
 impl Scope {
@@ -128,14 +135,11 @@ impl Scope {
     pub(super) fn resolve_rewrite(
         &self,
         source: &egglog::ast::Rewrite,
+        guards: &Arc<ProofContext>,
     ) -> Result<ResolvedRule, SourceError> {
         let err = |e: &dyn Display| SourceError(e.to_string());
         let mut graph = self.source_types(&source.span)?;
-        for name in GUARDS {
-            if name != "!=" {
-                graph.add_pure_primitive(GuardSignature(name), None);
-            }
-        }
+        guards::register(&mut graph, guards);
         let source_terms: Vec<_> = std::iter::once(&source.lhs)
             .chain(std::iter::once(&source.rhs))
             .chain(source.conditions.iter().flat_map(|fact| match fact {
@@ -263,6 +267,9 @@ impl Scope {
             .map(|(i, fact)| {
                 let Fact::Fact(expr) = fact else { return false };
                 let guard = i > 0 && matches!(expr, Expr::Call(_, head, _) if is_guard(head));
+                if guard && let Expr::Call(_, head, _) = expr {
+                    *head = validator_name(head).to_owned();
+                }
                 let name = symbols.fresh("source-fact");
                 let sort = if guard {
                     Some(UnitSort.to_arcsort())
@@ -301,7 +308,11 @@ impl Scope {
             if let ResolvedFact::Fact(ResolvedExpr::Call(_, ResolvedCall::Primitive(head), args)) =
                 fact
             {
-                let head = head.name();
+                let head = if head.name() == validator_name("!=") {
+                    "!="
+                } else {
+                    head.name()
+                };
                 if !is_guard(head) {
                     return Err(SourceError(format!("unsupported source guard {head}")));
                 }
@@ -335,6 +346,38 @@ fn is_guard(name: &str) -> bool {
     GUARDS.contains(&name)
 }
 
+// A rule's operands can contain any constructor visible at the proof query,
+// including ones declared after that rule or in a later active scope.
+fn guard_context(forms: &[(Form, Span)]) -> Result<ProofContext, SourceError> {
+    let mut sorts = Vec::new();
+    let mut constructors = Vec::new();
+    let mut scopes = Vec::new();
+    for (form, _) in forms {
+        match form.call().map_err(SourceError)? {
+            ("push", _) => scopes.push((sorts.len(), constructors.len())),
+            ("pop", _) => {
+                let (sorts_len, constructors_len) = scopes
+                    .pop()
+                    .ok_or_else(|| SourceError("pop without a corresponding push".into()))?;
+                sorts.truncate(sorts_len);
+                constructors.truncate(constructors_len);
+            }
+            _ => declarations(form, &mut sorts, &mut constructors).map_err(SourceError)?,
+        }
+    }
+    let mut program = ProofContext::default();
+    for form in constructors {
+        let op = source_constructor(
+            &form,
+            sorts.iter().map(String::as_str),
+            program.constructors.values(),
+        )
+        .map_err(SourceError)?;
+        program.constructors.insert(op.name.clone(), op);
+    }
+    Ok(program)
+}
+
 /// Resolve the original slotted source visible at a proof query.
 /// Rewrites become typed rules with their original conditions and nested terms.
 /// Includes resolve from the working directory; push/pop determines the visible scope.
@@ -348,6 +391,7 @@ pub fn resolve_program<'a>(
     let forms =
         expand_includes(forms, &mut BTreeSet::new()).map_err(|e| SourceError(e.to_string()))?;
     let mut reader = Reader {
+        guards: Arc::new(guard_context(&forms)?),
         scope: Scope::default(),
         resolved: ResolvedSlottedProgram::default(),
         rules: 0,
@@ -376,6 +420,7 @@ pub fn resolve_program<'a>(
 }
 
 struct Reader {
+    guards: Arc<ProofContext>,
     scope: Scope,
     resolved: ResolvedSlottedProgram,
     rules: usize,
@@ -492,7 +537,7 @@ impl Reader {
                     name_rewrite(&mut rule, self.rules, Some(&mut self.rule_names));
                     self.rules += 1;
                     ResolvedNCommand::NormRule {
-                        rule: self.scope.resolve_rewrite(&rule)?,
+                        rule: self.scope.resolve_rewrite(&rule, &self.guards)?,
                     }
                 }
                 (

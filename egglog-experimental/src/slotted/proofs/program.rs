@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 /// An original slotted program after type resolution and rewrite desugaring.
 /// Commands retain nested terms and original guards. Popped commands are absent.
+/// Guard primitives carry validators for the visible constructors' binding scopes.
 /// This program is independent of any proof's term arena and slot IDs.
 #[derive(Clone, Debug, Default)]
 pub struct ResolvedSlottedProgram {

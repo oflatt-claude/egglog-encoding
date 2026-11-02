@@ -4,12 +4,12 @@ use super::HashMap;
 use super::context::{ProofContext, SourceRule, pattern_term};
 use super::terms::{instantiate, slot_of};
 use crate::slotted::var_sort::VarSort;
-use egglog::ast::{Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact, Span};
+use egglog::ast::{Literal, ResolvedExpr, ResolvedFact, Span};
 use egglog::prelude::BaseSort;
 use egglog::sort::UnitSort;
 use egglog::util::{INTERNAL_SYMBOL_PREFIX, IndexMap, SymbolGen};
 use egglog::{
-    Context, EGraph, Primitive, PurePrim, PureState, ResolvedCall, TermDag, TermId, TypeInfo, Value,
+    EGraph, Primitive, PurePrim, PureState, ResolvedCall, TermDag, TermId, TypeInfo, Value,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ pub(super) const GUARDS: [&str; 6] = [
     "free-names-are",
 ];
 
-fn validator_name(name: &str) -> &str {
+pub(super) fn validator_name(name: &str) -> &str {
     match name {
         // The built-in != compares raw terms and cannot account for binders.
         "!=" => "slotted-proof-!=",
@@ -68,42 +68,17 @@ pub(super) fn proof_body(
     Ok((body, auxiliary))
 }
 
-pub(super) struct GuardValidators(TypeInfo);
-
-impl GuardValidators {
-    pub fn new(program: &ProofContext) -> Self {
-        // Only binding scopes are needed, including constructors declared after the rule.
-        let scopes = Arc::new(ProofContext {
-            constructors: program.constructors.clone(),
-            ..Default::default()
-        });
-        let mut graph = EGraph::default();
-        for name in GUARDS {
-            let internal = validator_name(name);
-            let scopes = scopes.clone();
-            graph.add_pure_primitive(
-                GuardSignature(internal),
-                Some(Arc::new(move |dag, args| {
-                    validate(&scopes, name, dag, args)?;
-                    Some(dag.lit(Literal::Unit))
-                })),
-            );
-        }
-        Self(std::mem::take(graph.type_info()))
-    }
-
-    pub fn resolve(&self, name: &str, args: &[ResolvedExpr]) -> Result<ResolvedCall, String> {
-        if !GUARDS.contains(&name) {
-            return Err(format!("unsupported source guard {name}"));
-        }
-        let internal = validator_name(name);
-        let types: Vec<_> = args
-            .iter()
-            .map(|arg| arg.output_type().clone())
-            .chain(std::iter::once(UnitSort.to_arcsort()))
-            .collect();
-        ResolvedCall::from_resolution(internal, &types, &self.0, Context::Pure, &egglog::span!())
-            .map_err(|error| error.to_string())
+/// Register source guards with validators for the constructors visible at the query.
+pub(super) fn register(graph: &mut EGraph, program: &Arc<ProofContext>) {
+    for name in GUARDS {
+        let program = program.clone();
+        graph.add_pure_primitive(
+            GuardSignature(validator_name(name)),
+            Some(Arc::new(move |dag, args| {
+                validate(&program, name, dag, args)?;
+                Some(dag.lit(Literal::Unit))
+            })),
+        );
     }
 }
 
@@ -132,7 +107,7 @@ fn validate(program: &ProofContext, name: &str, dag: &mut TermDag, args: &[TermI
 }
 
 #[derive(Clone)]
-pub(super) struct GuardSignature(pub &'static str);
+struct GuardSignature(&'static str);
 
 impl Primitive for GuardSignature {
     fn name(&self) -> &str {
@@ -189,3 +164,7 @@ impl egglog::constraint::TypeConstraint for GuardTypeConstraint {
         constraints
     }
 }
+
+#[cfg(test)]
+#[path = "tests/guards.rs"]
+mod tests;

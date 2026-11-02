@@ -2,7 +2,7 @@
 
 use super::context::{ProofContext, SourceFact, check_term_sort, pattern_term};
 use super::format::{Claim, ClaimKind, RulePremise, RuleProof, SlottedProof, SlottedProofStore};
-use super::guards::{GuardValidators, proof_body};
+use super::guards::proof_body;
 use super::program::ResolvedSlottedProgram;
 use super::terms::{Renaming, all_slots, rename, slot_of, slot_term, term_renaming};
 use super::{HashMap, HashSet};
@@ -139,19 +139,10 @@ pub(super) fn check_proof_in_program(
     );
     let context = ProofCheckContext::new(&[], ordinary.term_dag_mut())
         .expect("an empty program has no invalid axioms");
-    let validators = GuardValidators::new(program);
     let result = (|| {
         let mut checked = HashMap::default();
         for id in store.dependencies(root) {
-            let result = check_one(
-                store,
-                &mut ordinary,
-                &context,
-                &validators,
-                program,
-                id,
-                &checked,
-            )?;
+            let result = check_one(store, &mut ordinary, &context, program, id, &checked)?;
             checked.insert(id, result);
         }
         Ok(checked.remove(&root).expect("root was checked"))
@@ -200,12 +191,10 @@ fn proposition_string(dag: &TermDag, p: &Proposition) -> String {
     format!("{} = {}", dag.to_string(p.lhs), dag.to_string(p.rhs))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn check_one(
     store: &SlottedProofStore,
     ordinary: &mut ProofStore,
     context: &ProofCheckContext,
-    validators: &GuardValidators,
     program: &ProofContext,
     id: ProofId,
     checked: &CheckedProofs,
@@ -267,7 +256,7 @@ fn check_one(
     let dag = ordinary.term_dag_mut();
     let derived = match proof {
         SlottedProof::Rule(proof) => {
-            return check_rule(ordinary, validators, program, id, proof, checked);
+            return check_rule(ordinary, context, program, id, proof, checked);
         }
         SlottedProof::Alpha { proof, .. } => {
             let p = premise(proof);
@@ -333,7 +322,7 @@ fn check_one(
 
 fn check_rule(
     ordinary: &mut ProofStore,
-    validators: &GuardValidators,
+    context: &ProofCheckContext,
     program: &ProofContext,
     id: ProofId,
     proof: &RuleProof,
@@ -511,10 +500,9 @@ fn check_rule(
             } else {
                 (args.clone(), equality(premise)?.clone())
             };
-            let head = validators.resolve(head.name(), args).map_err(&fail)?;
             body.push(ResolvedFact::Fact(ResolvedExpr::Call(
                 span.clone(),
-                head,
+                egglog::ResolvedCall::Primitive(head.clone()),
                 arguments,
             )));
             premises.push(result);
@@ -534,7 +522,6 @@ fn check_rule(
         ..rule.rule.clone()
     };
     let commands = [ResolvedNCommand::NormRule { rule: native_rule }];
-    let context = ProofCheckContext::new(&commands, dag).map_err(|e| fail(e.to_string()))?;
     let native_proof = Proof::new(
         claimed.clone(),
         Justification::Rule {
@@ -544,7 +531,7 @@ fn check_rule(
         },
     );
     let proven = ordinary
-        .check_step(id, &native_proof, &commands, &context, |_, p| {
+        .check_step(id, &native_proof, &commands, context, |_, p| {
             Ok(premises[p.index()].clone())
         })
         .map_err(|e| fail(e.to_string()))?;
