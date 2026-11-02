@@ -21,6 +21,12 @@ pub struct ResolvedSlottedProgram {
 }
 
 impl ResolvedSlottedProgram {
+    /// Build the checking context for this source program in `store`'s term arena.
+    /// Source terms are added to the arena, preserving the slot identities named
+    /// by `store`; other source names are assigned IDs as needed.
+    ///
+    /// Errors if slot names are invalid or ambiguous, globals cannot be resolved,
+    /// rule names are duplicated, or a resolved command is unsupported.
     pub(super) fn for_proof(
         &self,
         store: &mut SlottedProofStore,
