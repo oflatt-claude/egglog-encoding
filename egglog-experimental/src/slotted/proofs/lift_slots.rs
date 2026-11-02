@@ -4038,5 +4038,5 @@ fn renamings_of(dag: &TermDag, t: TermId) -> Option<Vec<SlotMap>> {
 }
 
 #[cfg(test)]
-#[path = "lift_slots_tests.rs"]
+#[path = "tests/lift_slots.rs"]
 pub(super) mod tests;

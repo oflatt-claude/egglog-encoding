@@ -1,4 +1,6 @@
-use super::{SlottedCheckError, check_claim, check_proof};
+use super::{
+    SlottedCheckError, check_claim_in_program as check_claim, check_proof_in_program as check_proof,
+};
 use crate::slotted::proofs::format::{
     Claim, ClaimKind, ProofId, SlottedConclusion, SlottedProof, SlottedProofStore,
 };

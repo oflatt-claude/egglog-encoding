@@ -237,12 +237,14 @@ a rewrite's captured globals. Rewrites retain nested expressions and the
 original `:when` order. Unnamed rewrites receive names unique across scopes and
 successive inputs.
 
-The checker uses native egglog rules, with a rewrite desugared to its root fact,
-original conditions, and union action. Constructor and binder information comes
-from the source declarations. The resolver registers `Var` as a base sort and
-uses ordinary egglog type inference for rule variables. Each claim retains its
-source expressions and the mapping from source slot names to encoded IDs; the
-checker does not read encoded tables.
+The public `check_proof` and `check_claim` functions take the original source
+parsed with `egglog::ast::parse_sexps`, together with the proof store and root or
+claim. Supply the program prefix visible at the query; includes resolve from the
+working directory. The checker resolves declarations, scopes, globals, and
+axioms itself. Rewrites become native egglog rules with their root fact, original
+conditions, and union action. Rule variables use ordinary egglog type inference,
+with `Var` registered as a base sort. The proof store associates slot IDs with
+source spellings; checking requires no encoded tables or lowering metadata.
 
 # Proof lifting
 

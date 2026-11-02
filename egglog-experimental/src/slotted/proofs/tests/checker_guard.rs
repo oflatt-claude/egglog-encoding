@@ -1,4 +1,4 @@
-use super::check_proof;
+use super::check_proof_in_program as check_proof;
 use crate::slotted::proofs::format::{RulePremise, SlottedProofStore};
 use crate::slotted::proofs::source::{ColumnKind, SlottedProgram};
 use crate::slotted::proofs::terms::slot_term;
@@ -111,7 +111,7 @@ fn guard_captures_are_independent_of_a_constructor_with_the_same_name() {
             error.contains(if override_global {
                 "overrides captured global"
             } else {
-                "Primitive 'slotted-proof-free' validation failed"
+                "Primitive 'free' validation failed"
             }),
             "{error}"
         );

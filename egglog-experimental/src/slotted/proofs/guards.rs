@@ -14,14 +14,22 @@ use egglog::{
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-pub(super) const GUARDS: [(&str, &str); 6] = [
-    ("renaming-=", "slotted-proof-renaming-="),
-    ("!=", "slotted-proof-!="),
-    ("renaming-!=", "slotted-proof-renaming-!="),
-    ("free", "slotted-proof-free"),
-    ("not-free", "slotted-proof-not-free"),
-    ("free-names-are", "slotted-proof-free-names-are"),
+pub(super) const GUARDS: [&str; 6] = [
+    "renaming-=",
+    "!=",
+    "renaming-!=",
+    "free",
+    "not-free",
+    "free-names-are",
 ];
+
+fn validator_name(name: &str) -> &str {
+    match name {
+        // The built-in != compares raw terms and cannot account for binders.
+        "!=" => "slotted-proof-!=",
+        other => other,
+    }
+}
 
 /// Normalize ordinary guard operands and bind the lifted terms at their source spelling.
 /// `renaming-=` retains one fact, with its representatives supplied by `RenamingEq`.
@@ -70,7 +78,8 @@ impl GuardValidators {
             ..Default::default()
         });
         let mut graph = EGraph::default();
-        for (name, internal) in GUARDS {
+        for name in GUARDS {
+            let internal = validator_name(name);
             let scopes = scopes.clone();
             graph.add_pure_primitive(
                 GuardSignature(internal),
@@ -84,10 +93,10 @@ impl GuardValidators {
     }
 
     pub fn resolve(&self, name: &str, args: &[ResolvedExpr]) -> Result<ResolvedCall, String> {
-        let (_, internal) = GUARDS
-            .iter()
-            .find(|(guard, _)| *guard == name)
-            .ok_or_else(|| format!("unsupported source guard {name}"))?;
+        if !GUARDS.contains(&name) {
+            return Err(format!("unsupported source guard {name}"));
+        }
+        let internal = validator_name(name);
         let types: Vec<_> = args
             .iter()
             .map(|arg| arg.output_type().clone())
@@ -162,10 +171,7 @@ impl egglog::constraint::TypeConstraint for GuardTypeConstraint {
         typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn egglog::constraint::Constraint<egglog::AtomTerm, egglog::ArcSort>>> {
         use egglog::constraint::{AllEqualTypeConstraint, assign};
-        let name = self
-            .name
-            .strip_prefix("slotted-proof-")
-            .unwrap_or(self.name);
+        let name = self.name;
         if !matches!(name, "free" | "not-free" | "free-names-are") {
             return AllEqualTypeConstraint::new(self.name, self.span.clone())
                 .with_output_sort(UnitSort.to_arcsort())

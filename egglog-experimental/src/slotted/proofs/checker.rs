@@ -8,7 +8,7 @@ use super::source::{SlottedProgram, SourceFact, pattern_term};
 use super::terms::{all_slots, rename, slot_of};
 use super::{HashMap, HashSet};
 use egglog::ast::{
-    Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact, ResolvedNCommand, ResolvedVar,
+    Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact, ResolvedNCommand, ResolvedVar, Sexp,
 };
 use egglog::proof::{Justification, Proof, ProofCheckContext, ProofId, ProofStore, Proposition};
 use egglog::util::{FreshGen, INTERNAL_SYMBOL_PREFIX, SymbolGen};
@@ -20,6 +20,9 @@ use thiserror::Error;
 #[derive(Debug, Clone, Error)]
 /// A proof step or final claim that the source program does not justify.
 pub enum SlottedCheckError {
+    /// The original program cannot be resolved for proof checking.
+    #[error("invalid slotted source program: {0}")]
+    Source(#[from] super::source::SourceError),
     /// A fiat step is absent from the source program.
     #[error(
         "proof #{proof}: fiat {claim} is neither a built term's reflexivity nor a source union"
@@ -96,10 +99,35 @@ pub enum SlottedCheckError {
     },
 }
 
+/// Check a proof against the original slotted program, parsed with
+/// [`egglog::ast::parse_sexps`]. The program is the prefix visible at the proof's
+/// query; includes resolve from the process working directory.
+/// Declarations, scoped globals, source axioms, and rewrite rules are resolved here.
+pub fn check_proof<'a>(
+    store: &mut SlottedProofStore,
+    source: impl IntoIterator<Item = &'a Sexp>,
+    root: ProofId,
+) -> Result<Proposition, SlottedCheckError> {
+    let program = super::program::for_proof(source, store)?;
+    check_proof_in_program(store, &program, root)
+}
+
+/// Check a claim and its proof against the original slotted program.
+/// Terms in `claim` and `conclusion` belong to `store`.
+pub fn check_claim<'a>(
+    store: &mut SlottedProofStore,
+    source: impl IntoIterator<Item = &'a Sexp>,
+    claim: &Claim,
+    conclusion: &SlottedConclusion,
+) -> Result<(), SlottedCheckError> {
+    let program = super::program::for_proof(source, store)?;
+    check_claim_in_program(store, &program, claim, conclusion)
+}
+
 type CheckedProofs = HashMap<ProofId, Proposition>;
 
 /// Check an equality proof and every proof it depends on, returning what it proves.
-pub fn check_proof(
+pub(super) fn check_proof_in_program(
     store: &mut SlottedProofStore,
     program: &SlottedProgram,
     root: ProofId,
@@ -133,13 +161,13 @@ pub fn check_proof(
 }
 
 /// Check that a proof establishes a claim.
-pub fn check_claim(
+pub(super) fn check_claim_in_program(
     store: &mut SlottedProofStore,
     program: &SlottedProgram,
     claim: &Claim,
     conclusion: &SlottedConclusion,
 ) -> Result<(), SlottedCheckError> {
-    let proven = check_proof(store, program, conclusion.proof)?;
+    let proven = check_proof_in_program(store, program, conclusion.proof)?;
     let lhs = program.refresh_binders(&mut store.term_dag, claim.lhs);
     let rhs = program.refresh_binders(&mut store.term_dag, claim.rhs);
     let holds = proven.lhs == lhs
@@ -303,7 +331,7 @@ fn check_one(
 }
 
 /// Check a ground term against source constructor signatures and return its sort.
-fn check_term_sort(
+pub(super) fn check_term_sort(
     program: &SlottedProgram,
     dag: &TermDag,
     term: TermId,
@@ -561,9 +589,9 @@ fn check_rule(
 }
 
 #[cfg(test)]
-#[path = "checker_tests.rs"]
+#[path = "tests/checker.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "checker_guard_tests.rs"]
+#[path = "tests/checker_guard.rs"]
 mod guard_tests;

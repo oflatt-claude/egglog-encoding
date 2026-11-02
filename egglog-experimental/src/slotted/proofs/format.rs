@@ -149,7 +149,7 @@ impl SlottedProof {
 pub struct SlottedProofStore {
     /// Shared storage for source terms and instantiated terms.
     pub term_dag: TermDag,
-    slot_names: BTreeMap<i64, String>,
+    pub(super) slot_names: BTreeMap<i64, String>,
     proofs: Vec<SlottedProof>,
     index: HashMap<SlottedProof, ProofId>,
 }
@@ -202,7 +202,8 @@ impl SlottedProofStore {
         }
     }
 
-    /// Use the compiler's source spellings when displaying encoded slot IDs.
+    /// Associate numeric slot IDs with source spellings for checking and display.
+    /// The checker rejects ambiguous spellings; omitted source names stay distinct.
     pub fn with_slot_names(mut self, names: &BTreeMap<String, i64>) -> Self {
         self.slot_names = names.iter().map(|(name, &id)| (id, name.clone())).collect();
         self
@@ -650,5 +651,5 @@ impl SlottedProofStore {
 }
 
 #[cfg(test)]
-#[path = "format_tests.rs"]
+#[path = "tests/format.rs"]
 mod tests;

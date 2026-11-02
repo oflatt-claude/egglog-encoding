@@ -10,9 +10,7 @@ use crate::slotted::Compiler;
 use crate::slotted::flatten::Rewrite as FlatRewrite;
 use crate::slotted::query::ProofNames;
 use egglog::TermDag;
-use egglog::ast::{
-    Command, Expr, Fact, GenericAction, Literal, Macro, ParseError, Parser, Sexp, Span,
-};
+use egglog::ast::{Command, Expr, Fact, Literal, Macro, ParseError, Parser, Sexp, Span};
 use egglog::proof::{ProofId, ProofStore};
 use egglog::{CommandOutput, EGraph, Error, UserDefinedCommand};
 use std::collections::BTreeMap;
@@ -125,14 +123,15 @@ impl UserDefinedCommand for RecordSource {
             return Err(error("invalid source record"));
         };
         let state = graph.extension_state_or_default::<SlottedProofState>();
-        let (command, flat) = state
+        let source = Arc::new(source_datum(source)?);
+        let flat = state
             .compiler
-            .retain_source(source_datum(source)?, *nested)
+            .retain_source(&source, *nested)
             .map_err(error)?;
         if let Some(flat) = flat {
             state.names.rules.insert(flat.rule.name.clone(), flat);
         }
-        state.sources.push(command);
+        state.sources.push(source);
         Ok(vec![])
     }
 }
@@ -274,7 +273,7 @@ pub(super) struct EncodingNames {
 struct SlottedProofState {
     compiler: Compiler,
     names: EncodingNames,
-    sources: Vec<Command>,
+    sources: Vec<Arc<Sexp>>,
 }
 
 impl SlottedProofState {
@@ -283,32 +282,32 @@ impl SlottedProofState {
         slot_names: &BTreeMap<String, i64>,
     ) -> Result<(SlottedProgram, SlottedProgram, TermDag), SourceError> {
         let mut dag = TermDag::default();
-        let mut program = SlottedProgram {
-            slot_names: slot_names.clone(),
+        let program = super::program::resolve(
+            self.sources.iter().map(AsRef::as_ref),
+            &mut dag,
+            slot_names.clone(),
+        )?;
+        let mut flattened = SlottedProgram {
+            slot_names: program.slot_names.clone(),
+            sorts: program.sorts.clone(),
+            constructors: program.constructors.clone(),
             ..Default::default()
         };
-        let language = self.compiler.language();
-        let mut flattened = program.clone();
         for source in &self.sources {
-            match source {
-                Command::Sort { name, .. } => {
-                    program.sorts.insert(name.clone());
-                    flattened.sorts.insert(name.clone());
-                }
-                Command::Constructor { name, .. } => {
-                    let op = &language.constructors[name];
-                    program.constructors.insert(name.clone(), op.clone());
-                    flattened.constructors.insert(name.clone(), op.clone());
-                }
-                Command::Action(GenericAction::Let(_, name, value)) => {
-                    program.add_let_expr(&mut dag, name, value)?;
-                    flattened.add_let_expr(&mut dag, name, value)?;
+            let form = crate::slotted::syntax::convert(source);
+            match form.call().map_err(SourceError)? {
+                ("let", [name, value]) => {
+                    let name = name.symbol().map_err(SourceError)?;
+                    flattened.add_let_expr(&mut dag, name, &value.expr().map_err(SourceError)?)?;
                     let term = flattened.refresh_binders(&mut dag, flattened.lets[name]);
-                    flattened.lets.insert(name.clone(), term);
+                    flattened.lets.insert(name.into(), term);
                 }
-                Command::Action(GenericAction::Union(_, a, b)) => {
-                    program.add_union_expr(&mut dag, a, b)?;
-                    flattened.add_union_expr(&mut dag, a, b)?;
+                ("union", [a, b]) => {
+                    flattened.add_union_expr(
+                        &mut dag,
+                        &a.expr().map_err(SourceError)?,
+                        &b.expr().map_err(SourceError)?,
+                    )?;
                     let union = flattened.unions.last().unwrap().clone();
                     let lhs = flattened.refresh_binders(&mut dag, union.lhs);
                     let rhs = flattened.refresh_binders(&mut dag, union.rhs);
@@ -316,10 +315,12 @@ impl SlottedProofState {
                     union.lhs = lhs;
                     union.rhs = rhs;
                 }
-                Command::Rewrite(_, rule, false) => {
-                    program.add_rewrite_ast(&mut dag, rule)?;
+                ("rewrite", args) => {
+                    let rule =
+                        crate::slotted::frontend::source_rewrite(args).map_err(SourceError)?;
                     flattened.add_rewrite_ast(&mut dag, &self.names.rules[&rule.name].rule)?;
                 }
+                ("sort" | "constructor", _) => {}
                 _ => return Err(SourceError("unsupported retained source command".into())),
             }
         }
@@ -384,7 +385,13 @@ impl SlottedProofState {
         )
         .map_err(|e| format!("claim {claim}: {e}"))?;
         let (mut store, proof) = super::unflatten::lift(store, &program, proof)?;
-        check_claim(&mut store, &program, &source, &proof).map_err(|e| {
+        check_claim(
+            &mut store,
+            self.sources.iter().map(AsRef::as_ref),
+            &source,
+            &proof,
+        )
+        .map_err(|e| {
             format!(
                 "the translated proof does not check: {e}\n{}",
                 store.conclusion_to_string(&proof)
@@ -394,12 +401,17 @@ impl SlottedProofState {
             proof: store.simplify(proof.proof),
             ..proof
         };
-        check_claim(&mut store, &program, &source, &proof)
-            .map_err(|e| format!("the normalized proof does not check: {e}"))?;
+        check_claim(
+            &mut store,
+            self.sources.iter().map(AsRef::as_ref),
+            &source,
+            &proof,
+        )
+        .map_err(|e| format!("the normalized proof does not check: {e}"))?;
         Ok(store.conclusion_to_string(&proof))
     }
 }
 
 #[cfg(test)]
-#[path = "pipeline_tests.rs"]
+#[path = "tests/pipeline.rs"]
 mod tests;

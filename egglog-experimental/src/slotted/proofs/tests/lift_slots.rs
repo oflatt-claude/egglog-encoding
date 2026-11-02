@@ -57,7 +57,7 @@ pub(in crate::slotted::proofs) fn check_restricted_symmetries(
                 Some(&slots),
             )?;
             let proof = tr.out.proof(symmetry);
-            crate::slotted::proofs::checker::check_proof(&mut tr.out, program, proof)
+            crate::slotted::proofs::checker::check_proof_in_program(&mut tr.out, program, proof)
                 .map_err(|e| e.to_string())?;
             checked += 1;
         }
@@ -67,7 +67,7 @@ pub(in crate::slotted::proofs) fn check_restricted_symmetries(
             }
             let symmetry = tr.symmetry(class, &g, restored)?;
             let proof = tr.out.proof(symmetry);
-            crate::slotted::proofs::checker::check_proof(&mut tr.out, program, proof)
+            crate::slotted::proofs::checker::check_proof_in_program(&mut tr.out, program, proof)
                 .map_err(|e| e.to_string())?;
         }
     }

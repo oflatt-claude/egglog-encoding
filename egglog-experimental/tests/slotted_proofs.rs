@@ -522,7 +522,7 @@ fn original_guards_are_checked_independently_of_flattening() {
     assert!(
         error
             .to_string()
-            .contains("Primitive 'slotted-proof-not-free' validation failed"),
+            .contains("Primitive 'not-free' validation failed"),
         "{error}"
     );
 }

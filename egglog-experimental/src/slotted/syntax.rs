@@ -107,12 +107,12 @@ pub(super) fn source_expr(source: &Sexp<'_>) -> Result<Expr, ParseError> {
     }
 }
 
-pub(super) fn convert(s: Sexp<'_>) -> Form {
+pub(super) fn convert(s: &Sexp<'_>) -> Form {
     match s {
-        Sexp::Atom(a, _) => Form::Atom(a.into_owned()),
-        Sexp::Literal(egglog::ast::Literal::String(s), _) => Form::Atom(quote(&s)),
+        Sexp::Atom(a, _) => Form::Atom(a.to_string()),
+        Sexp::Literal(egglog::ast::Literal::String(s), _) => Form::Atom(quote(s)),
         Sexp::Literal(l, _) => Form::Atom(l.to_string()),
-        Sexp::List(xs, _) => Form::List(xs.into_iter().map(convert).collect()),
+        Sexp::List(xs, _) => Form::List(xs.iter().map(convert).collect()),
     }
 }
 
@@ -124,7 +124,7 @@ pub(super) fn parse(
         .into_iter()
         .map(|s| {
             let span = s.span();
-            (convert(s), span)
+            (convert(&s), span)
         })
         .collect())
 }

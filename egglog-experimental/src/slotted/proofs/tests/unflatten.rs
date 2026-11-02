@@ -1,6 +1,6 @@
 use super::super::source::ColumnKind;
 use super::*;
-use crate::slotted::proofs::check_proof;
+use crate::slotted::proofs::checker::check_proof_in_program as check_proof;
 use egglog::TermDag;
 
 #[test]

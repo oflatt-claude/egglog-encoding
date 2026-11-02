@@ -587,5 +587,5 @@ impl<'a> Witnesses<'a> {
 }
 
 #[cfg(test)]
-#[path = "unflatten_tests.rs"]
+#[path = "tests/unflatten.rs"]
 mod tests;

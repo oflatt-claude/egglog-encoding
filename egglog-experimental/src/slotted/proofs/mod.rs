@@ -9,7 +9,8 @@ mod guards;
 mod lift_slots;
 mod normalize;
 pub(crate) mod pipeline;
-pub mod source;
+mod program;
+mod source;
 pub mod terms;
 mod unflatten;
 
@@ -18,7 +19,7 @@ pub use format::{
     Claim, ClaimKind, ProofId, RulePremise, RuleProof, SlottedConclusion, SlottedProof,
     SlottedProofStore,
 };
-pub use source::{Constructor, SlottedProgram, SourceRule, Union};
+pub use source::SourceError;
 pub use terms::Renaming;
 
 use rustc_hash::FxHasher;

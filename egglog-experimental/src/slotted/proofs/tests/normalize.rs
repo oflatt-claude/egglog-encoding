@@ -1,5 +1,5 @@
 use super::*;
-use crate::slotted::proofs::checker::check_proof;
+use crate::slotted::proofs::checker::check_proof_in_program as check_proof;
 use crate::slotted::proofs::source::{ColumnKind, SlottedProgram};
 use egglog::TermDag;
 use egglog::proof::Proposition;

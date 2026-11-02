@@ -10,7 +10,7 @@ fn restricted_group_elements_lift_to_checked_source_equalities() {
     let encoded = compiler
         .compile(
             None,
-            include_str!("../../../tests/slotted/proof-group-restriction.egg"),
+            include_str!("../../../../tests/slotted/proof-group-restriction.egg"),
         )
         .unwrap();
     let mut graph = new_egraph_with_proofs();

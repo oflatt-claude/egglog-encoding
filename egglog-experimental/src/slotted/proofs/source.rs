@@ -96,6 +96,7 @@ impl Error for SourceError {}
 
 /// The carrier sort of a program that has only one, as the convenience
 /// constructors below assume.
+#[cfg(test)]
 pub const SINGLE_SORT: &str = "U";
 
 impl SourceRule {
@@ -144,11 +145,13 @@ impl SourceRule {
 
 impl SlottedProgram {
     /// Declare a constructor in the single-sort convenience program.
+    #[cfg(test)]
     pub fn add_constructor(&mut self, name: &str, columns: Vec<ColumnKind>) {
         self.add_sorted_constructor(name, SINGLE_SORT, columns);
     }
 
     /// A source constructor's column roles and carrier sort.
+    #[cfg(test)]
     pub fn add_sorted_constructor(&mut self, name: &str, sort: &str, columns: Vec<ColumnKind>) {
         self.sorts.insert(sort.to_owned());
         self.constructors.insert(
@@ -173,6 +176,7 @@ impl SlottedProgram {
     }
 
     /// Parse a global's term and resolve earlier globals.
+    #[cfg(test)]
     pub fn add_let(
         &mut self,
         dag: &mut TermDag,
@@ -194,6 +198,7 @@ impl SlottedProgram {
     }
 
     /// Record a source union after resolving globals.
+    #[cfg(test)]
     pub fn add_union(
         &mut self,
         dag: &mut TermDag,
@@ -216,6 +221,7 @@ impl SlottedProgram {
     }
 
     /// A claim's two terms, read against the program's globals.
+    #[cfg(test)]
     pub fn claim(
         &self,
         dag: &mut TermDag,
@@ -244,12 +250,14 @@ impl SlottedProgram {
     }
 
     /// Parse and record a rewrite under the `:name` in its source text.
+    #[cfg(test)]
     pub fn add_rewrite(&mut self, dag: &mut TermDag, text: &str) -> Result<String, SourceError> {
         self.add_named_rewrite(dag, None, text)
     }
 
     /// Record a rewrite under `name` when supplied, requiring any source `:name`
     /// to agree; otherwise require a name in the source text.
+    #[cfg(test)]
     pub fn add_named_rewrite(
         &mut self,
         dag: &mut TermDag,
@@ -344,7 +352,7 @@ impl SlottedProgram {
                 .typecheck_function(&mut symbols, &decl)
                 .map_err(|e| err(&e))?;
         }
-        for (name, _) in GUARDS {
+        for name in GUARDS {
             if name != "!=" {
                 graph.add_pure_primitive(GuardSignature(name), None);
             }
@@ -787,9 +795,10 @@ impl SlottedProgram {
 }
 
 fn is_guard(name: &str) -> bool {
-    GUARDS.iter().any(|(guard, _)| *guard == name)
+    GUARDS.contains(&name)
 }
 
+#[cfg(test)]
 fn parse_expr(text: &str) -> Result<Expr, SourceError> {
     let forms =
         crate::slotted::syntax::parse(None, text).map_err(|e| SourceError(e.to_string()))?;
@@ -800,5 +809,5 @@ fn parse_expr(text: &str) -> Result<Expr, SourceError> {
 }
 
 #[cfg(test)]
-#[path = "source_tests.rs"]
+#[path = "tests/source.rs"]
 mod tests;

@@ -341,5 +341,5 @@ pub(super) fn term_renaming(dag: &TermDag, pairs: &[(TermId, TermId)]) -> Option
 }
 
 #[cfg(test)]
-#[path = "terms_tests.rs"]
+#[path = "tests/terms.rs"]
 mod tests;

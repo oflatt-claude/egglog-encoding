@@ -144,5 +144,5 @@ impl SlottedProofStore {
 }
 
 #[cfg(test)]
-#[path = "normalize_tests.rs"]
+#[path = "tests/normalize.rs"]
 mod tests;
