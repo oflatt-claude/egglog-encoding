@@ -202,6 +202,15 @@ partial def schedule (P : Program) (origins : List RuleOrigin) (depth : Nat) :
     let (b, rest') := schedule P rest depth S₂
     (a ++ b, rest')
 
+/-- Lines as an `eggprogram`, in `\small`. The last line loses its line break: a trailing
+`\\` would end the alignment with an empty row and leave a gap below it. -/
+def eggprogram (body : String) : String :=
+  let body := if body.endsWith "&&\\\\*\n" then body.dropRight 4 ++ "\n"
+    else if body.endsWith "&&\\\\[.3em]\n" then body.dropRight 9 ++ "\n"
+    else if body.endsWith "&&\\\\\n" then body.dropRight 3 ++ "\n"
+    else body
+  "\\begingroup\\small\n\\begin{eggprogram}\n" ++ body ++ "\\end{eggprogram}\n\\endgroup\n"
+
 /-- The compiled program as an `eggprogram`: `M`, the schedule, the check. -/
 def compiled (source : Program) : String :=
   let c := compile source
@@ -211,8 +220,7 @@ def compiled (source : Program) : String :=
   let (sched, _) := schedule source c.origins 0 c.program.schedule
   let check := pack 0 "\\kw{check}\\ " "\\land " (c.program.check.map (pattern [])) none
     (sepAtEnd := false)
-  "\\begingroup\\small\n\\begin{eggprogram}\n" ++ mBlock ++ sched ++ check
-    ++ "\\end{eggprogram}\n\\endgroup\n"
+  eggprogram (mBlock ++ sched ++ check)
 
 /-! ## Proofs
 
@@ -527,7 +535,6 @@ def proof (P : Program) (pf : Proof) (e : Elision := {}) : String :=
   let lets := if lets.endsWith "&&\\\\*\n" then lets.dropRight 6 ++ "&&\\\\[.3em]\n"
     else if lets.endsWith "&&\\\\\n" then lets.dropRight 5 ++ "&&\\\\[.3em]\n"
     else lets
-  "\\begingroup\\small\n\\begin{eggprogram}\n" ++ lets ++ proofLines P ns 0 true "" "" pf
-    ++ "\\end{eggprogram}\n\\endgroup\n"
+  eggprogram (lets ++ proofLines P ns 0 true "" "" pf)
 
 end Egglog.PaperTex
