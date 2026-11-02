@@ -10,11 +10,12 @@ namespace Egglog.SourceProof
 /-- Only the monotone constructor source fragment. -/
 def sourceOk (P : Program) : Bool := decide P.Fragment
 
-/-- A fact premise is proved by any equation whose right side is its instance; an equality
-premise by the equation of its two instances. The fragment has no disequality. -/
+/-- An equality premise is proved by the equation of its two instances; a bare pattern `e`
+is the paper's `e = e`, so it is proved by its instance's reflexivity. The fragment has no
+disequality. -/
 def premiseMatches (σ : Env) (p : Pattern) (c : Claim) : Bool :=
   match p with
-  | .expr e => e.eval σ == some c.rhs
+  | .expr e => e.eval σ == some c.lhs && c.lhs == c.rhs
   | .eq a b => a.eval σ == some c.lhs && b.eval σ == some c.rhs
   | .ne _ _ => false
 
@@ -31,7 +32,6 @@ no further support is needed. -/
   (statement := /--
   \[
   \begin{aligned}
-  \operatorname{premises}_\sigma(e)&=\{\,s=\eval{e}\mid s\in\mathit{Term}\,\}\\
   \operatorname{premises}_\sigma(e_1=e_2)&=\{\eval{e_1}=\eval{e_2}\}\\
   \operatorname{refl}(t)&=\{\,s=s\mid s\text{ a subterm of }t\,\}\\
   \operatorname{facts}_\sigma(\kw{union}(e_1,e_2))&=\{\eval{e_1}=\eval{e_2},\ \eval{e_2}=\eval{e_1}\}

@@ -9,8 +9,8 @@ theorem premiseMatches_sound {db : Database} {σ : Env} {p : Pattern} {c : Claim
     (hc : c.Holds db) (h : premiseMatches σ p c = true) : Matches db p σ := by
   cases p with
   | expr e =>
-      simp only [premiseMatches, beq_iff_eq] at h
-      exact .atom (Lookup.of_eval hX ho h (hc.symm.trans hc).toCong).2
+      simp only [premiseMatches, Bool.and_eq_true_iff, beq_iff_eq] at h
+      exact .atom (Lookup.of_eval hX ho h.1 (hc.trans hc.symm).toCong).2
   | eq a b =>
       simp only [premiseMatches, Bool.and_eq_true_iff, beq_iff_eq] at h
       exact .equal (Lookup.of_eval hX ho.1 h.1 (hc.trans hc.symm).toCong).2
@@ -76,7 +76,8 @@ theorem premiseMatches_lookup_subterm {σ : Env} {p : Pattern} {c : Claim}
     s ∈ c.lhs.subterms ∨ s ∈ c.rhs.subterms := by
   cases p with
   | expr e =>
-      exact Or.inr (eval_lookup_subterm hs ho (beq_iff_eq.mp h) hv)
+      simp only [premiseMatches, Bool.and_eq_true_iff, beq_iff_eq] at h
+      exact Or.inl (eval_lookup_subterm hs ho h.1 hv)
   | eq a b =>
       simp only [premiseMatches, Bool.and_eq_true_iff, beq_iff_eq] at h
       rcases List.mem_union_iff.mp hv with hv | hv

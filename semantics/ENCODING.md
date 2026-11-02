@@ -266,7 +266,8 @@ names the original rule, restricts the substitution to the original query's vari
 and recovers its premises by walking the original query in the compiler's order
 ([Resugar/Query.lean](EgglogSemantics/Resugar/Query.lean)): an application's premise is
 its matched atom with each child edge chained into the child's proof and pushed in by
-congruence, an equation's the two sides' root edges chained through the equality. A subterm's existence comes from the derivation that introduced
+congruence, made reflexive for a bare pattern (the paper's `e = e`), and an equation's the
+two sides' root edges chained through the equality. A subterm's existence comes from the derivation that introduced
 it, never from a new `fiat`.
 
 Each node is validated by `SourceProof.checkNode` as it is built, and the result is

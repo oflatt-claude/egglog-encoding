@@ -72,8 +72,10 @@ private def absentPremise : Program :=
 
 private def gb : Term := .app "G" [b]
 
--- An expression premise may be anchored at another congruent term.
-#guard accepts program (.rule ⟨gb, gb⟩ 2 [("x", b)] [rewrite]) ⟨gb, gb⟩
+-- A bare pattern is `e = e`: its premise is the instance's reflexivity, which may be
+-- derived, but not an equation merely ending in the instance.
+#guard accepts program (.rule ⟨gb, gb⟩ 2 [("x", b)] [childRewrite]) ⟨gb, gb⟩
+#guard rejects program (.rule ⟨gb, gb⟩ 2 [("x", b)] [rewrite])
 
 private def ordered : Program :=
   ⟨.seq seed.schedule (.run [⟨[.expr (.app "F" [.var "x"]), .eq (.var "x") b.toExpr],

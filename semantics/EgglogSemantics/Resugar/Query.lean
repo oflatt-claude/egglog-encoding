@@ -37,6 +37,7 @@ reflexive proof is not chained in, which keeps lifted proofs small; the claim is
   \end{mathpar}
   where $\pi''_i=\kw{trans}(\pi'_i,\pi_i)$ for an application child and $\pi'_i$ for a value
   child, and a value side of a comparison is proved by the comparison's own premise $x=x$.
+  A premise that is a bare application $e$ is proved by $\kw{trans}(\kw{sym}(\pi),\pi):\eval{e}=\eval{e}$.
   -/)
   (latexEnv := "paperfragment")]
 def queryExpr (P : Program) : Expr → List Proof → Option (Proof × List Proof)
@@ -85,7 +86,13 @@ def querySide (P : Program) (e : Expr) (remaining : List Proof) :
 def queryPattern (P : Program) (p : Pattern) (remaining : List Proof) :
     Option (Proof × List Proof) := do
   match p with
-  | .expr e => queryExpr P e remaining
+  | .expr e =>
+    -- A bare pattern is `e = e`: the instance's reflexivity, from `root = instance`.
+    let (p, rest) ← queryExpr P e remaining
+    if p.claim.lhs == p.claim.rhs then some (p, rest) else do
+    let rev ← symm P p
+    let result ← trans P rev p
+    some (result, rest)
   | .eq lhs rhs =>
     let (a, next) ← querySide P lhs remaining
     let (z, next) ← querySide P rhs next
