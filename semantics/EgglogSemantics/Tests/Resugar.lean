@@ -36,12 +36,4 @@ def validates (P : Program) : Bool := (certificates P).any fun cs =>
 #guard rejected.all fun f => f.certificates.all fun c => (SourceProof.check f.program c).isNone
 #guard (Fixtures.all ()).any fun fs => fs.length == lifted.length + accepted.length + rejected.length
 
--- A transformed enclosing term's child still needs the derivation that introduced it.
-private def supportProof : Proof :=
-  .congr (initial (.app "F" [term "A"])) 0 (.rule ⟨term "A", .app "G" [term "B"]⟩ 1 [] [])
-
-#guard (support supportCase (term "B") supportProof).any fun result =>
-  SourceProof.check supportCase result == some (⟨term "B", term "B"⟩ : SourceProof.Claim)
-#guard (support supportCase (term "Missing") supportProof).isNone
-
 end Egglog.Resugar.Tests

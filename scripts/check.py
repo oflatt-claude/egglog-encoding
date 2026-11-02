@@ -33,7 +33,6 @@ PAPER_MODULES = (
     "EgglogSemantics.Provenance.Encode",
     "EgglogSemantics.Provenance.Log",
     "EgglogSemantics.Resugar.Claim",
-    "EgglogSemantics.Resugar.Builder",
     "EgglogSemantics.Resugar.Query",
     "EgglogSemantics.Resugar.Lift",
 )

@@ -270,9 +270,9 @@ and recovers its premises by walking the original query in the compiler's order
 ([Resugar/Query.lean](EgglogSemantics/Resugar/Query.lean)): an application's premise is
 its matched atom with each child edge chained into the child's proof and pushed in by
 congruence, made reflexive for a bare pattern (the paper's `e = e`), and an equation's the
-two sides' root edges chained through the equality. A node retargeted to a subterm `s` of
-the row its firing wrote lifts to the existence of `s` within the lifted proof of that row,
-never to a new `fiat`.
+two sides' root edges chained through the equality. Reconstruction reads the log in the
+order it was written, so a term's existence is always credited to the source firing that
+built it, whose facts cover every subterm; no proof is ever made by `fiat`.
 
 Each node is validated by `SourceProof.checkNode` as it is built, and the result is
 checked again by `SourceProof.check`. `lift_sound` therefore inherits the source

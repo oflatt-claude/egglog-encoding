@@ -54,9 +54,10 @@ mutual
 
 /-- Lift a proof about the compiled program to a source proof of its fact's claim:
 `π ⇑ π'` with `P ⊢ π' : ⌈fact(π)⌉`. A compiled proof is a rule node
-`rule_{i'}((t = t), σ; π̄)` for the row `t` a firing wrote or, retargeted, for a subterm of it. `origins` has one entry
-per rule of the compiled program, in the order of `Program.rules`; `i'` below is the
-compiled copy of source rule `i`, and `m` a maintenance rule. -/
+`rule_{i'}((t = t), σ; π̄)` for the row `t` a firing wrote, or for a subterm of a row a
+source firing wrote, which that firing's facts cover. `origins` has one entry per rule of
+the compiled program, in the order of `Program.rules`; `i'` below is the compiled copy of
+source rule `i`, and `m` a maintenance rule. -/
 @[blueprint "def:lift"
   (statement := /--
   \begin{mathpar}
@@ -75,9 +76,6 @@ compiled copy of source rule `i`, and `m` a maintenance rule. -/
       \rho_{a_n},\rho_{b_n},\rho_y,\rho_z,\ldots)\\
       \Uparrow\kw{trans}(\kw{sym}(\pi_z),
       \kw{trans}(\kw{cong}_n(\cdots\kw{cong}_1(\pi_b,\pi_1)\cdots,\pi_n),\pi_y))}
-  \and
-  \ir{Part}{\kw{rule}_m((r=r),\sigma;\rho_1,\ldots,\rho_k)\Uparrow\pi\\ s\text{ a subterm of }r}
-    {\kw{rule}_m((s=s),\sigma;\rho_1,\ldots,\rho_k)\Uparrow\operatorname{exist}_s(\pi)}
   \and
   \ir{Source}{r_i=(Q\Rightarrow H)\\\rho_j\Uparrow\pi_j\ (\forall j)\\
     Q\text{ read against }\pi_1,\ldots,\pi_m\text{ gives }\pi'_1,\ldots,\pi'_k\\

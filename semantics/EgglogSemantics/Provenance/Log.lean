@@ -7,9 +7,12 @@ finds a proof for every row that has one. -/
 
 namespace Egglog.Provenance
 
-/-- The firings the held terms record: a rule index and its substitution. -/
+/-- The firings the held terms record, a rule index and its substitution each, in the order
+they were written: the interpreter keeps its newest term first. Justifying them in this
+order credits every term to the firing that built it, since a maintenance row only mentions
+terms that exist already. -/
 def firings (P : Program) (terms : List Term) : List (Nat × Env) :=
-  terms.filterMap fun t => match t with
+  terms.reverse.filterMap fun t => match t with
     | .app f args => do
         let i ← fireIndex f
         let r ← P.rules[i]?
@@ -71,16 +74,18 @@ def rowProofs (P : Program) (terms : List Term) : List (Term × Option Proof) :=
   (dataRows P terms).map fun t =>
     (t, (facts.lookup t).bind fun pf => if check P pf == some t then some pf else none)
 
-/-- A checked proof of every row, read off the log `L` of the instrumented run: the proofs
-are exactly the checker's derivations whose rule nodes are logged firings, and
-`reconstruct` finds one per row. -/
+/-- A checked proof of every row, read off the log `L` of the instrumented run. The proofs
+are the derivations of the checker's rule case whose firings are logged, `L ⊢ π : c`;
+`reconstruct` finds one per row by justifying firings in order. -/
 @[blueprint "def:log-proofs"
   (statement := /--
-  \[
-  L\vdash\pi:c\ \triangleq\ P'\vdash\pi:c\ \text{ and every }
-  \kw{rule}_i(c',\sigma;\ldots)\text{ in }\pi\text{ has }
-  \mathtt{fire}_i(\sigma(x_1),\ldots,\sigma(x_n))\in L
-  \]
+  \begin{mathpar}
+  \ir{Fire}{\mathtt{fire}_i(\sigma(x_1),\ldots,\sigma(x_n))\in L\\
+    r_i=(p_1\land\cdots\land p_m\Rightarrow H)\\
+    L\vdash\pi_j:c_j\quad c_j\in\operatorname{premises}_\sigma(p_j)\ (\forall j)\\
+    c\in\operatorname{facts}_\sigma(H)}
+    {L\vdash\kw{rule}_i(c,\sigma;\pi_1,\ldots,\pi_m):c}
+  \end{mathpar}
   -/)
   (latexEnv := "paperfragment")]
 def proofs (P : Program) (terms : List Term) : Option (List (Term × Proof)) := do

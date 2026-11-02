@@ -315,7 +315,7 @@
     "nodes":
     [{"rhs": ["A", []],
       "reason":
-      {"subst": [], "rule": "lean-rule-1", "premises": [], "kind": "rule"},
+      {"subst": [], "rule": "lean-rule-0", "premises": [], "kind": "rule"},
       "lhs": ["A", []]}],
     "accepted": true}],
   "case": "support"},

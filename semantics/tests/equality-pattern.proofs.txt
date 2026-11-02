@@ -3,15 +3,15 @@
     (F (A)) = (G (B))  symm
       (G (B)) = (F (A))  rule 2 {}
     (G (B)) = (G (B))  congr 0
-      (G (B)) = (G (B))  rule 2 {}
-      (B) = (B)  rule 2 {}
+      (G (B)) = (G (B))  rule 1 {}
+      (B) = (B)  rule 1 {}
 
 (G (B)) = (F (A))  rule 2 {}
 
-(G (B)) = (G (B))  rule 2 {}
+(G (B)) = (G (B))  rule 1 {}
 
-(B) = (B)  rule 2 {}
+(B) = (B)  rule 1 {}
 
-(F (A)) = (F (A))  rule 2 {}
+(F (A)) = (F (A))  rule 0 {}
 
-(A) = (A)  rule 2 {}
+(A) = (A)  rule 0 {}
