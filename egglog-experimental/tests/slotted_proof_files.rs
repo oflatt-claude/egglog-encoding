@@ -1,7 +1,12 @@
 use egglog::CommandOutput;
-use egglog_experimental::slotted::{Compiler, Options, ProofMode, new_egraph_with_proofs};
+use egglog_experimental::slotted::{
+    CompileError, Compiler, Options, ProofMode, UnsupportedProofFeature, new_egraph_with_proofs,
+};
 use libtest_mimic::Trial;
 use std::path::Path;
+
+#[path = "support/proof_coverage.rs"]
+mod coverage;
 
 fn main() {
     let args = libtest_mimic::Arguments::from_args();
@@ -22,11 +27,13 @@ fn main() {
             });
             let encoded = compiler.compile(Some(path.display().to_string()), &source);
             // Keep unsupported fixtures visible; all other compilation errors fail.
-            let unsupported = encoded.as_ref().is_err_and(|error| {
-                error
-                    .to_string()
-                    .contains("uses subst, which has no proof translation")
-            });
+            let unsupported = matches!(
+                &encoded,
+                Err(CompileError::UnsupportedProofFeature {
+                    feature: UnsupportedProofFeature::Substitution,
+                    ..
+                })
+            );
             let name = path
                 .strip_prefix("egglog-experimental")
                 .unwrap()
@@ -35,7 +42,7 @@ fn main() {
             tests.push(
                 Trial::test(format!("proofs/slotted/{name}"), move || {
                     let encoded = encoded?;
-                    let expected = encoded.matches("(prove-slotted ").count();
+                    let expected = coverage::expected_proofs(&source).map_err(|e| e.to_string())?;
                     let outputs = new_egraph_with_proofs().parse_and_run_program(None, &encoded)?;
                     let proofs = outputs
                         .iter()

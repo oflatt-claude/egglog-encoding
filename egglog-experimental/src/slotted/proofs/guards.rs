@@ -1,7 +1,7 @@
 //! Proof normal form and primitive validators for slotted source guards.
 
 use super::HashMap;
-use super::source::{SlottedProgram, SourceRule, pattern_term};
+use super::context::{ProofContext, SourceRule, pattern_term};
 use super::terms::{instantiate, slot_of};
 use crate::slotted::var_sort::VarSort;
 use egglog::ast::{Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact, Span};
@@ -71,9 +71,9 @@ pub(super) fn proof_body(
 pub(super) struct GuardValidators(TypeInfo);
 
 impl GuardValidators {
-    pub fn new(program: &SlottedProgram) -> Self {
+    pub fn new(program: &ProofContext) -> Self {
         // Only binding scopes are needed, including constructors declared after the rule.
-        let scopes = Arc::new(SlottedProgram {
+        let scopes = Arc::new(ProofContext {
             constructors: program.constructors.clone(),
             ..Default::default()
         });
@@ -107,12 +107,7 @@ impl GuardValidators {
     }
 }
 
-fn validate(
-    program: &SlottedProgram,
-    name: &str,
-    dag: &mut TermDag,
-    args: &[TermId],
-) -> Option<()> {
+fn validate(program: &ProofContext, name: &str, dag: &mut TermDag, args: &[TermId]) -> Option<()> {
     let holds = match (name, args) {
         ("renaming-=", [a, b]) => program.eq_modulo_renaming(dag, *a, *b),
         ("renaming-!=", [a, b]) => !program.eq_modulo_renaming(dag, *a, *b),

@@ -4,6 +4,7 @@
 use egglog::EGraph;
 
 mod check;
+mod errors;
 pub mod export;
 mod extract;
 mod flatten;
@@ -17,6 +18,7 @@ mod rewrite;
 mod slots;
 mod syntax;
 pub(crate) mod var_sort;
+pub use errors::{CompileError, UnsupportedProofFeature};
 pub use frontend::{Compiler, Options, ProofMode};
 
 mod runtime;

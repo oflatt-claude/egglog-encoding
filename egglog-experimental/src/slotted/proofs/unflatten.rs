@@ -1,8 +1,8 @@
 //! Lift proofs of flattened rewrites back to the original source rules.
+use super::context::{ProofContext, pattern_term};
 use super::coordinates::Coordinates;
 use super::format::{ProofId, RulePremise, SlottedConclusion, SlottedProof, SlottedProofStore};
 use super::guards::proof_body;
-use super::source::{SlottedProgram, pattern_term};
 use super::terms::{Renaming, term_renaming};
 use super::{HashMap, HashSet};
 use egglog::ast::{Literal, ResolvedExpr, ResolvedFact};
@@ -14,7 +14,7 @@ type Result<T> = std::result::Result<T, String>;
 
 pub(super) fn lift(
     old: SlottedProofStore,
-    program: &SlottedProgram,
+    program: &ProofContext,
     conclusion: SlottedConclusion,
 ) -> Result<(SlottedProofStore, SlottedConclusion)> {
     let steps: Vec<_> = old
@@ -126,7 +126,7 @@ pub(super) fn lift(
 
 fn source_fiat(
     store: &mut SlottedProofStore,
-    program: &SlottedProgram,
+    program: &ProofContext,
     claimed: Proposition,
 ) -> Result<ProofId> {
     if claimed.lhs == claimed.rhs && program.is_built(&store.term_dag, claimed.lhs)
@@ -173,7 +173,7 @@ fn source_fiat(
 
 fn lift_rule(
     store: &mut SlottedProofStore,
-    program: &SlottedProgram,
+    program: &ProofContext,
     name: &str,
     substitution: Vec<(String, TermId)>,
     premises: Vec<ProofId>,
@@ -281,7 +281,7 @@ fn lift_rule(
 /// on these proofs, not on encoded classes, frames, or compiler variable names.
 struct Witnesses<'a> {
     store: &'a mut SlottedProofStore,
-    program: &'a SlottedProgram,
+    program: &'a ProofContext,
     edges: Vec<ProofId>,
     known: HashMap<TermId, ProofId>,
     memo: HashMap<(TermId, TermId, bool), ProofId>,
@@ -291,7 +291,7 @@ struct Witnesses<'a> {
 impl<'a> Witnesses<'a> {
     fn new(
         store: &'a mut SlottedProofStore,
-        program: &'a SlottedProgram,
+        program: &'a ProofContext,
         proofs: Vec<ProofId>,
     ) -> Self {
         let mut out = Self {
@@ -371,7 +371,7 @@ impl<'a> Witnesses<'a> {
 
     fn condition_equality(
         &mut self,
-        program: &SlottedProgram,
+        program: &ProofContext,
         a: TermId,
         b: TermId,
     ) -> Result<ProofId> {

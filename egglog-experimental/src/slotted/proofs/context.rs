@@ -1,10 +1,11 @@
 //! Native source rules, declaration scopes, and binding semantics for proof checking.
 
+use super::bindings::GlobalNames;
 use super::format::{Claim, ClaimKind};
 use super::terms::{FreshSlots, Renaming, slot_of};
 use super::{HashMap, HashSet};
-use egglog::ast::{Expr, GenericAction, ResolvedExpr, ResolvedFact, ResolvedRule};
-use egglog::util::{FreshGen, INTERNAL_SYMBOL_PREFIX, IndexMap, SymbolGen};
+use egglog::ast::{Expr, GenericAction, Literal, ResolvedExpr, ResolvedFact, ResolvedRule};
+use egglog::util::IndexMap;
 use egglog::{ResolvedCall, Term, TermDag, TermId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -59,8 +60,8 @@ pub(super) fn pattern_term(dag: &mut TermDag, expr: &ResolvedExpr) -> TermId {
 }
 
 #[derive(Clone, Debug, Default)]
-/// Source declarations and axioms used by the independent proof checker.
-pub struct SlottedProgram {
+/// Source declarations and axioms materialized in a proof's term arena.
+pub struct ProofContext {
     /// Ground source slot spellings and their identities in the encoding.
     pub slot_names: BTreeMap<String, i64>,
     /// Carrier sorts visible at this point in the source program.
@@ -87,11 +88,6 @@ impl Display for SourceError {
 
 impl Error for SourceError {}
 
-/// The carrier sort of a program that has only one, as the convenience
-/// constructors below assume.
-#[cfg(test)]
-pub const SINGLE_SORT: &str = "U";
-
 impl SourceRule {
     pub(super) fn capture(rule: ResolvedRule, globals: &IndexMap<String, TermId>) -> Self {
         let mut variables = Vec::new();
@@ -101,32 +97,17 @@ impl SourceRule {
             }
             expr
         });
-        let names: BTreeSet<_> = variables
-            .iter()
-            .map(|v| v.name.clone())
-            .chain(globals.keys().cloned())
-            .collect();
-        let locals: BTreeSet<_> = variables
+        let locals = variables
             .iter()
             .filter(|v| !v.is_global_ref)
             .map(|v| v.name.clone())
             .collect();
-        let mut prefix = format!("{INTERNAL_SYMBOL_PREFIX}slotted-resolve-");
-        while names.iter().any(|name| name.starts_with(&prefix)) {
-            prefix.push('-');
-        }
-        let mut symbols = SymbolGen::new(prefix);
-        let aliases: BTreeMap<_, _> = globals
-            .keys()
-            .map(|name| {
-                let alias = if locals.contains(name) {
-                    symbols.fresh(format!("captured-{name}").as_str())
-                } else {
-                    name.clone()
-                };
-                (name.clone(), alias)
-            })
-            .collect();
+        let names = GlobalNames::new(
+            globals.keys(),
+            &locals,
+            variables.iter().map(|v| v.name.clone()),
+        );
+        let aliases = names.aliases;
         let rule = rule.visit_exprs(&mut |expr| match expr {
             ResolvedExpr::Var(span, mut var) if var.is_global_ref => {
                 var.name = aliases[&var.name].clone();
@@ -185,49 +166,7 @@ impl SourceRule {
     }
 }
 
-impl SlottedProgram {
-    /// Declare a constructor in the single-sort convenience program.
-    #[cfg(test)]
-    pub fn add_constructor(&mut self, name: &str, columns: Vec<ColumnKind>) {
-        self.add_sorted_constructor(name, SINGLE_SORT, columns);
-    }
-
-    /// A source constructor's column roles and carrier sort.
-    #[cfg(test)]
-    pub fn add_sorted_constructor(&mut self, name: &str, sort: &str, columns: Vec<ColumnKind>) {
-        self.sorts.insert(sort.to_owned());
-        self.constructors.insert(
-            name.to_owned(),
-            Constructor {
-                name: name.to_owned(),
-                sort: sort.to_owned(),
-                columns,
-            },
-        );
-    }
-
-    /// A ground term's sort, determined by its constructor or rigid value.
-    pub fn sort_of(&self, dag: &TermDag, term: TermId) -> Option<String> {
-        match dag.get(term) {
-            Term::App(head, _) => self.constructors.get(head).map(|c| c.sort.clone()),
-            Term::Var(_) if slot_of(dag, term).is_some() => Some("Var".into()),
-            Term::Lit(egglog::ast::Literal::Int(_)) => Some("i64".into()),
-            Term::Lit(egglog::ast::Literal::String(_)) => Some("String".into()),
-            _ => None,
-        }
-    }
-
-    /// Parse a global's term and resolve earlier globals.
-    #[cfg(test)]
-    pub fn add_let(
-        &mut self,
-        dag: &mut TermDag,
-        name: &str,
-        text: &str,
-    ) -> Result<(), SourceError> {
-        self.add_let_expr(dag, name, &parse_expr(text)?)
-    }
-
+impl ProofContext {
     pub(super) fn add_let_expr(
         &mut self,
         dag: &mut TermDag,
@@ -237,17 +176,6 @@ impl SlottedProgram {
         let term = self.ground_term(dag, expr)?;
         self.lets.insert(name.to_string(), term);
         Ok(())
-    }
-
-    /// Record a source union after resolving globals.
-    #[cfg(test)]
-    pub fn add_union(
-        &mut self,
-        dag: &mut TermDag,
-        lhs: &str,
-        rhs: &str,
-    ) -> Result<(), SourceError> {
-        self.add_union_expr(dag, &parse_expr(lhs)?, &parse_expr(rhs)?)
     }
 
     pub(super) fn add_union_expr(
@@ -260,18 +188,6 @@ impl SlottedProgram {
         let rhs = self.ground_term(dag, rhs)?;
         self.unions.push(Union { lhs, rhs });
         Ok(())
-    }
-
-    /// A claim's two terms, read against the program's globals.
-    #[cfg(test)]
-    pub fn claim(
-        &self,
-        dag: &mut TermDag,
-        kind: &str,
-        lhs: &str,
-        rhs: &str,
-    ) -> Result<Claim, SourceError> {
-        self.claim_expr(dag, kind, &parse_expr(lhs)?, &parse_expr(rhs)?)
     }
 
     pub(super) fn claim_expr(
@@ -291,55 +207,16 @@ impl SlottedProgram {
         Ok(Claim { kind, lhs, rhs })
     }
 
-    /// Parse and record a rewrite under the `:name` in its source text.
-    #[cfg(test)]
-    pub fn add_rewrite(&mut self, dag: &mut TermDag, text: &str) -> Result<String, SourceError> {
-        self.add_named_rewrite(dag, None, text)
-    }
-
-    /// Record a rewrite under `name` when supplied, requiring any source `:name`
-    /// to agree; otherwise require a name in the source text.
-    #[cfg(test)]
-    pub fn add_named_rewrite(
-        &mut self,
-        dag: &mut TermDag,
-        name: Option<&str>,
-        text: &str,
-    ) -> Result<String, SourceError> {
-        let forms =
-            crate::slotted::syntax::parse(None, text).map_err(|e| SourceError(e.to_string()))?;
-        let [(form, _)] = forms.as_slice() else {
-            return Err(SourceError("expected one source rewrite".into()));
-        };
-        let ("rewrite", args) = form.call().map_err(SourceError)? else {
-            return Err(SourceError("expected a source rewrite".into()));
-        };
-        let source = crate::slotted::frontend::source_rewrite(args).map_err(SourceError)?;
-        if let Some(name) = name
-            && !source.name.is_empty()
-            && name != source.name
-        {
-            return Err(SourceError(format!(
-                "rewrite name {:?} disagrees with {name:?}",
-                source.name
-            )));
-        }
-        let mut source = source.clone();
-        if source.name.is_empty() {
-            source.name = name
-                .ok_or_else(|| SourceError("a rewrite needs a :name".into()))?
-                .to_owned();
-        }
-        self.add_rewrite_ast(dag, &source)
-    }
-
     pub(super) fn add_rewrite_ast(
         &mut self,
         dag: &mut TermDag,
         source: &egglog::ast::Rewrite,
     ) -> Result<String, SourceError> {
         let name = source.name.clone();
-        let rule = SourceRule::capture(self.resolve_rewrite(dag, source)?, &self.lets);
+        let rule = SourceRule::capture(
+            super::resolve::resolve_rewrite(self, dag, source)?,
+            &self.lets,
+        );
         self.rewrites.insert(name.clone(), rule);
         Ok(name)
     }
@@ -351,23 +228,7 @@ impl SlottedProgram {
         expr: &Expr,
     ) -> Result<TermId, SourceError> {
         match expr {
-            Expr::Var(_, name) if name.starts_with('$') => {
-                let number = name[1..].parse::<i64>().ok();
-                let canonical = number.map_or_else(|| name.clone(), |n| format!("${n}"));
-                let slot = self
-                    .slot_names
-                    .get(name)
-                    .or_else(|| self.slot_names.get(&canonical))
-                    .copied()
-                    .or(number)
-                    .ok_or_else(|| SourceError(format!("unknown slot {name}")))?;
-                Ok(super::terms::slot_term(dag, slot))
-            }
-            Expr::Var(_, name) => self
-                .lets
-                .get(name)
-                .copied()
-                .ok_or_else(|| SourceError(format!("unknown global {name}"))),
+            Expr::Var(_, name) => self.ground_name(dag, name),
             Expr::Lit(_, lit) => Ok(dag.lit(lit.clone())),
             Expr::Call(_, head, args) => {
                 let args = args
@@ -376,6 +237,26 @@ impl SlottedProgram {
                     .collect::<Result<_, _>>()?;
                 Ok(dag.app(head.clone(), args))
             }
+        }
+    }
+
+    pub(super) fn ground_name(&self, dag: &mut TermDag, name: &str) -> Result<TermId, SourceError> {
+        if let Some(suffix) = name.strip_prefix('$') {
+            let number = suffix.parse::<i64>().ok();
+            let canonical = number.map_or_else(|| name.to_owned(), |n| format!("${n}"));
+            let slot = self
+                .slot_names
+                .get(name)
+                .or_else(|| self.slot_names.get(&canonical))
+                .copied()
+                .or(number)
+                .ok_or_else(|| SourceError(format!("unknown slot {name}")))?;
+            Ok(super::terms::slot_term(dag, slot))
+        } else {
+            self.lets
+                .get(name)
+                .copied()
+                .ok_or_else(|| SourceError(format!("unknown global {name}")))
         }
     }
 
@@ -599,16 +480,44 @@ impl SlottedProgram {
     }
 }
 
-#[cfg(test)]
-fn parse_expr(text: &str) -> Result<Expr, SourceError> {
-    let forms =
-        crate::slotted::syntax::parse(None, text).map_err(|e| SourceError(e.to_string()))?;
-    let [(form, _)] = forms.as_slice() else {
-        return Err(SourceError("expected one source expression".into()));
+/// Check a ground term against source constructor signatures and return its sort.
+pub(super) fn check_term_sort(
+    program: &ProofContext,
+    dag: &TermDag,
+    term: TermId,
+    expected: Option<&str>,
+) -> Result<String, String> {
+    let actual = match dag.get(term) {
+        Term::Lit(Literal::Int(_)) => "i64",
+        Term::Lit(Literal::String(_)) => "String",
+        Term::Lit(_) => return Err("unsupported payload literal".into()),
+        Term::Var(_) if slot_of(dag, term).is_some() => "Var",
+        Term::Var(v) => return Err(format!("uninstantiated variable {v}")),
+        Term::App(head, children) => {
+            let ctor = program
+                .constructors
+                .get(head)
+                .ok_or_else(|| format!("unknown constructor {head}"))?;
+            if children.len() != ctor.columns.len() {
+                return Err(format!("wrong arity for {head}"));
+            }
+            for (&child, sort) in children.iter().zip(ctor.input_sorts()) {
+                check_term_sort(program, dag, child, Some(sort))?;
+            }
+            ctor.sort.as_str()
+        }
     };
-    form.expr().map_err(SourceError)
+    if let Some(expected) = expected
+        && actual != expected
+    {
+        return Err(format!(
+            "{} has sort {actual}, expected {expected}",
+            dag.to_string(term)
+        ));
+    }
+    Ok(actual.to_owned())
 }
 
 #[cfg(test)]
-#[path = "tests/source.rs"]
+#[path = "tests/context.rs"]
 mod tests;

@@ -1,9 +1,111 @@
 use super::*;
 
+const SINGLE_SORT: &str = "U";
+
+impl ProofContext {
+    /// Declare a constructor in the single-sort convenience program.
+    pub fn add_constructor(&mut self, name: &str, columns: Vec<ColumnKind>) {
+        self.add_sorted_constructor(name, SINGLE_SORT, columns);
+    }
+
+    /// A source constructor's column roles and carrier sort.
+    pub fn add_sorted_constructor(&mut self, name: &str, sort: &str, columns: Vec<ColumnKind>) {
+        self.sorts.insert(sort.to_owned());
+        self.constructors.insert(
+            name.to_owned(),
+            Constructor {
+                name: name.to_owned(),
+                sort: sort.to_owned(),
+                columns,
+            },
+        );
+    }
+
+    /// Parse a global's term and resolve earlier globals.
+    pub fn add_let(
+        &mut self,
+        dag: &mut TermDag,
+        name: &str,
+        text: &str,
+    ) -> Result<(), SourceError> {
+        self.add_let_expr(dag, name, &parse_expr(text)?)
+    }
+
+    /// Record a source union after resolving globals.
+    pub fn add_union(
+        &mut self,
+        dag: &mut TermDag,
+        lhs: &str,
+        rhs: &str,
+    ) -> Result<(), SourceError> {
+        self.add_union_expr(dag, &parse_expr(lhs)?, &parse_expr(rhs)?)
+    }
+
+    /// A claim's two terms, read against the program's globals.
+    pub fn claim(
+        &self,
+        dag: &mut TermDag,
+        kind: &str,
+        lhs: &str,
+        rhs: &str,
+    ) -> Result<Claim, SourceError> {
+        self.claim_expr(dag, kind, &parse_expr(lhs)?, &parse_expr(rhs)?)
+    }
+
+    /// Parse and record a rewrite under the `:name` in its source text.
+    pub fn add_rewrite(&mut self, dag: &mut TermDag, text: &str) -> Result<String, SourceError> {
+        self.add_named_rewrite(dag, None, text)
+    }
+
+    /// Record a rewrite under `name` when supplied, requiring any source `:name`
+    /// to agree; otherwise require a name in the source text.
+    pub fn add_named_rewrite(
+        &mut self,
+        dag: &mut TermDag,
+        name: Option<&str>,
+        text: &str,
+    ) -> Result<String, SourceError> {
+        let forms =
+            crate::slotted::syntax::parse(None, text).map_err(|e| SourceError(e.to_string()))?;
+        let [(form, _)] = forms.as_slice() else {
+            return Err(SourceError("expected one source rewrite".into()));
+        };
+        let ("rewrite", args) = form.call().map_err(SourceError)? else {
+            return Err(SourceError("expected a source rewrite".into()));
+        };
+        let source = crate::slotted::frontend::source_rewrite(args).map_err(SourceError)?;
+        if let Some(name) = name
+            && !source.name.is_empty()
+            && name != source.name
+        {
+            return Err(SourceError(format!(
+                "rewrite name {:?} disagrees with {name:?}",
+                source.name
+            )));
+        }
+        let mut source = source.clone();
+        if source.name.is_empty() {
+            source.name = name
+                .ok_or_else(|| SourceError("a rewrite needs a :name".into()))?
+                .to_owned();
+        }
+        self.add_rewrite_ast(dag, &source)
+    }
+}
+
+fn parse_expr(text: &str) -> Result<Expr, SourceError> {
+    let forms =
+        crate::slotted::syntax::parse(None, text).map_err(|e| SourceError(e.to_string()))?;
+    let [(form, _)] = forms.as_slice() else {
+        return Err(SourceError("expected one source expression".into()));
+    };
+    form.expr().map_err(SourceError)
+}
+
 #[test]
 fn parses_rewrites_lets_unions_and_claims() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("App", vec![ColumnKind::Child, ColumnKind::Child]);
     program.add_constructor("Mul", vec![ColumnKind::Child, ColumnKind::Child]);
@@ -52,7 +154,7 @@ fn parses_rewrites_lets_unions_and_claims() {
 #[test]
 fn free_slots_respect_binders() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
     program.add_constructor("App", vec![ColumnKind::Child, ColumnKind::Child]);
@@ -80,7 +182,7 @@ fn free_slots_respect_binders() {
 #[test]
 fn alpha_matching_preserves_free_names_and_binding_scope() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
     program.add_constructor("Pair", vec![ColumnKind::Child, ColumnKind::Child]);
@@ -132,7 +234,7 @@ fn alpha_matching_preserves_free_names_and_binding_scope() {
 #[test]
 fn renaming_comparison_preserves_aliasing_payloads_and_binding() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
     program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
@@ -176,7 +278,7 @@ fn renaming_comparison_preserves_aliasing_payloads_and_binding() {
 #[test]
 fn subst_is_refused() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor(
         "Let",

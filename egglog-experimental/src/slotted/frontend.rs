@@ -1,4 +1,5 @@
 //! An explicit slotted-source to ordinary-egglog pass. Evaluation stays in egglog.
+use super::errors::{CompileError, UnsupportedProofFeature};
 use super::{
     flatten, maintenance,
     model::*,
@@ -126,9 +127,12 @@ impl Compiler {
         &mut self,
         filename: Option<String>,
         source: &str,
-    ) -> Result<String, ParseError> {
+    ) -> Result<String, CompileError> {
         let mut next = self.clone();
         let forms = read(filename, source, &mut BTreeSet::new())?;
+        if self.options.proof_mode == ProofMode::Prove {
+            UnsupportedProofFeature::check(&forms)?;
+        }
         let result = next.program(&forms)?;
         *self = next;
         Ok(result)
@@ -454,7 +458,7 @@ impl Compiler {
                 let (head, args) = f.call()?;
                 if head == "subst" {
                     if self.options.proof_mode == ProofMode::Prove {
-                        return Err("uses subst, which has no proof translation".into());
+                        return Err(UnsupportedProofFeature::Substitution.to_string());
                     }
                     if ground || args.len() != 3 {
                         return Err(

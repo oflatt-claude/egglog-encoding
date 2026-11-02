@@ -1,11 +1,11 @@
 //! Checks surface proofs against the slotted source program.
 
+use super::context::{ProofContext, SourceFact, check_term_sort, pattern_term};
 use super::format::{
     Claim, ClaimKind, RulePremise, RuleProof, SlottedConclusion, SlottedProof, SlottedProofStore,
 };
 use super::guards::{GuardValidators, proof_body};
 use super::program::ResolvedSlottedProgram;
-use super::source::{SlottedProgram, SourceFact, pattern_term};
 use super::terms::{all_slots, rename, slot_of};
 use super::{HashMap, HashSet};
 use egglog::ast::{
@@ -13,7 +13,7 @@ use egglog::ast::{
 };
 use egglog::proof::{Justification, Proof, ProofCheckContext, ProofId, ProofStore, Proposition};
 use egglog::util::{FreshGen, INTERNAL_SYMBOL_PREFIX, SymbolGen};
-use egglog::{Term, TermDag, TermId};
+use egglog::{Term, TermDag};
 use egglog_numeric_id::NumericId;
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -23,7 +23,7 @@ use thiserror::Error;
 pub enum SlottedCheckError {
     /// The original program cannot be resolved for proof checking.
     #[error("invalid slotted source program: {0}")]
-    Source(#[from] super::source::SourceError),
+    Source(#[from] super::context::SourceError),
     /// A fiat step is absent from the source program.
     #[error(
         "proof #{proof}: fiat {claim} is neither a built term's reflexivity nor a source union"
@@ -129,7 +129,7 @@ type CheckedProofs = HashMap<ProofId, Proposition>;
 /// Check an equality proof and every proof it depends on, returning what it proves.
 pub(super) fn check_proof_in_program(
     store: &mut SlottedProofStore,
-    program: &SlottedProgram,
+    program: &ProofContext,
     root: ProofId,
 ) -> Result<Proposition, SlottedCheckError> {
     let mut ordinary = ProofStore::new(
@@ -163,7 +163,7 @@ pub(super) fn check_proof_in_program(
 /// Check that a proof establishes a claim.
 pub(super) fn check_claim_in_program(
     store: &mut SlottedProofStore,
-    program: &SlottedProgram,
+    program: &ProofContext,
     claim: &Claim,
     conclusion: &SlottedConclusion,
 ) -> Result<(), SlottedCheckError> {
@@ -205,7 +205,7 @@ fn check_one(
     ordinary: &mut ProofStore,
     context: &ProofCheckContext,
     validators: &GuardValidators,
-    program: &SlottedProgram,
+    program: &ProofContext,
     id: ProofId,
     checked: &CheckedProofs,
 ) -> Result<Proposition, SlottedCheckError> {
@@ -330,48 +330,10 @@ fn check_one(
     Ok(derived)
 }
 
-/// Check a ground term against source constructor signatures and return its sort.
-pub(super) fn check_term_sort(
-    program: &SlottedProgram,
-    dag: &TermDag,
-    term: TermId,
-    expected: Option<&str>,
-) -> Result<String, String> {
-    let actual = match dag.get(term) {
-        Term::Lit(Literal::Int(_)) => "i64",
-        Term::Lit(Literal::String(_)) => "String",
-        Term::Lit(_) => return Err("unsupported payload literal".into()),
-        Term::Var(_) if slot_of(dag, term).is_some() => "Var",
-        Term::Var(v) => return Err(format!("uninstantiated variable {v}")),
-        Term::App(head, children) => {
-            let ctor = program
-                .constructors
-                .get(head)
-                .ok_or_else(|| format!("unknown constructor {head}"))?;
-            if children.len() != ctor.columns.len() {
-                return Err(format!("wrong arity for {head}"));
-            }
-            for (&child, sort) in children.iter().zip(ctor.input_sorts()) {
-                check_term_sort(program, dag, child, Some(sort))?;
-            }
-            ctor.sort.as_str()
-        }
-    };
-    if let Some(expected) = expected
-        && actual != expected
-    {
-        return Err(format!(
-            "{} has sort {actual}, expected {expected}",
-            dag.to_string(term)
-        ));
-    }
-    Ok(actual.to_owned())
-}
-
 fn check_rule(
     ordinary: &mut ProofStore,
     validators: &GuardValidators,
-    program: &SlottedProgram,
+    program: &ProofContext,
     id: ProofId,
     proof: &RuleProof,
     checked: &CheckedProofs,

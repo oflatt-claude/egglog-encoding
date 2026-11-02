@@ -1,11 +1,39 @@
 use super::*;
 
+#[test]
+fn source_names_take_precedence_over_generated_rule_kinds() {
+    let mut program = ProofContext::default();
+    program.add_constructor("N", vec![]);
+    program
+        .add_rewrite(
+            &mut TermDag::default(),
+            "(rewrite (N) (N) :name slotted/group-shrink)",
+        )
+        .unwrap();
+    assert_eq!(
+        rule_kind(&program, "slotted/group-shrink"),
+        RuleKind::Source("slotted/group-shrink")
+    );
+    assert_eq!(
+        rule_kind(&program, "slotted/group-shrink/apply"),
+        RuleKind::Apply("slotted/group-shrink")
+    );
+    assert_eq!(
+        rule_kind(&program, "slotted/group-shrink/0"),
+        RuleKind::GroupShrink
+    );
+    assert_eq!(
+        rule_kind(&program, "slotted/unknown/0"),
+        RuleKind::Unknown("slotted/unknown/0")
+    );
+}
+
 pub(in crate::slotted::proofs) fn check_restricted_symmetries(
-    program: &SlottedProgram,
+    program: &ProofContext,
     dag: TermDag,
     names: &EncodingNames,
     egg: &ProofStore,
-) -> R<usize> {
+) -> LiftResult<usize> {
     let mut tr = SlotLifter::new(program, dag, names, egg);
     let mut checked = 0;
     for (id, proof) in egg.proofs() {
@@ -17,7 +45,7 @@ pub(in crate::slotted::proofs) fn check_restricted_symmetries(
         else {
             continue;
         };
-        if rule_kind(program, name).1 != "group-shrink" {
+        if rule_kind(program, name) != RuleKind::GroupShrink {
             continue;
         }
         let old = tr.group(substitution["_s"])?;
@@ -35,7 +63,7 @@ pub(in crate::slotted::proofs) fn check_restricted_symmetries(
                     name,
                     premise_proofs,
                     ..
-                } if rule_kind(program, name).1 == "group-restore"
+                } if rule_kind(program, name) == RuleKind::GroupRestore
                     && premise_proofs.first() == Some(&id) =>
                 {
                     Some(restored)

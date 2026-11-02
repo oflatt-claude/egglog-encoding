@@ -258,7 +258,7 @@ and their generated pattern, class, reading, and frame names. Claims carry the
 corresponding names for their compiled queries. These mappings belong to lifting;
 the source checker does not consult them.
 
-The pass in [`proofs/lift_slots.rs`](proofs/lift_slots.rs) produces proofs over those
+The pass in [`proofs/lift_slots`](proofs/lift_slots) produces proofs over those
 flattened rewrites. A separate pass in [`proofs/unflatten.rs`](proofs/unflatten.rs)
 reconstructs nested terms using the atom equalities, congruence, projection, and
 equivariance. It replaces

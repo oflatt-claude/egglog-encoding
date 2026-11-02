@@ -1,6 +1,6 @@
 use super::*;
 use crate::slotted::proofs::checker::check_proof_in_program as check_proof;
-use crate::slotted::proofs::source::{ColumnKind, SlottedProgram};
+use crate::slotted::proofs::context::{ColumnKind, ProofContext};
 use egglog::TermDag;
 use egglog::proof::Proposition;
 use egglog::util::IndexMap;
@@ -8,7 +8,7 @@ use egglog::util::IndexMap;
 #[test]
 fn transported_rules_keep_renaming_premises_in_source_coordinates() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
     for name in ["F", "G", "H"] {
@@ -78,7 +78,7 @@ fn transported_rules_keep_renaming_premises_in_source_coordinates() {
 #[test]
 fn transports_binder_children_and_preserves_source_axioms() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("F", vec![ColumnKind::Child]);
     program.add_constructor("G", vec![ColumnKind::Child]);
@@ -125,7 +125,7 @@ fn transports_binder_children_and_preserves_source_axioms() {
 #[test]
 fn inverse_transports_cancel_without_trusting_new_fiats() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("F", vec![ColumnKind::Child]);
     program.add_let(&mut dag, "f", "(F (V $0))").unwrap();

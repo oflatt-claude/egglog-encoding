@@ -1,18 +1,18 @@
 //! Parse and typecheck original slotted source before proof checking.
 
-use super::checker::check_term_sort;
+use super::HashMap;
+use super::bindings::GlobalNames;
+use super::context::{ColumnKind, Constructor, ProofContext, SourceError, check_term_sort};
 use super::guards::{GUARDS, GuardSignature};
-use super::program::{ResolvedSlottedProgram, ground};
-use super::source::{ColumnKind, SlottedProgram, SourceError};
-use super::terms::FreshSlots;
+use super::program::ResolvedSlottedProgram;
 use crate::slotted::frontend::{
     declarations, expand_includes, name_rewrite, source_constructor, source_rewrite,
 };
 use crate::slotted::syntax::{self, Form};
 use crate::slotted::var_sort::VarSort;
 use egglog::ast::{
-    Action, Expr, Fact, FunctionDecl, GenericAction, GenericActions, ResolvedExpr, ResolvedFact,
-    ResolvedNCommand, ResolvedRule, ResolvedVar, Rule, Schema, Sexp, Span,
+    Action, Expr, Fact, FunctionDecl, GenericAction, GenericActions, ResolvedExpr, ResolvedExprExt,
+    ResolvedFact, ResolvedNCommand, ResolvedRule, ResolvedVar, Rule, Schema, Sexp, Span,
 };
 use egglog::prelude::BaseSort;
 use egglog::sort::{EqSort, UnitSort};
@@ -21,7 +21,36 @@ use egglog::{Context, EGraph, ResolvedCall, TermDag};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
-impl SlottedProgram {
+#[derive(Clone, Default)]
+struct Scope {
+    sorts: BTreeSet<String>,
+    constructors: HashMap<String, Constructor>,
+    globals: IndexMap<String, String>,
+}
+
+pub(super) fn resolve_rewrite(
+    context: &ProofContext,
+    dag: &TermDag,
+    source: &egglog::ast::Rewrite,
+) -> Result<ResolvedRule, SourceError> {
+    Scope {
+        sorts: context.sorts.clone(),
+        constructors: context.constructors.clone(),
+        globals: context
+            .lets
+            .iter()
+            .map(|(name, &term)| {
+                Ok((
+                    name.clone(),
+                    check_term_sort(context, dag, term, None).map_err(SourceError)?,
+                ))
+            })
+            .collect::<Result<_, SourceError>>()?,
+    }
+    .resolve_rewrite(source)
+}
+
+impl Scope {
     fn source_types(&self, span: &Span) -> Result<EGraph, SourceError> {
         let err = |e: &dyn Display| SourceError(e.to_string());
         let mut graph = EGraph::default();
@@ -55,7 +84,6 @@ impl SlottedProgram {
 
     fn resolve_action(
         &self,
-        dag: &TermDag,
         span: &Span,
         action: Action,
     ) -> Result<GenericAction<ResolvedCall, ResolvedVar>, SourceError> {
@@ -69,13 +97,10 @@ impl SlottedProgram {
             .iter()
             .map(|name| (name.as_str(), (span.clone(), VarSort.to_arcsort())))
             .collect();
-        for (name, &term) in &self.lets {
-            let sort = self
-                .sort_of(dag, term)
-                .ok_or_else(|| SourceError(format!("unknown sort for global {name}")))?;
+        for (name, sort) in &self.globals {
             bindings.insert(
                 name.as_str(),
-                (span.clone(), graph.get_sort_by_name(&sort).unwrap().clone()),
+                (span.clone(), graph.get_sort_by_name(sort).unwrap().clone()),
             );
         }
         let mut symbols = SymbolGen::new(format!("{INTERNAL_SYMBOL_PREFIX}slotted-actions-"));
@@ -92,7 +117,7 @@ impl SlottedProgram {
             unreachable!("one source action retains its syntax")
         };
         Ok(action.clone().visit_exprs(&mut |expr| match expr {
-            ResolvedExpr::Var(span, mut var) if self.lets.contains_key(&var.name) => {
+            ResolvedExpr::Var(span, mut var) if self.globals.contains_key(&var.name) => {
                 var.is_global_ref = true;
                 ResolvedExpr::Var(span, var)
             }
@@ -102,7 +127,6 @@ impl SlottedProgram {
 
     pub(super) fn resolve_rewrite(
         &self,
-        dag: &TermDag,
         source: &egglog::ast::Rewrite,
     ) -> Result<ResolvedRule, SourceError> {
         let err = |e: &dyn Display| SourceError(e.to_string());
@@ -123,13 +147,8 @@ impl SlottedProgram {
         let source_names: BTreeSet<_> = source_terms
             .iter()
             .flat_map(|expr| expr.vars())
-            .chain(self.lets.keys().cloned())
+            .chain(self.globals.keys().cloned())
             .collect();
-        let mut prefix = format!("{INTERNAL_SYMBOL_PREFIX}slotted-resolve-");
-        while source_names.iter().any(|name| name.starts_with(&prefix)) {
-            prefix.push('-');
-        }
-        let mut symbols = SymbolGen::new(prefix);
         // Captured carrier globals and local payload variables have distinct scopes.
         let mut payload_vars = BTreeSet::new();
         for expr in &source_terms {
@@ -145,25 +164,17 @@ impl SlottedProgram {
                 }
             });
         }
-        let aliases: BTreeMap<_, _> = self
-            .lets
-            .keys()
-            .map(|name| {
-                let alias = if payload_vars.contains(name) {
-                    symbols.fresh(format!("captured-{name}").as_str())
-                } else {
-                    name.clone()
-                };
-                (name.clone(), alias)
-            })
-            .collect();
+        let GlobalNames {
+            aliases,
+            mut symbols,
+        } = GlobalNames::new(self.globals.keys(), &payload_vars, source_names);
         let globals: IndexMap<_, _> = self
-            .lets
+            .globals
             .iter()
-            .map(|(name, &term)| (aliases[name].clone(), term))
+            .map(|(name, sort)| (aliases[name].clone(), sort.clone()))
             .collect();
         fn capture(
-            program: &SlottedProgram,
+            program: &Scope,
             expr: &Expr,
             payload: bool,
             aliases: &BTreeMap<String, String>,
@@ -229,12 +240,9 @@ impl SlottedProgram {
             .filter(|name| name.starts_with('$') && !payload_vars.contains(name))
             .map(|name| (name, (source.span.clone(), var_ty.clone())))
             .collect();
-        for (name, &term) in &globals {
-            let sort = self
-                .sort_of(dag, term)
-                .ok_or_else(|| SourceError(format!("unknown sort for global {name}")))?;
+        for (name, sort) in &globals {
             let ty = graph
-                .get_sort_by_name(&sort)
+                .get_sort_by_name(sort)
                 .ok_or_else(|| SourceError(format!("unknown sort {sort}")))?
                 .clone();
             bindings.insert(name.clone(), (source.span.clone(), ty));
@@ -242,7 +250,7 @@ impl SlottedProgram {
         let expression_sort = |expr: &Expr| match expr {
             Expr::Call(_, head, _) => self.constructors.get(head).map(|c| c.sort.clone()),
             Expr::Var(_, name) if name.starts_with('$') => Some("Var".into()),
-            Expr::Var(_, name) => globals.get(name).and_then(|&t| self.sort_of(dag, t)),
+            Expr::Var(_, name) => globals.get(name).cloned(),
             Expr::Lit(_, lit) => Some(egglog::sort::literal_sort(lit).name().to_owned()),
         };
         // Infer plain facts in their source context: guards return Unit, while
@@ -340,45 +348,42 @@ pub fn resolve_program<'a>(
     let forms =
         expand_includes(forms, &mut BTreeSet::new()).map_err(|e| SourceError(e.to_string()))?;
     let mut reader = Reader {
-        program: SlottedProgram::default(),
+        scope: Scope::default(),
         resolved: ResolvedSlottedProgram::default(),
-        fresh: FreshSlots::new([]),
         rules: 0,
         rule_names: BTreeSet::new(),
     };
-    let mut dag = TermDag::default();
     let mut scopes = Vec::new();
     let mut start = 0;
     for (i, (form, _)) in forms.iter().enumerate() {
         if let Ok((head @ ("push" | "pop"), args)) = form.call() {
-            reader.region(&mut dag, &forms[start..i])?;
+            reader.region(&forms[start..i])?;
             if !args.is_empty() {
                 return Err(SourceError(format!("slotted {head} takes no arguments")));
             }
             if head == "push" {
-                scopes.push((reader.program.clone(), reader.resolved.clone()));
+                scopes.push((reader.scope.clone(), reader.resolved.clone()));
             } else {
-                (reader.program, reader.resolved) = scopes
+                (reader.scope, reader.resolved) = scopes
                     .pop()
                     .ok_or_else(|| SourceError("pop without a corresponding push".into()))?;
             }
             start = i + 1;
         }
     }
-    reader.region(&mut dag, &forms[start..])?;
+    reader.region(&forms[start..])?;
     Ok(reader.resolved)
 }
 
 struct Reader {
-    program: SlottedProgram,
+    scope: Scope,
     resolved: ResolvedSlottedProgram,
-    fresh: FreshSlots,
     rules: usize,
     rule_names: BTreeSet<String>,
 }
 
 impl Reader {
-    fn region(&mut self, dag: &mut TermDag, forms: &[(Form, Span)]) -> Result<(), SourceError> {
+    fn region(&mut self, forms: &[(Form, Span)]) -> Result<(), SourceError> {
         let mut sorts = Vec::new();
         let mut constructors = Vec::new();
         for (form, _) in forms {
@@ -390,7 +395,7 @@ impl Reader {
             .unwrap_or_else(|| egglog::span!());
         for sort in sorts {
             if ["Var", "i64", "String", "Unit"].contains(&sort.as_str())
-                || !self.program.sorts.insert(sort.clone())
+                || !self.scope.sorts.insert(sort.clone())
             {
                 return Err(SourceError(format!(
                     "invalid or duplicate equality sort {sort}"
@@ -409,8 +414,8 @@ impl Reader {
         for form in constructors {
             let op = source_constructor(
                 &form,
-                self.program.sorts.iter().map(String::as_str),
-                self.program.constructors.values(),
+                self.scope.sorts.iter().map(String::as_str),
+                self.scope.constructors.values(),
             )
             .map_err(SourceError)?;
             let decl = FunctionDecl::constructor(
@@ -424,7 +429,7 @@ impl Reader {
                 false,
                 false,
             );
-            let mut graph = self.program.source_types(&span)?;
+            let mut graph = self.scope.source_types(&span)?;
             let mut symbols =
                 SymbolGen::new(format!("{INTERNAL_SYMBOL_PREFIX}slotted-declarations-"));
             let decl = graph
@@ -443,7 +448,7 @@ impl Reader {
             self.resolved
                 .commands
                 .push(ResolvedNCommand::Function(decl));
-            self.program.constructors.insert(op.name.clone(), op);
+            self.scope.constructors.insert(op.name.clone(), op);
         }
         for (form, span) in forms {
             let (head, args) = form.call().map_err(SourceError)?;
@@ -451,43 +456,43 @@ impl Reader {
                 ("sort" | "constructor" | "datatype" | "datatype*", _) => continue,
                 ("let", [name, value]) => {
                     let name = name.symbol().map_err(SourceError)?;
-                    if name.starts_with('$') || self.program.lets.contains_key(name) {
+                    if name.starts_with('$') || self.scope.globals.contains_key(name) {
                         return Err(SourceError(format!("invalid or duplicate global {name}")));
                     }
                     let value = value.expr().map_err(SourceError)?;
-                    let term = ground(&mut self.program, dag, &mut self.fresh, &value)?;
-                    let action = self.program.resolve_action(
-                        dag,
-                        span,
-                        Action::Let(span.clone(), name.into(), value),
-                    )?;
-                    self.program.lets.insert(name.into(), term);
+                    let action = self
+                        .scope
+                        .resolve_action(span, Action::Let(span.clone(), name.into(), value))?;
+                    let GenericAction::Let(_, _, value) = &action else {
+                        unreachable!("resolved let")
+                    };
+                    self.scope
+                        .globals
+                        .insert(name.into(), value.output_type().name().to_owned());
                     ResolvedNCommand::CoreAction(action)
                 }
                 ("union", [lhs, rhs]) => {
                     let lhs = lhs.expr().map_err(SourceError)?;
                     let rhs = rhs.expr().map_err(SourceError)?;
-                    let a = ground(&mut self.program, dag, &mut self.fresh, &lhs)?;
-                    let b = ground(&mut self.program, dag, &mut self.fresh, &rhs)?;
-                    let sort = check_term_sort(&self.program, dag, a, None).map_err(SourceError)?;
-                    check_term_sort(&self.program, dag, b, Some(&sort)).map_err(SourceError)?;
-                    if !self.program.sorts.contains(&sort) {
+                    let action = self
+                        .scope
+                        .resolve_action(span, Action::Union(span.clone(), lhs, rhs))?;
+                    let GenericAction::Union(_, lhs, _) = &action else {
+                        unreachable!("resolved union")
+                    };
+                    if !self.scope.sorts.contains(lhs.output_type().name()) {
                         return Err(SourceError(
                             "union requires terms in an equality sort".into(),
                         ));
                     }
-                    ResolvedNCommand::CoreAction(self.program.resolve_action(
-                        dag,
-                        span,
-                        Action::Union(span.clone(), lhs, rhs),
-                    )?)
+                    ResolvedNCommand::CoreAction(action)
                 }
                 ("rewrite", _) => {
                     let mut rule = source_rewrite(args).map_err(SourceError)?;
                     name_rewrite(&mut rule, self.rules, Some(&mut self.rule_names));
                     self.rules += 1;
                     ResolvedNCommand::NormRule {
-                        rule: self.program.resolve_rewrite(dag, &rule)?,
+                        rule: self.scope.resolve_rewrite(&rule)?,
                     }
                 }
                 (

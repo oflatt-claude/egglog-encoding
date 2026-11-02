@@ -1,6 +1,6 @@
 use super::check_proof_in_program as check_proof;
+use crate::slotted::proofs::context::{ColumnKind, ProofContext};
 use crate::slotted::proofs::format::{RulePremise, SlottedProofStore};
-use crate::slotted::proofs::source::{ColumnKind, SlottedProgram};
 use crate::slotted::proofs::terms::slot_term;
 use egglog::ast::Literal;
 use egglog::proof::{Justification, Proposition};
@@ -15,7 +15,7 @@ fn variable(dag: &mut TermDag, name: i64) -> TermId {
 fn ordinary_guard_normal_form_requires_nested_operand_evidence() {
     for local in ["x", "@slotted-proof-v"] {
         let mut dag = TermDag::default();
-        let mut program = SlottedProgram::default();
+        let mut program = ProofContext::default();
         program.add_constructor("V", vec![ColumnKind::Var]);
         program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
         program.add_constructor("F", vec![ColumnKind::Child]);
@@ -65,7 +65,7 @@ fn ordinary_guard_normal_form_requires_nested_operand_evidence() {
 #[test]
 fn guard_captures_are_independent_of_a_constructor_with_the_same_name() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor(
         "free",
@@ -121,7 +121,7 @@ fn guard_captures_are_independent_of_a_constructor_with_the_same_name() {
 #[test]
 fn renaming_guard_checks_an_equality_witness() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
     program.add_constructor("F", vec![ColumnKind::Child]);
@@ -206,7 +206,7 @@ fn renaming_guard_checks_an_equality_witness() {
 #[test]
 fn renaming_disequality_rejects_different_spellings_of_the_same_term() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
     program.add_constructor("F", vec![ColumnKind::Child]);
@@ -251,7 +251,7 @@ fn renaming_disequality_rejects_different_spellings_of_the_same_term() {
 #[test]
 fn free_name_guards_check_the_instantiated_terms() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("F", vec![ColumnKind::Child; 3]);
     program
@@ -324,7 +324,7 @@ fn renaming_guards_preserve_binding_scopes_and_injectivity() {
         ),
     ] {
         let mut dag = TermDag::default();
-        let mut program = SlottedProgram::default();
+        let mut program = ProofContext::default();
         program.add_constructor("V", vec![ColumnKind::Var]);
         program.add_constructor("A", vec![]);
         program.add_constructor("Hit", vec![]);
@@ -367,7 +367,7 @@ fn renaming_guards_preserve_binding_scopes_and_injectivity() {
 #[test]
 fn renaming_premises_require_a_renaming_condition() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("F", vec![ColumnKind::Child]);
     program.add_let(&mut dag, "input", "(F (V $0))").unwrap();
@@ -424,7 +424,7 @@ fn both_renaming_operands_participate_in_cycle_detection() {
             vec![RulePremise::RenamingEq { left, right }],
         );
         assert_eq!(proof, cyclic);
-        let error = check_proof(&mut store, &SlottedProgram::default(), proof).unwrap_err();
+        let error = check_proof(&mut store, &ProofContext::default(), proof).unwrap_err();
         assert!(error.to_string().contains("the proof is cyclic"), "{error}");
     }
 }
@@ -437,7 +437,7 @@ fn guard_representatives_preserve_captured_operands_and_later_binder_declaration
         ("@slotted-guard-argument", "x @slotted-guard-argument"),
     ] {
         let mut dag = TermDag::default();
-        let mut program = SlottedProgram::default();
+        let mut program = ProofContext::default();
         program.add_constructor("V", vec![ColumnKind::Var]);
         program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
         for name in ["A", "B", "Hit"] {
@@ -494,7 +494,7 @@ fn guard_representatives_preserve_captured_operands_and_later_binder_declaration
 fn guard_operand_equalities_have_the_declared_operand_type() {
     for valid in [true, false] {
         let mut dag = TermDag::default();
-        let mut program = SlottedProgram::default();
+        let mut program = ProofContext::default();
         program.add_constructor("V", vec![ColumnKind::Var]);
         program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
         program.add_sorted_constructor("OtherVar", "Other", vec![ColumnKind::Var]);

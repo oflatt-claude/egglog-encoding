@@ -2,11 +2,11 @@
 
 use super::HashMap;
 use super::checker::check_claim;
+use super::context::{ProofContext, SourceError};
 use super::format::SlottedConclusion;
 use super::lift_slots::{self, matched_frame};
 use super::program::ResolvedSlottedProgram;
 use super::resolve::resolve_program;
-use super::source::{SlottedProgram, SourceError};
 use super::terms::FreshSlots;
 use crate::slotted::Compiler;
 use crate::slotted::flatten::Rewrite as FlatRewrite;
@@ -283,10 +283,10 @@ impl SlottedProofState {
         &self,
         resolved: &ResolvedSlottedProgram,
         slot_names: &BTreeMap<String, i64>,
-    ) -> Result<(SlottedProgram, SlottedProgram, TermDag), SourceError> {
+    ) -> Result<(ProofContext, ProofContext, TermDag), SourceError> {
         let mut dag = TermDag::default();
         let program = resolved.context(&mut dag, slot_names.clone())?;
-        let mut flattened = SlottedProgram {
+        let mut flattened = ProofContext {
             slot_names: program.slot_names.clone(),
             sorts: program.sorts.clone(),
             constructors: program.constructors.clone(),

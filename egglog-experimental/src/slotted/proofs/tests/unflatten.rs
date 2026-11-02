@@ -1,4 +1,4 @@
-use super::super::source::ColumnKind;
+use super::super::context::ColumnKind;
 use super::*;
 use crate::slotted::proofs::checker::check_proof_in_program as check_proof;
 use egglog::TermDag;
@@ -6,7 +6,7 @@ use egglog::TermDag;
 #[test]
 fn reconstructs_nested_binders_after_a_shape_change() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     for head in ["F", "G"] {
         program.add_constructor(head, vec![ColumnKind::Child]);
@@ -41,7 +41,7 @@ fn reconstructs_nested_binders_after_a_shape_change() {
 #[test]
 fn reconstruction_preserves_shared_sibling_names() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
     program
@@ -60,7 +60,7 @@ fn reconstruction_preserves_shared_sibling_names() {
 #[test]
 fn reconstruction_tries_equal_children_before_renaming_them() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
     for head in ["F", "G", "H"] {
@@ -95,7 +95,7 @@ fn reconstruction_tries_equal_children_before_renaming_them() {
 #[test]
 fn renaming_guard_lifts_child_equalities_through_congruence() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
     for head in ["F", "G", "H"] {

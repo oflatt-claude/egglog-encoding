@@ -10,8 +10,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+from slotted import reference  # noqa: E402
 from slotted import workloads as W  # noqa: E402
 from slotted.treatments import TREATMENTS  # noqa: E402
+
+
+def uses_substitution(path):
+    def contains(form):
+        return isinstance(form, list) and (form[:1] == [reference.SUBST] or any(map(contains, form)))
+
+    source = reference.Source(path)
+    return any(contains(form) for form, _ in source.body)
 
 
 def main():
@@ -26,10 +35,15 @@ def main():
         for workload in selected:
             path = Path(tmp) / f"{workload.case}.egg"
             path.write_text(workload.program)
+            substitution = uses_substitution(path)
             for side in ("encoding", "encoding-no-aliasing"):
                 name = f"{workload.case} / {side}"
                 if side in workload.unsupported:
                     print(f"SKIP {name}: {workload.unsupported[side]}", flush=True)
+                    skipped += 1
+                    continue
+                if substitution:
+                    print(f"SKIP {name}: subst has no proof translation", flush=True)
                     skipped += 1
                     continue
                 with (Path(tmp) / "proof.txt").open("w") as proof:
@@ -47,10 +61,6 @@ def main():
                         timeout=300,
                         env={**os.environ, "RUST_LOG": "error"},
                     )
-                    if result.returncode and "uses subst, which has no proof translation" in result.stderr:
-                        print(f"SKIP {name}: subst has no proof translation", flush=True)
-                        skipped += 1
-                        continue
                     if result.returncode:
                         raise AssertionError(f"{name}: {result.stderr}")
                     if not proof.tell():

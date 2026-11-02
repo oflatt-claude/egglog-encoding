@@ -1409,11 +1409,6 @@ impl EGraph {
         }
     }
 
-    /// The resolved source program retained for proof checking, before instrumentation.
-    pub fn proof_checking_program(&self) -> &[ResolvedNCommand] {
-        &self.proof_check_program
-    }
-
     /// Provide a program for use in proof checking.
     /// This enables testing of a desugared egglog proof program outside of proof mode.
     /// When proof_testing is true, rewrites checks and extracts outside `fail` into proof commands.

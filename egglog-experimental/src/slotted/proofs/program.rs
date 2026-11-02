@@ -1,11 +1,10 @@
 //! Resolved source programs and their proof-checking contexts.
 
-use super::checker::check_term_sort;
+use super::context::{ColumnKind, Constructor, ProofContext, SourceError, SourceRule, Union};
 use super::format::SlottedProofStore;
-use super::source::{ColumnKind, Constructor, SlottedProgram, SourceError, SourceRule, Union};
 use super::terms::{FreshSlots, slot_of};
 use crate::slotted::slots::Slots;
-use egglog::ast::{Expr, FunctionSubtype, GenericAction, ResolvedNCommand};
+use egglog::ast::{FunctionSubtype, GenericAction, ResolvedExpr, ResolvedNCommand};
 use egglog::{TermDag, TermId};
 use std::collections::BTreeMap;
 
@@ -25,7 +24,7 @@ impl ResolvedSlottedProgram {
     pub(super) fn for_proof(
         &self,
         store: &mut SlottedProofStore,
-    ) -> Result<SlottedProgram, SourceError> {
+    ) -> Result<ProofContext, SourceError> {
         let mut names = BTreeMap::new();
         for (&id, name) in &store.slot_names {
             let name = Slots::default().intern(name).map_err(SourceError)?;
@@ -40,13 +39,13 @@ impl ResolvedSlottedProgram {
         &self,
         dag: &mut TermDag,
         names: BTreeMap<String, i64>,
-    ) -> Result<SlottedProgram, SourceError> {
+    ) -> Result<ProofContext, SourceError> {
         let mut fresh = FreshSlots::new(
             (0..dag.size())
                 .filter_map(|t| slot_of(dag, t))
                 .chain(names.values().copied()),
         );
-        let mut program = SlottedProgram {
+        let mut program = ProofContext {
             slot_names: names,
             ..Default::default()
         };
@@ -91,27 +90,12 @@ impl ResolvedSlottedProgram {
                     );
                 }
                 ResolvedNCommand::CoreAction(GenericAction::Let(_, name, expr)) => {
-                    let term = ground(
-                        &mut program,
-                        dag,
-                        &mut fresh,
-                        &expr.clone().make_unresolved(),
-                    )?;
+                    let term = ground(&mut program, dag, &mut fresh, expr)?;
                     program.lets.insert(name.name.clone(), term);
                 }
                 ResolvedNCommand::CoreAction(GenericAction::Union(_, lhs, rhs)) => {
-                    let lhs = ground(
-                        &mut program,
-                        dag,
-                        &mut fresh,
-                        &lhs.clone().make_unresolved(),
-                    )?;
-                    let rhs = ground(
-                        &mut program,
-                        dag,
-                        &mut fresh,
-                        &rhs.clone().make_unresolved(),
-                    )?;
+                    let lhs = ground(&mut program, dag, &mut fresh, lhs)?;
+                    let rhs = ground(&mut program, dag, &mut fresh, rhs)?;
                     program.unions.push(Union { lhs, rhs });
                 }
                 ResolvedNCommand::NormRule { rule } => {
@@ -132,12 +116,16 @@ impl ResolvedSlottedProgram {
 }
 
 pub(super) fn ground(
-    program: &mut SlottedProgram,
+    program: &mut ProofContext,
     dag: &mut TermDag,
     fresh: &mut FreshSlots,
-    expr: &Expr,
+    expr: &ResolvedExpr,
 ) -> Result<TermId, SourceError> {
-    for name in expr.vars().filter(|name| name.starts_with('$')) {
+    for name in expr
+        .vars()
+        .map(|var| var.name)
+        .filter(|name| name.starts_with('$'))
+    {
         let name = Slots::default().intern(&name).map_err(SourceError)?;
         if !program.slot_names.contains_key(&name) {
             let numeric = name[1..]
@@ -149,9 +137,24 @@ pub(super) fn ground(
             program.slot_names.insert(name, id);
         }
     }
-    let term = program.ground_term(dag, expr)?;
-    check_term_sort(program, dag, term, None).map_err(SourceError)?;
-    Ok(term)
+    fn materialize(
+        program: &ProofContext,
+        dag: &mut TermDag,
+        expr: &ResolvedExpr,
+    ) -> Result<TermId, SourceError> {
+        match expr {
+            ResolvedExpr::Var(_, var) => program.ground_name(dag, &var.name),
+            ResolvedExpr::Lit(_, literal) => Ok(dag.lit(literal.clone())),
+            ResolvedExpr::Call(_, head, args) => {
+                let args = args
+                    .iter()
+                    .map(|arg| materialize(program, dag, arg))
+                    .collect::<Result<_, _>>()?;
+                Ok(dag.app(head.name().to_owned(), args))
+            }
+        }
+    }
+    materialize(program, dag, expr)
 }
 
 #[cfg(test)]

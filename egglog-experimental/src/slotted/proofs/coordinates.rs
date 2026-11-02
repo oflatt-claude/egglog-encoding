@@ -2,8 +2,8 @@
 //! at an ordinary equality proof; changing its coordinates adds no proof step.
 
 use super::HashMap;
+use super::context::ProofContext;
 use super::format::{MalformedStep, ProofId, SlottedConclusion, SlottedProofStore};
-use super::source::SlottedProgram;
 use super::terms::{Renaming, all_slots, rename};
 use egglog::TermId;
 use egglog::proof::{Justification, Proposition};
@@ -227,7 +227,7 @@ impl Coordinates {
         name: String,
         substitution: Vec<(String, TermId)>,
         premises: Vec<ViewId>,
-        program: &SlottedProgram,
+        program: &ProofContext,
     ) -> ViewId {
         let premises: Vec<_> = premises
             .into_iter()

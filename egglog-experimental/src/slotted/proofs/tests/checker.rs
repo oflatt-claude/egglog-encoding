@@ -1,10 +1,10 @@
 use super::{
     SlottedCheckError, check_claim_in_program as check_claim, check_proof_in_program as check_proof,
 };
+use crate::slotted::proofs::context::{ColumnKind, ProofContext};
 use crate::slotted::proofs::format::{
     Claim, ClaimKind, ProofId, SlottedConclusion, SlottedProof, SlottedProofStore,
 };
-use crate::slotted::proofs::source::{ColumnKind, SlottedProgram};
 use crate::slotted::proofs::terms::{Renaming, slot_term};
 use egglog::proof::{Justification, Proposition};
 use egglog::{TermDag, TermId};
@@ -15,9 +15,9 @@ fn variable(dag: &mut TermDag, name: i64) -> TermId {
     dag.app("V".into(), vec![slot])
 }
 
-fn figure_3() -> (SlottedProofStore, SlottedProgram, Claim) {
+fn figure_3() -> (SlottedProofStore, ProofContext, Claim) {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Mul", vec![ColumnKind::Child, ColumnKind::Child]);
     program.add_constructor("Null", vec![]);
@@ -93,7 +93,7 @@ fn equivariance_checks_both_endpoints() {
 #[test]
 fn claim_witnesses_distinguish_free_and_bound_names() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("F", vec![ColumnKind::Child]);
     program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
@@ -135,7 +135,7 @@ fn claim_witnesses_distinguish_free_and_bound_names() {
 #[test]
 fn alpha_checks_scopes_payloads_and_its_premise() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
     program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
@@ -200,7 +200,7 @@ fn alpha_checks_scopes_payloads_and_its_premise() {
 #[test]
 fn congruence_cannot_put_a_constructor_in_a_binder_column() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
     program.add_constructor("K", vec![]);
@@ -225,7 +225,7 @@ fn congruence_cannot_put_a_constructor_in_a_binder_column() {
 #[test]
 fn source_globals_cannot_be_overridden_by_a_rule_substitution() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("F", vec![ColumnKind::Child]);
     program.add_let(&mut dag, "fixed", "(V $0)").unwrap();
@@ -262,7 +262,7 @@ fn source_globals_cannot_be_overridden_by_a_rule_substitution() {
 #[test]
 fn rule_side_patterns_require_explicit_alpha_and_preserve_free_names() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("F", vec![ColumnKind::Child]);
     program.add_constructor("Pair", vec![ColumnKind::Child, ColumnKind::Child]);
@@ -312,7 +312,7 @@ fn rule_side_patterns_require_explicit_alpha_and_preserve_free_names() {
 #[test]
 fn original_conditions_require_evidence_in_source_order() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     for name in ["F", "G", "H"] {
         program.add_constructor(name, vec![ColumnKind::Child]);
@@ -371,7 +371,7 @@ fn fiat_needs_a_built_term_or_a_union() {
 #[test]
 fn rule_instances_and_minted_slots() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("F", vec![ColumnKind::Child, ColumnKind::Child]);
     program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
@@ -456,7 +456,7 @@ fn rule_instances_and_minted_slots() {
 #[test]
 fn minted_slots_avoid_source_globals() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("F", vec![ColumnKind::Child]);
     program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
@@ -494,7 +494,7 @@ fn minted_slots_avoid_source_globals() {
 #[test]
 fn slot_literals_are_distinct_slots() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
     program.add_constructor("F", vec![ColumnKind::Child, ColumnKind::Child]);
     program.add_constructor("A", vec![]);
@@ -591,7 +591,7 @@ fn corrupt_and_cyclic_proofs_are_rejected() {
 #[test]
 fn variable_term_equality_cannot_equate_names_or_other_carriers() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_sorted_constructor("VA", "A", vec![ColumnKind::Var]);
     program.add_sorted_constructor("VB", "B", vec![ColumnKind::Var]);
     program.add_sorted_constructor("LamA", "A", vec![ColumnKind::Binder, ColumnKind::Child]);
@@ -645,7 +645,7 @@ fn variable_term_equality_cannot_equate_names_or_other_carriers() {
 #[test]
 fn transitivity_cannot_bridge_constructor_sorts() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_sorted_constructor("VA", "A", vec![ColumnKind::Var]);
     program.add_sorted_constructor("VB", "B", vec![ColumnKind::Var]);
     program.add_union(&mut dag, "(VA $0)", "(VA $1)").unwrap();
@@ -672,7 +672,7 @@ fn transitivity_cannot_bridge_constructor_sorts() {
 #[test]
 fn native_rule_bindings_and_conditions_preserve_constructor_sorts() {
     let mut dag = TermDag::default();
-    let mut program = SlottedProgram::default();
+    let mut program = ProofContext::default();
     program.add_sorted_constructor("VA", "A", vec![ColumnKind::Var]);
     program.add_sorted_constructor("VB", "B", vec![ColumnKind::Var]);
     program.add_sorted_constructor("WA", "A", vec![ColumnKind::Child]);
