@@ -131,7 +131,7 @@ example : encodeQuery orderedQuery 0 =
 #guard (indexRule "F" 1).actions.map Action.toEgg ==
   ["(@HasChild (@FView @c0 @e) @c0)", "(@HasChild (@FView @c0 @e) @e)"]
 #guard ((mergeRules { views := .naive } "F" 1).map fun rm => rm.1.actions.map Action.toEgg) ==
-  [["(@UF @z @y)"]]
+  [["(subsume (@FView @c0 @z))", "(@UF @z @y)"]]
 #guard [({} : Options), { views := .naive }, { views := .indexed }, { phased := true },
     { views := .indexed, phased := true }].all fun o =>
   (compileWith o nestedUnion).origins.length == (encodeWith o nestedUnion).rules.length &&

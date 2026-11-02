@@ -272,15 +272,36 @@ def pathCompressRule : Rule :=
     actions := [subsumeUf (.var "@a") (.var "@b"),
                 .expr (ufRow (.var "@a") (.var "@c"))] }
 
+/-- The rule form of a merge annotation `R(k₁,…,kₙ, v) :merge H; m(v, v′)` with `m = min`:
+the last column of `R` depends on the others, two rows at one key keep the one whose value
+is the minimum, subsume the other, and run `H` with the kept value `v` and the subsumed
+value `v′`. egglog provides merge annotations natively; the compiler's two functional
+dependencies, `ufCollideRule` and `viewCongruenceRule`, are instances of this rule. -/
+@[blueprint "def:fd-syntax"
+  (statement := /--
+  \[
+  R(k_1,\ldots,k_n,v)\ \kw{:merge}\ H;\ m(v,v')
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
+def fdRule (R : FnName) (keys : List Expr) (v v' : Var) (extra : Expr → Expr → List Action) :
+    Rule :=
+  { query := [.expr (.app R (keys ++ [.var v])), .expr (.app R (keys ++ [.var v'])),
+              .eq (.var v) (.min (.var v) (.var v')), .ne (.var v) (.var v')],
+    actions := .subsume R (keys ++ [.var v']) :: extra (.var v) (.var v') }
+
 /-- Two parents of one key: keep the smaller, subsume the other edge, and link the larger
-parent under the smaller. -/
+parent under the smaller. The functional dependency of a term's parent on the term. -/
+@[blueprint "def:fd-rule"
+  (statement := /--
+  \[
+  R(k_1,\ldots,k_n,v)\land R(k_1,\ldots,k_n,v')\land v=m(v,v')\land v\ne v'
+    \Rightarrow\kw{subsume}(R(k_1,\ldots,k_n,v')),\ H
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 def ufCollideRule : Rule :=
-  { query := [.expr (ufRow (.var "@a") (.var "@b")),
-              .expr (ufRow (.var "@a") (.var "@c")),
-              .eq (.var "@b") (.min (.var "@b") (.var "@c")),
-              .ne (.var "@b") (.var "@c")],
-    actions := [subsumeUf (.var "@a") (.var "@c"),
-                .expr (ufRow (.var "@c") (.var "@b"))] }
+  fdRule ufName [.var "@a"] "@b" "@c" fun b c => [.expr (ufRow c b)]
 
 /-- `arity` generated variables with a common stem. -/
 def congruenceVars (stem : String) (arity : Nat) : List Expr :=
@@ -317,7 +338,7 @@ def rebuildVars (arity : Nat) : List Expr :=
 
 /-- The naive view: every application's row, from its children's and its own parents; a
 row with a column that has a parent is stale; and the congruence rule, whose query is the
-pattern the view caches, reads two rows at one key. -/
+pattern the view caches, reads two rows at one key and retires the loser. -/
 @[blueprint "def:view-naive"
   (statement := /--
   \[
@@ -327,7 +348,8 @@ pattern the view caches, reads two rows at one key. -/
   \textsc{Stale}_{f,i}&:\ \mathtt{View}_f(c_1,\ldots,c_{n+1})\land\mathtt{UF}(c_i,x)\land c_i\ne x
     \Rightarrow\kw{subsume}(\mathtt{View}_f(c_1,\ldots,c_{n+1}))\\
   \textsc{Cong}_f&:\ \mathtt{View}_f(a'_1,\ldots,a'_n,y)\land\mathtt{View}_f(a'_1,\ldots,a'_n,z)
-    \land y=\min(y,z)\land y\ne z\Rightarrow\mathtt{UF}(z,y)
+    \land y=\min(y,z)\land y\ne z\\
+    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(a'_1,\ldots,a'_n,z)),\ \mathtt{UF}(z,y)
   \end{aligned}
   \]
   -/)
@@ -390,16 +412,19 @@ def rekeyRule (f : FnName) (arity : Nat) (column : Nat) : Rule :=
               .expr (ufRow key (.var "@x")), .ne key (.var "@x")],
     actions := [subsumeView f cs (.var "@e"), .expr moved] }
 
-/-- The congruence rule read over the view: two rows at one key link the larger output
-under the smaller. The losing row is retired by the stale or move rule once its output has
-a parent. -/
+/-- The congruence rule read over the view: two rows at one key keep the smaller output,
+subsume the other row, and link the larger output under the smaller. The functional
+dependency of the view's output on its key. -/
+@[blueprint "def:fd-instances"
+  (statement := /--
+  \[
+  \mathtt{UF}(a,b)\ \kw{:merge}\ \mathtt{UF}(b',b);\ \min(b,b')\qquad
+  \mathtt{View}_f(c_1,\ldots,c_n,y)\ \kw{:merge}\ \mathtt{UF}(y',y);\ \min(y,y')
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 def viewCongruenceRule (f : FnName) (arity : Nat) : Rule :=
-  let cs := rebuildVars arity
-  { query := [.expr (viewRow f cs (.var "@y")),
-              .expr (viewRow f cs (.var "@z")),
-              .eq (.var "@y") (.min (.var "@y") (.var "@z")),
-              .ne (.var "@y") (.var "@z")],
-    actions := [.expr (ufRow (.var "@z") (.var "@y"))] }
+  fdRule (viewName f) (rebuildVars arity) "@y" "@z" fun y z => [.expr (ufRow z y)]
 
 /-- The rules that keep a constructor's view rows canonical, by mode. -/
 def rekeyRules (o : Options) (f : FnName) (arity : Nat) : List (Rule × RuleOrigin) :=

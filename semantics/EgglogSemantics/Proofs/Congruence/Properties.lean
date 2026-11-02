@@ -99,7 +99,7 @@ private theorem mergeRules_unionFree (o : Options) (f : FnName) (k : Nat) :
   · exact rebuildRules_unionFree f k ro hro
   · rw [List.mem_singleton] at hro
     subst hro
-    exact ⟨trivial, trivial⟩
+    exact ⟨trivial, trivial, trivial⟩
 
 private theorem maintenanceGroups_unionFree (o : Options) (P : Program) :
     ∀ ro ∈ (maintenanceGroups o P).flatten, ro.1.UnionFree := by
