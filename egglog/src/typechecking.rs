@@ -315,6 +315,20 @@ impl<'a> TypeInfoView<'a> {
         binding: &IndexMap<&str, (Span, ArcSort)>,
         context: Context,
     ) -> Result<ResolvedActions, TypeError> {
+        // A closed constructor action has no overload or local-scope choices.
+        // Keep this inside ordinary typing and return the same resolved tree.
+        // Other contexts, bindings, multi-action blocks and source signatures
+        // retain the constraint solver and its capability checks/diagnostics.
+        if !self.source_terms
+            && binding.is_empty()
+            && matches!(context, Context::Full)
+            && let [action] = actions.0.as_slice()
+            && let Some(action) = self.types.typecheck_closed_constructor_action(action)
+        {
+            #[cfg(test)]
+            test::CLOSED_CONSTRUCTOR_TYPES.with(|count| count.set(count.get() + 1));
+            return Ok(ResolvedActions::new(vec![action]));
+        }
         let mut binding_set: IndexSet<String> =
             binding.keys().copied().map(str::to_string).collect();
         // We lower to core actions with `union_to_set_optimization`
@@ -1643,6 +1657,57 @@ impl TypeInfo {
         }
     }
 
+    /// Resolve only unambiguous closed constructor calls, preserving every span.
+    /// Declining a node leaves all diagnostics to the ordinary constraint solver.
+    fn typecheck_closed_constructor_action(&self, action: &Action) -> Option<ResolvedAction> {
+        fn check_expr<'a>(types: &'a TypeInfo, expr: &Expr) -> Option<(ResolvedExpr, &'a ArcSort)> {
+            let Expr::Call(span, head, args) = expr else {
+                return None;
+            };
+            if head == "values" || types.is_primitive(head) {
+                return None;
+            }
+            let func = types.get_func_type(head)?;
+            let [output] = func.outputs.as_slice() else {
+                return None;
+            };
+            if func.subtype != FunctionSubtype::Constructor
+                || func.role != FunctionRole::Ordinary
+                || types.indexes.contains_key(&func.name)
+                || !(output.as_ref() as &dyn Any).is::<EqSort>()
+                || func.input.len() != args.len()
+            {
+                return None;
+            }
+            let mut checked = Vec::with_capacity(args.len());
+            for (arg, expected) in args.iter().zip(&func.input) {
+                let (arg, sort) = check_expr(types, arg)?;
+                if sort.name() != expected.name() {
+                    return None;
+                }
+                checked.push(arg);
+            }
+            Some((
+                ResolvedExpr::Call(span.clone(), ResolvedCall::Func(func.clone()), checked),
+                output,
+            ))
+        }
+
+        match action {
+            Action::Expr(span, expr) => Some(ResolvedAction::Expr(
+                span.clone(),
+                check_expr(self, expr)?.0,
+            )),
+            Action::Union(span, left, right) => {
+                let (left, left_sort) = check_expr(self, left)?;
+                let (right, right_sort) = check_expr(self, right)?;
+                (left_sort.name() == right_sort.name() && self.is_sort_unionable(left_sort))
+                    .then(|| ResolvedAction::Union(span.clone(), left, right))
+            }
+            _ => None,
+        }
+    }
+
     pub fn get_sort_by_name(&self, sym: &str) -> Option<&ArcSort> {
         self.sorts.get(sym)
     }
@@ -1833,7 +1898,172 @@ pub enum TypeError {
 
 #[cfg(test)]
 mod test {
-    use crate::{EGraph, Error, typechecking::TypeError};
+    use super::*;
+
+    thread_local! {
+        pub(super) static CLOSED_CONSTRUCTOR_TYPES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[test]
+    fn closed_constructor_typing_matches_full_solver_and_preserves_spans() {
+        #[derive(Clone)]
+        struct TypingPrimitive {
+            name: &'static str,
+            output: ArcSort,
+        }
+        impl Primitive for TypingPrimitive {
+            fn name(&self) -> &str {
+                self.name
+            }
+            fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+                SimpleTypeConstraint::new(self.name(), vec![self.output.clone()], span.clone())
+                    .into_box()
+            }
+        }
+        impl FullPrim for TypingPrimitive {
+            fn apply(&self, _: FullState<'_, '_>, _: &[Value]) -> Option<Value> {
+                unreachable!("this primitive is only typechecked")
+            }
+        }
+
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(
+                None,
+                "(datatype T (A) (B) (Pair T T) (Num i64))
+                 (datatype U (C)) (datatype Frozen (Cold))
+                 (function missing (T) T :no-merge)
+                 (function tuple-result (T) (T T) :merge (values old0 old1))
+                 (function View (T) T :no-merge :internal-role constructor-view)
+                 (index Occ missing (any 0 1)) (let $global (A))",
+            )
+            .unwrap();
+        assert!(graph.functions["View"].is_view());
+        graph.type_info.non_unionable_sorts.insert("Frozen".into());
+        assert!(
+            !graph
+                .type_info
+                .is_sort_unionable(graph.type_info.get_sort_by_name("Frozen").unwrap())
+        );
+        let sort = graph.type_info.get_sort_by_name("T").unwrap().clone();
+        graph.add_full_primitive(
+            TypingPrimitive {
+                name: "full-typing-only",
+                output: sort.clone(),
+            },
+            None,
+        );
+        let unused_binding = IndexMap::from_iter([("oracle_unused", (Span::Panic, sort.clone()))]);
+        for (source, admits) in [
+            ("(Pair (A) (Pair (B) (A)))", true),
+            ("(Pair (Pair (A) (B)) (Pair (A) (B)))", true),
+            ("(union (Pair (A) (B)) (Pair (B) (A)))", true),
+            ("(Cold)", true),
+            ("(union (Cold) (Cold))", false),
+            ("(View (A))", false),
+            ("(union (View (A)) (B))", false),
+            ("(Num 1)", false),
+            ("(Pair (A) (C))", false),
+            ("(Pair (A))", false),
+            ("(union (A) (+ 1 2))", false),
+            ("(union (A) (C))", false),
+            ("(Pair $global (A))", false),
+            ("(missing (A))", false),
+            ("(tuple-result (A))", false),
+            ("(Occ (A) (A) (B))", false),
+            ("(full-typing-only)", false),
+        ] {
+            let Command::Action(action) = graph
+                .parse_program(Some("closed-typing.egg".into()), source)
+                .unwrap()
+                .remove(0)
+            else {
+                panic!("expected one action: {source}");
+            };
+            let actions = Actions::singleton(action);
+            for source_terms in [false, true] {
+                let view = if source_terms {
+                    graph.type_info.source_types()
+                } else {
+                    TypeInfoView::from(&graph.type_info)
+                };
+                assert_eq!(view.source_terms, source_terms);
+                for context in Context::ALL {
+                    let mut fast_symbols = graph.parser.symbol_gen.clone();
+                    let mut solver_symbols = fast_symbols.clone();
+                    let before_fast = CLOSED_CONSTRUCTOR_TYPES.get();
+                    let actual = view.typecheck_standalone_actions(
+                        &mut fast_symbols,
+                        &actions,
+                        &Default::default(),
+                        context,
+                    );
+                    assert_eq!(
+                        CLOSED_CONSTRUCTOR_TYPES.get() - before_fast,
+                        usize::from(admits && !source_terms && context == Context::Full),
+                        "{source}: {context:?}, source_terms={source_terms}",
+                    );
+                    // An unused typed local forces ordinary inference. Keep the
+                    // same context (including Full) and exactly the same spans.
+                    let before_solver = CLOSED_CONSTRUCTOR_TYPES.get();
+                    let expected = view.typecheck_standalone_actions(
+                        &mut solver_symbols,
+                        &actions,
+                        &unused_binding,
+                        context,
+                    );
+                    assert_eq!(CLOSED_CONSTRUCTOR_TYPES.get(), before_solver);
+                    if source == "(full-typing-only)" {
+                        assert_eq!(actual.is_ok(), context == Context::Full);
+                    }
+                    match (actual, expected) {
+                        (Ok(actual), Ok(expected)) => {
+                            assert_eq!(actual, expected, "{source}: {context:?}")
+                        }
+                        (Err(actual), Err(expected)) => assert_eq!(
+                            actual.to_string(),
+                            expected.to_string(),
+                            "{source}: {context:?}"
+                        ),
+                        (actual, expected) => {
+                            panic!("typing differs for {source}: {actual:?}, {expected:?}")
+                        }
+                    }
+                }
+            }
+        }
+        // A constructor/primitive name collision must still enter overload
+        // inference and retain its ambiguity, rather than choosing a constructor.
+        graph.add_full_primitive(
+            TypingPrimitive {
+                name: "A",
+                output: sort,
+            },
+            None,
+        );
+        let Command::Action(action) = graph.parse_program(None, "(A)").unwrap().remove(0) else {
+            unreachable!();
+        };
+        let actions = Actions::singleton(action);
+        let before = CLOSED_CONSTRUCTOR_TYPES.get();
+        let actual = graph.type_info.typecheck_standalone_actions(
+            &mut graph.parser.symbol_gen.clone(),
+            &actions,
+            &Default::default(),
+            Context::Full,
+        );
+        let expected = graph.type_info.typecheck_standalone_actions(
+            &mut graph.parser.symbol_gen.clone(),
+            &actions,
+            &unused_binding,
+            Context::Full,
+        );
+        assert_eq!(CLOSED_CONSTRUCTOR_TYPES.get(), before);
+        assert_eq!(
+            actual.unwrap_err().to_string(),
+            expected.unwrap_err().to_string()
+        );
+    }
 
     #[test]
     fn test_arity_mismatch() {

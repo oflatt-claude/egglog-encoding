@@ -1,4 +1,5 @@
 #![doc = include_str!("lib.md")]
+mod action_execution;
 pub mod api;
 pub mod ast;
 #[cfg(feature = "bin")]
@@ -2344,7 +2345,11 @@ impl EGraph {
                     panic!("Globals should have been desugared away: {name} = {contents}")
                 }
                 _ => {
-                    self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
+                    if let Some(prepared) = self.prepare_resolved_ground_action(&action) {
+                        self.eval_ground_actions(vec![prepared])?;
+                    } else {
+                        self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
+                    }
                 }
             },
             // One `eval_actions` call, so the block's `let`s stay local.
