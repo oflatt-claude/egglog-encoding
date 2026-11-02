@@ -13,20 +13,12 @@
               (Two) = (Two)  rule 1 {}
         (Add (Two) (One)) = (Add (Two) (One))  congr 1
           (Add (Two) (One)) = (Add (Two) (One))  congr 0
-            (Add (Two) (One)) = (Add (Two) (One))  trans
-              (Add (Two) (One)) = (Add (One) (Two))  rule 2 {a := (One), b := (Two)}
-                (Add (One) (Two)) = (Add (One) (Two))  congr 1
-                  (Add (One) (Two)) = (Add (One) (Two))  congr 0
-                    (Add (One) (Two)) = (Add (One) (Two))  rule 0 {}
-                    (One) = (One)  rule 1 {}
-                  (Two) = (Two)  rule 1 {}
-              (Add (One) (Two)) = (Add (Two) (One))  symm
-                (Add (Two) (One)) = (Add (One) (Two))  rule 2 {a := (One), b := (Two)}
-                  (Add (One) (Two)) = (Add (One) (Two))  congr 1
-                    (Add (One) (Two)) = (Add (One) (Two))  congr 0
-                      (Add (One) (Two)) = (Add (One) (Two))  rule 0 {}
-                      (One) = (One)  rule 1 {}
-                    (Two) = (Two)  rule 1 {}
+            (Add (Two) (One)) = (Add (Two) (One))  rule 2 {a := (One), b := (Two)}
+              (Add (One) (Two)) = (Add (One) (Two))  congr 1
+                (Add (One) (Two)) = (Add (One) (Two))  congr 0
+                  (Add (One) (Two)) = (Add (One) (Two))  rule 0 {}
+                  (One) = (One)  rule 1 {}
+                (Two) = (Two)  rule 1 {}
             (Two) = (Two)  rule 1 {}
           (One) = (One)  rule 1 {}
 

@@ -38,7 +38,6 @@ import EgglogSemantics.SourceProof.Format
 import EgglogSemantics.Provenance.Checker
 import EgglogSemantics.Provenance.Encode
 import EgglogSemantics.Provenance.Extract
-import EgglogSemantics.Provenance.Format
 
 -- Lifting
 import EgglogSemantics.Resugar.Builder
@@ -88,11 +87,8 @@ import EgglogSemantics.Proofs.Order
 import EgglogSemantics.Proofs.OrderFinite
 import EgglogSemantics.Proofs.Presentation
 import EgglogSemantics.Proofs.Provenance.Counterexamples
-import EgglogSemantics.Proofs.Provenance.Facts
 import EgglogSemantics.Proofs.Provenance.GeneratedClaim
-import EgglogSemantics.Proofs.Provenance.GeneratedEvaluation
 import EgglogSemantics.Proofs.Provenance.GeneratedSoundness
-import EgglogSemantics.Proofs.Provenance.Model
 import EgglogSemantics.Proofs.Provenance.Soundness
 import EgglogSemantics.Proofs.Query
 import EgglogSemantics.Proofs.Representatives

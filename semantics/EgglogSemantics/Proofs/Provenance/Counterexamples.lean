@@ -11,10 +11,10 @@ private def replacement : Program :=
     .run [⟨[], [.subsume "T" [.lit (.int 2)]]⟩]], []⟩
 
 -- A certificate records a historical firing, even if its row has since been subsumed.
-#guard check replacement (.rule row 0 [] []) == some row
+#guard check replacement (.rule ⟨row, row⟩ 0 [] []) == some row
 #guard (Relational.execSchedule runFuel FDatabase.empty replacement.schedule).any
   fun d => d.terms.contains row && d.subsumed.contains row
--- A subsume has no certificate constructor in the checker.
-#guard (check replacement (.rule row 1 [] [])).isNone
+-- A subsume produces no fact that a rule node may claim.
+#guard (check replacement (.rule ⟨row, row⟩ 1 [] [])).isNone
 
 end Egglog.Provenance.Counterexamples

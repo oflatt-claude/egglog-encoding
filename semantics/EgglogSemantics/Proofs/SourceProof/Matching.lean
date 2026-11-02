@@ -5,7 +5,7 @@ import EgglogSemantics.Proofs.Query
 namespace Egglog.SourceProof
 
 theorem premiseMatches_sound {db : Database} {σ : Env} {p : Pattern} {c : Claim}
-    (hX : db.subsumed = ∅) (ho : p.OrderingFree)
+    (hX : db.subsumed = ∅) (ho : p.OrderingFree) (hm : p.monotoneB = true)
     (hc : c.Holds db) (h : premiseMatches σ p c = true) : Matches db p σ := by
   cases p with
   | expr e =>
@@ -15,10 +15,11 @@ theorem premiseMatches_sound {db : Database} {σ : Env} {p : Pattern} {c : Claim
       simp only [premiseMatches, Bool.and_eq_true_iff, beq_iff_eq] at h
       exact .equal (Lookup.of_eval hX ho.1 h.1 (hc.trans hc.symm).toCong).2
         (Lookup.of_eval hX ho.2 h.2 (hc.symm.trans hc).toCong).2 h.1 h.2 hc.toCong
-  | ne _ _ => simp [premiseMatches] at h
+  | ne _ _ => simp [Pattern.monotoneB] at hm
 
 theorem premisesMatch_sound {db : Database} {σ : Env} {q : Query} {cs : List Claim}
     (hX : db.subsumed = ∅) (ho : ∀ p ∈ q, p.OrderingFree)
+    (hm : ∀ p ∈ q, p.monotoneB = true)
     (hc : ∀ c ∈ cs, c.Holds db) (h : premisesMatch σ q cs = true) :
     ∀ p ∈ q, Matches db p σ := by
   induction q generalizing cs with
@@ -30,8 +31,10 @@ theorem premisesMatch_sound {db : Database} {σ : Env} {q : Query} {cs : List Cl
           simp only [premisesMatch, Bool.and_eq_true_iff] at h
           intro p' hp'
           rcases List.mem_cons.mp hp' with rfl | hp'
-          · exact premiseMatches_sound hX (ho p' (by simp)) (hc c (by simp)) h.1
-          · exact ih (fun p hp => ho p (by simp [hp])) (fun c hc' => hc c (by simp [hc'])) h.2 p' hp'
+          · exact premiseMatches_sound hX (ho p' (by simp)) (hm p' (by simp))
+              (hc c (by simp)) h.1
+          · exact ih (fun p hp => ho p (by simp [hp])) (fun p hp => hm p (by simp [hp]))
+              (fun c hc' => hc c (by simp [hc'])) h.2 p' hp'
 
 mutual
 
@@ -71,7 +74,7 @@ end
 
 /-- A matched pattern supports its variable values on one of the claim's sides. -/
 theorem premiseMatches_lookup_subterm {σ : Env} {p : Pattern} {c : Claim}
-    (ho : p.OrderingFree) (h : premiseMatches σ p c = true)
+    (ho : p.OrderingFree) (hm : p.monotoneB = true) (h : premiseMatches σ p c = true)
     {v : Var} {s : Term} (hv : v ∈ p.vars) (hs : Env.lookup v σ = some s) :
     s ∈ c.lhs.subterms ∨ s ∈ c.rhs.subterms := by
   cases p with
@@ -83,11 +86,12 @@ theorem premiseMatches_lookup_subterm {σ : Env} {p : Pattern} {c : Claim}
       rcases List.mem_union_iff.mp hv with hv | hv
       · exact Or.inl (eval_lookup_subterm hs ho.1 h.1 hv)
       · exact Or.inr (eval_lookup_subterm hs ho.2 h.2 hv)
-  | ne _ _ => simp [premiseMatches] at h
+  | ne _ _ => simp [Pattern.monotoneB] at hm
 
 /-- Matching supported claims suffices to support every query substitution value. -/
 theorem premisesMatch_values {db : Database} (hw : db.WF) {σ : Env}
     {q : Query} {cs : List Claim} (ho : ∀ p ∈ q, p.OrderingFree)
+    (hm : ∀ p ∈ q, p.monotoneB = true)
     (hc : ∀ c ∈ cs, c.Holds db) (hdom : (Env.dom σ).Perm q.vars)
     (h : premisesMatch σ q cs = true) : ∀ b ∈ σ, b.2 ∈ db.terms := by
   have hvar : ∀ v ∈ q.vars, ∀ s, Env.lookup v σ = some s → s ∈ db.terms := by
@@ -101,10 +105,12 @@ theorem premisesMatch_values {db : Database} (hw : db.WF) {σ : Env}
             simp only [premisesMatch, Bool.and_eq_true_iff] at h
             intro v hv s hs
             rcases List.mem_union_iff.mp hv with hv | hv
-            · rcases premiseMatches_lookup_subterm (ho p (by simp)) h.1 hv hs with hl | hr
+            · rcases premiseMatches_lookup_subterm (ho p (by simp)) (hm p (by simp))
+                h.1 hv hs with hl | hr
               · exact hw.subtermClosed _ (eqsInTerms_free (hc c (by simp))).1 hl
               · exact hw.subtermClosed _ (eqsInTerms_free (hc c (by simp))).2 hr
             · exact ih (fun p hp => ho p (by simp [hp]))
+                (fun p hp => hm p (by simp [hp]))
                 (fun c hc' => hc c (by simp [hc'])) h.2 v hv s hs
   intro b hb
   exact hvar b.1 (hdom.mem_iff.mp (Env.mem_dom_of_mem hb)) b.2

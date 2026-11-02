@@ -2,8 +2,10 @@ import EgglogSemantics.Provenance.Encode
 
 /-! Proofs from the firing log. A firing is justified once every premise is established:
 a row premise by a proof of its instance, an equality or disequality premise by a proof of
-a row carrying the side in question. Passes over the log justify firings until none is
-left that can be, and each data row keeps the first proof found for it. -/
+the side in question. A subterm of an established row is established by the same firing,
+whose facts include the reflexivity of every subterm it built. Passes over the log justify
+firings until none is left that can be, and each data row keeps the first proof found for
+it. The proofs are derivations of the checker whose rule nodes are logged firings. -/
 
 namespace Egglog.Provenance
 
@@ -19,18 +21,27 @@ def firings (P : Program) (terms : List Term) : List (Nat × Env) :=
 /-- Proofs of rows, by row. -/
 abbrev Facts := List (Term × Proof)
 
-/-- A proof establishing `t`: a row's proof, or a subterm of one. The proofs at hand come
-first, so that a premise is witnessed by a row of the same firing when it can be. -/
+/-- The reflexive claim of `t`. -/
+def refl (t : Term) : SourceProof.Claim := ⟨t, t⟩
+
+/-- A row's proof, retargeted to a subterm `t` of the row: the same firing states `t = t`. -/
+def part (t : Term) : Proof → Option Proof
+  | .rule _ i σ ps => some (.rule (refl t) i σ ps)
+  | _ => none
+
+/-- A proof establishing `t`: a row's proof, or that proof retargeted to the subterm `t`.
+The proofs at hand come first, so that a premise is witnessed by a row of the same firing
+when it can be. -/
 def establish (facts : Facts) (near : List Proof) (t : Term) : Option Proof :=
   match near.find? (·.fact == t) with
   | some p => some p
   | none =>
   match near.find? fun p => decide (t ∈ p.fact.subtermList) with
-  | some p => some (.subterm t p)
+  | some p => part t p
   | none =>
   match facts.find? (·.1 == t) with
   | some fp => some fp.2
-  | none => (facts.find? fun fp => decide (t ∈ fp.1.subtermList)).map fun fp => .subterm t fp.2
+  | none => (facts.find? fun fp => decide (t ∈ fp.1.subtermList)).bind fun fp => part t fp.2
 
 /-- The proof of a premise: a row premise's instance, the common value of an equality, or
 the first side of a disequality. -/
@@ -52,7 +63,7 @@ def justify (P : Program) (facts : Facts) (i : Nat) (σ : Env) : Option Facts :=
     fun e => do establish facts [] (← e.eval σ)
   let ps ← r.query.mapM (premiseProof facts rows σ)
   some <| r.actions.filterMap fun a => match a with
-    | .expr e => (e.eval σ).map fun t => (t, .rule t i σ ps)
+    | .expr e => (e.eval σ).map fun t => (t, .rule (refl t) i σ ps)
     | _ => none
 
 /-- Justify the pending firings in order, repeatedly, until a pass justifies none. -/
@@ -92,8 +103,8 @@ checker whose rule nodes are logged firings; the passes above find one per row. 
 @[blueprint "def:extract"
   (statement := /--
   \[
-  L\vdash\rho:t\ \triangleq\ P'\vdash\rho:t\ \text{ and every }
-  \kw{rule}_i(t',\sigma;\ldots)\text{ in }\rho\text{ has }
+  L\vdash\pi:c\ \triangleq\ P'\vdash\pi:c\ \text{ and every }
+  \kw{rule}_i(c',\sigma;\ldots)\text{ in }\pi\text{ has }
   \mathtt{fire}_i(\sigma(x_1),\ldots,\sigma(x_n))\in L
   \]
   -/)

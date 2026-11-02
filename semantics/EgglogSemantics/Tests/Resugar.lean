@@ -28,7 +28,8 @@ def validates (P : Program) : Bool := (certificates P).any fun cs =>
   SourceProof.check missingPremise c != some (⟨term "A", term "B"⟩ : SourceProof.Claim)
 #guard let rule := ((Congruence.compile missingPremise).origins.findIdx? (· == .source 1)).getD 0
   (lift missingPremise
-    (.rule (.app ufName [term "Missing", term "Missing"]) rule [] [])).isNone
+    (.rule ⟨.app ufName [term "Missing", term "Missing"],
+      .app ufName [term "Missing", term "Missing"]⟩ rule [] [])).isNone
 
 -- The hand-written fixtures have the verdicts their names promise.
 #guard accepted.all fun f => f.certificates.all fun c => (SourceProof.check f.program c).isSome

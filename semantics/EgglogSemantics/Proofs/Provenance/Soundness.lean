@@ -1,7 +1,6 @@
 import EgglogSemantics.Provenance.Extract
-import EgglogSemantics.Proofs.Provenance.Model
 
-/-! Extraction returns only certificates accepted by the relational checker. This
+/-! Extraction returns only certificates accepted by the unified checker. This
 statement is independent of the origin of the supplied firing log. -/
 
 namespace Egglog.Provenance
@@ -43,10 +42,5 @@ theorem extract_checked {P : Program} {terms : List Term} {facts : Facts}
         · exact List.mem_cons.mpr (Or.inl (by cases x; simp_all))
         · exact List.mem_cons_of_mem _ (ih _ hys _ hm)
     exact fun tp ht => extractEach_checked (aux _ _ h tp ht)
-
-/-- Extraction is sound in any interpretation closed under the checker rules. -/
-theorem extract_sound {P : Program} {terms : List Term} {facts : Facts} {H : Term → Prop}
-    (model : Model P H) (h : extract P terms = some facts) : ∀ tp ∈ facts, H tp.1 :=
-  fun tp ht => check_sound_in_model model (extract_checked h tp ht)
 
 end Egglog.Provenance

@@ -5,7 +5,7 @@ import EgglogSemantics.Proofs.Provenance.Soundness
 namespace Egglog.Resugar
 
 /-- Lifting checks the source claim corresponding to the relational fact. -/
-theorem lift_checked {P : Program} {input : Provenance.Proof}
+theorem lift_checked {P : Program} {input : SourceProof.Proof}
     {output : SourceProof.Proof} {fact : Term} {claim : SourceProof.Claim}
     (hf : Provenance.check (Congruence.encode P) input = some fact)
     (hc : factClaim P fact = some claim) (h : lift P input = some output) :
@@ -24,7 +24,7 @@ theorem lift_checked {P : Program} {input : Provenance.Proof}
     · contradiction
 
 /-- A successful lift is accepted for the claim written on its root. -/
-theorem lift_check_claim {P : Program} {input : Provenance.Proof}
+theorem lift_check_claim {P : Program} {input : SourceProof.Proof}
     {output : SourceProof.Proof} (h : lift P input = some output) :
     SourceProof.check P output = some output.claim := by
   unfold lift at h
@@ -37,11 +37,11 @@ theorem lift_check_claim {P : Program} {input : Provenance.Proof}
     · rename_i hc
       cases Option.some.inj h
       have hc' := beq_iff_eq.mp hc
-      unfold SourceProof.check at hc'
+      unfold SourceProof.check SourceProof.checkIn at hc'
       split at hc'
       · contradiction
       · split at hc'
-        · simp_all [SourceProof.check]
+        · simp_all [SourceProof.check, SourceProof.checkIn]
         · contradiction
     · contradiction
 
@@ -77,7 +77,7 @@ theorem certificates_checked {exec : Program → Option FDatabase} {P : Program}
 
 /-- Lifting establishes the mapped claim in the reached, saturated source state. -/
 theorem lift_supported {P : Program} {db : Database}
-    {input : Provenance.Proof} {output : SourceProof.Proof}
+    {input : SourceProof.Proof} {output : SourceProof.Proof}
     {fact : Term} {claim : SourceProof.Claim}
     (hs : Reach Database.empty P.schedule db) (hw : db.WF)
     (hclosed : ∀ rs ∈ P.runs, RunSaturated rs db)
@@ -87,7 +87,7 @@ theorem lift_supported {P : Program} {db : Database}
   SourceProof.check_supported hs hw hclosed (lift_checked hf hc h)
 
 theorem lift_sound {P : Program} {db : Database}
-    {input : Provenance.Proof} {output : SourceProof.Proof}
+    {input : SourceProof.Proof} {output : SourceProof.Proof}
     {fact : Term} {claim : SourceProof.Claim}
     (hs : Reach Database.empty P.schedule db) (hw : db.WF)
     (hclosed : ∀ rs ∈ P.runs, RunSaturated rs db)
@@ -99,7 +99,7 @@ theorem lift_sound {P : Program} {db : Database}
 
 /-- Lifted claims have represented existence even at spellings absent from the store. -/
 theorem lift_infers {P : Program} {db : Database}
-    {input : Provenance.Proof} {output : SourceProof.Proof}
+    {input : SourceProof.Proof} {output : SourceProof.Proof}
     {fact : Term} {claim : SourceProof.Claim}
     (hs : Reach Database.empty P.schedule db) (hw : db.WF)
     (hclosed : ∀ rs ∈ P.runs, RunSaturated rs db)

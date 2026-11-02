@@ -35,12 +35,16 @@ theorem ruleFacts_supported {P : Program} {db : Database}
     have hh : ∀ c ∈ premises, c.Holds db.completion :=
       fun c hc => (hp c hc).completion hw
     have hn := (sourceOk_fragment hok).noMin.1 r (hmem r hr)
+    have hm : ∀ p ∈ r.query, p.monotoneB = true :=
+      List.all_eq_true.mp (Bool.and_eq_true_iff.mp
+        (List.all_eq_true.mp
+          (Bool.and_eq_true_iff.mp (sourceOk_fragment hok).monotone).1 r (hmem r hr))).1
     have hval : ∀ b ∈ σ, b.2 ∈ db.completion.terms :=
-      premisesMatch_values hw.completion hn.1 hh hchecks.1 hchecks.2
+      premisesMatch_values hw.completion hn.1 hm hh hchecks.1.1 hchecks.1.2
     have hsmean := (db.sameMeaning_completion hw).symm
     obtain ⟨τ, hτ, hrel⟩ := SourceMeaning.querySubst_of_matches_transport
       hw.completion hw hsmean (Database.hasReps_of_finite hs.finite_from_empty)
-      hchecks.1 hval hn.1 (premisesMatch_sound hX hn.1 hh hchecks.2)
+      hchecks.1.1 hval hn.1 (premisesMatch_sound hX hn.1 hm hh hchecks.1.2)
     obtain ⟨d, hd, hfacts⟩ := actionsFacts_sound (db := db.completion) hf
     obtain ⟨out, hout, hsame⟩ := SourceMeaning.evalLocalActions_transport
       hw.completion hw hsmean rfl hrel hn.2 (hdf r hr) hd

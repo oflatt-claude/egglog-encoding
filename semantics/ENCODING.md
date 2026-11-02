@@ -140,14 +140,17 @@ the original, round for round, subsumes the same rows, and settles when the orig
 The difftest checks this literally: the instrumented final state minus the log is the
 original final state (`difftest provenance 64`).
 
-Proofs are read off the log afterwards (`Provenance/Extract.lean`). A firing is justified
-once every premise is established: a row premise by a proof of its instance, an equality
-or disequality premise by a `subterm` proof from a row of the same firing carrying the side
-in question. Passes over the log justify firings until none is left that can be, each data
-row keeps the first proof found for it, and every returned proof is checked with
-`Provenance.check`. Proof lifting (`Resugar/Lift.lean`) is unchanged in format: every
-relational proof becomes a source proof that `SourceProof.check` and the Rust checker
-accept.
+Proofs are read off the log afterwards (`Provenance/Extract.lean`), in the one proof
+language of `SourceProof/Format.lean`: a certificate for the compiled program is a rule
+node `rule_i((t = t), σ; π̄)` for a row `t` the firing wrote, checked by the same checker as
+a source certificate (`Provenance.check` is `SourceProof.checkIn` on a union-free program,
+returning the row). A firing is justified once every premise is established: a row premise
+by the proof of its instance, an equality or disequality premise by the proof of a row of
+the same firing retargeted to the side in question (`part`), a reflexive claim about one of
+its subterms. Passes over the log justify firings until none is left that can be, each data
+row keeps the first proof found for it, and every returned proof is checked. Proof lifting
+(`Resugar/Lift.lean`) turns each such proof into a source proof that `SourceProof.check` and
+the Rust checker accept.
 
 The previous design, a proof column on every row with rules firing once per proof,
 does not work with row replacement: a row re-derived with a new proof is a new row for one
@@ -256,7 +259,7 @@ premise proofs in order. No separate tree describing flattening is stored.
 
 ## Proof lifting
 
-`Resugar.lift` checks a relational proof against the compiled program, then rebuilds it
+`Resugar.lift` checks a proof against the compiled program, then rebuilds it
 recursively as a source proof tree. A UF row becomes an equality, and a value or an
 application the target matched its reflexivity. Generated rules are recognized by their
 origin tags: path compression is transitivity, a parent collision symmetry and
@@ -267,8 +270,9 @@ and recovers its premises by walking the original query in the compiler's order
 ([Resugar/Query.lean](EgglogSemantics/Resugar/Query.lean)): an application's premise is
 its matched atom with each child edge chained into the child's proof and pushed in by
 congruence, made reflexive for a bare pattern (the paper's `e = e`), and an equation's the
-two sides' root edges chained through the equality. A subterm's existence comes from the derivation that introduced
-it, never from a new `fiat`.
+two sides' root edges chained through the equality. A node retargeted to a subterm `s` of
+the row its firing wrote lifts to the existence of `s` within the lifted proof of that row,
+never to a new `fiat`.
 
 Each node is validated by `SourceProof.checkNode` as it is built, and the result is
 checked again by `SourceProof.check`. `lift_sound` therefore inherits the source

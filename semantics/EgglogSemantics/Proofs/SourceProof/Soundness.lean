@@ -104,7 +104,7 @@ theorem check_supported {P : Program} {db : Database} {pf : Proof} {c : Claim}
     (hs : Reach Database.empty P.schedule db) (hw : db.WF)
     (hclosed : ∀ rs ∈ P.runs, RunSaturated rs db) (h : check P pf = some c) :
     c.Supported db := by
-  unfold check at h
+  unfold check checkIn at h
   split at h
   · contradiction
   · rename_i hok

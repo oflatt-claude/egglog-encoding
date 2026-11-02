@@ -58,21 +58,25 @@ private def rewriting : Program :=
 
 private def table (n : Int) : Term := .app "T" [.lit (.int n)]
 private def goalRow : Term := .app "Goal" [.lit (.int 2)]
-private def stored : Proof := .rule (table 3) 0 [] []
-private def goal : Proof := .rule goalRow 0 [] []
+private def stored : Proof := .rule (refl (table 3)) 0 [] []
+private def goal : Proof := .rule (refl goalRow) 0 [] []
 private def three : Term := .lit (.int 3)
+/-- The firing that built `T(3)` also states `3 = 3`. -/
+private def threeProof : Proof := .rule (refl three) 0 [] []
 private def rewritten : Proof :=
-  .rule (table 2) 1 [("x", three), ("y", .lit (.int 2))] [stored, goal, .subterm three stored]
+  .rule (refl (table 2)) 1 [("x", three), ("y", .lit (.int 2))] [stored, goal, threeProof]
 
 #guard check rewriting stored == some (table 3)
+#guard check rewriting threeProof == some three
 #guard check rewriting rewritten == some (table 2)
-#guard (check rewriting (.rule (table 2) 0 [] [])).isNone
-#guard (check rewriting (.rule (table 2) 1 [] [])).isNone
+#guard (check rewriting (.rule (refl (table 2)) 0 [] [])).isNone
+#guard (check rewriting (.rule (refl (table 2)) 1 [] [])).isNone
 -- The disequality must hold between the bound values.
-#guard (check rewriting (.rule (table 2) 1 [("x", .lit (.int 2)), ("y", .lit (.int 2))]
-  [stored, goal, .subterm (.lit (.int 2)) goal])).isNone
+#guard (check rewriting (.rule (refl (table 2)) 1 [("x", .lit (.int 2)), ("y", .lit (.int 2))]
+  [stored, goal, .rule (refl (.lit (.int 2))) 0 [] []])).isNone
 -- Every node is checked, not only the root.
-#guard (check rewriting (.subterm (table 3) (.rule (table 2) 0 [] []))).isNone
+#guard (check rewriting (.rule (refl (table 3)) 1 [("x", three), ("y", .lit (.int 2))]
+  [.rule (refl (table 2)) 0 [] [], goal, threeProof])).isNone
 
 -- The log is what the extraction reads: without it no row has a proof.
 private def uninstrumented : Option FDatabase :=
