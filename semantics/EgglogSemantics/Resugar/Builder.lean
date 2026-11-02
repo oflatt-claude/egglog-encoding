@@ -50,7 +50,7 @@ and otherwise from a subproof. -/
   \operatorname{exist}_s(\pi)&=\kw{trans}(\pi,\kw{sym}(\pi))&&\text{if }P\vdash\pi:s=t\\
   \operatorname{exist}_s(\pi)&=\kw{trans}(\kw{sym}(\pi),\pi)&&\text{if }P\vdash\pi:t=s\\
   \operatorname{exist}_s(\kw{rule}_i(c,\sigma;\pi_1,\ldots,\pi_n))&=\kw{rule}_i((s=s),\sigma;\pi_1,\ldots,\pi_n)
-    &&\text{if }(s=s)\in\operatorname{facts}_\sigma(H_i)\\
+    &&\text{if }r_i=(Q_i\Rightarrow H_i)\text{ and }(s=s)\in\operatorname{facts}_\sigma(H_i)\\
   \operatorname{exist}_s(\pi)&=\operatorname{exist}_s(\pi')&&\text{for a subproof }\pi'\text{ of }\pi\text{, otherwise}
   \end{aligned}
   \]
