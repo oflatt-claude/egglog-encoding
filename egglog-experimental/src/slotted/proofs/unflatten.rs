@@ -1,7 +1,7 @@
 //! Lift proofs of flattened rewrites back to the original source rules.
 use super::context::{ProofContext, pattern_term};
 use super::coordinates::Coordinates;
-use super::format::{ProofId, RulePremise, SlottedConclusion, SlottedProof, SlottedProofStore};
+use super::format::{ProofId, RulePremise, SlottedProof, SlottedProofStore};
 use super::guards::proof_body;
 use super::terms::{Renaming, term_renaming};
 use super::{HashMap, HashSet};
@@ -15,10 +15,10 @@ type Result<T> = std::result::Result<T, String>;
 pub(super) fn lift(
     old: SlottedProofStore,
     program: &ProofContext,
-    conclusion: SlottedConclusion,
-) -> Result<(SlottedProofStore, SlottedConclusion)> {
+    root: ProofId,
+) -> Result<(SlottedProofStore, ProofId)> {
     let steps: Vec<_> = old
-        .dependencies(conclusion.proof)
+        .dependencies(root)
         .into_iter()
         .map(|id| (id, old.get(id).clone()))
         .collect();
@@ -119,9 +119,7 @@ pub(super) fn lift(
         };
         lifted.insert(id, result);
     }
-    let (store, mut result) = out.finish(lifted[&conclusion.proof]);
-    result.renaming = result.renaming.compose(&conclusion.renaming);
-    Ok((store, result))
+    Ok(out.finish(lifted[&root]))
 }
 
 fn source_fiat(

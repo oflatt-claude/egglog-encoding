@@ -3,7 +3,7 @@
 
 use super::HashMap;
 use super::context::ProofContext;
-use super::format::{MalformedStep, ProofId, SlottedConclusion, SlottedProofStore};
+use super::format::{MalformedStep, ProofId, SlottedProofStore};
 use super::terms::{Renaming, all_slots, rename};
 use egglog::TermId;
 use egglog::proof::{Justification, Proposition};
@@ -272,12 +272,7 @@ impl Coordinates {
         self.store.proof_to_string(self.views[id].proof)
     }
 
-    pub fn finish(self, id: ViewId) -> (SlottedProofStore, SlottedConclusion) {
-        let p = &self.views[id];
-        let conclusion = SlottedConclusion {
-            proof: p.proof,
-            renaming: p.proposition.renaming.clone(),
-        };
-        (self.store, conclusion)
+    pub fn finish(self, id: ViewId) -> (SlottedProofStore, ProofId) {
+        (self.store, self.views[id].proof)
     }
 }

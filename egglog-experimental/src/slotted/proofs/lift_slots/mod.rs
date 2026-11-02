@@ -6,8 +6,7 @@
 
 use super::context::{ColumnKind, ProofContext, SourceFact, pattern_term};
 use super::coordinates::{Coordinates, ViewId};
-use super::format::Claim;
-use super::format::{SlottedConclusion, SlottedProofStore};
+use super::format::{Claim, SlottedProofStore};
 use super::pipeline::EncodingNames;
 use super::terms::{FreshSlots, Renaming, all_slots, rename, slot_of, slot_term, term_renaming};
 
@@ -54,7 +53,7 @@ pub(super) fn lift(
     claim: &Claim,
     query: &ProofNames,
     roots: [&str; 2],
-) -> LiftResult<(SlottedProofStore, SlottedConclusion)> {
+) -> LiftResult<(SlottedProofStore, ProofId)> {
     let mut tr = SlotLifter::new(program, dag, names, egg);
     let id = tr.claim(root, claim, query, roots)?;
     Ok(tr.out.finish(id))

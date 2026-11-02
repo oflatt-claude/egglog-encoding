@@ -22,8 +22,8 @@ variable constructor, for example `(V Var)` in `Math`; `(V $a)` is a `Math` term
 A binder column holds a `Var` name directly. Ordinary proof steps compare terms
 syntactically: `(Lam $a (V $a))` and `(Lam $b (V $b))` are different terms.
 Equivariance explicitly transports proofs between slot names. Alpha changes
-bound names by scope. The final claim records
-how its requested terms are named in the proof.
+bound names by scope. The claim checker infers how the requested terms are named
+in the proof.
 
 Printed proofs preserve source slot names in terms, substitutions, and renamings.
 They use egglog's S-expression format, with `let` bindings for shared subproofs
@@ -161,9 +161,10 @@ example, after `(let p (F (V $a)))`, `(check (= p (F (V $b))))` can print a proo
 of `(F (V $a)) = (F (V $a))`: the query match selects `$a` for `$b`.
 This instantiation happens before constructing the equality and its renaming witness.
 
-A claim carries an ordinary proof and a separate renaming witness `m`. For source
-terms `a` and `b`, the proof must have exactly the endpoints
-`a = rename(m, b)`, after the usual binder refresh on the source terms.
+The checker infers a renaming witness `m` from the claim and its root proof. For
+source terms `a` and `b`, the proof must have exactly the endpoints
+`a = rename(m, b)`, after the usual binder refresh on the source terms. The
+witness is returned by checking; it is not stored alongside the proof.
 
 `(check (= a b))` additionally requires `m` to fix the free slots of `b`, or the
 free slots of `a`. The latter is sufficient by equivariance with `m⁻¹` and
@@ -238,8 +239,11 @@ original `:when` order. Unnamed rewrites receive names unique across scopes and
 successive inputs.
 
 The public `check_proof` and `check_claim` functions take a
-`ResolvedSlottedProgram`, together with the proof store and root or claim.
-It contains native `ResolvedNCommand`s and constructor binder positions.
+`ResolvedSlottedProgram`, together with the proof store and root `ProofId`.
+`check_claim` also takes the requested `Claim` and returns its inferred renaming
+witness. Slot lifting and unflattening each return `(SlottedProofStore, ProofId)`.
+
+The resolved program contains native `ResolvedNCommand`s and constructor binder positions.
 `resolve_program` prepares it from source parsed with `egglog::ast::parse_sexps`:
 supply the prefix visible at the query, with includes resolved from the working
 directory. Rewrites become typed rules with their root fact, original conditions,

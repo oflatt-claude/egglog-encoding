@@ -19,8 +19,7 @@ mod unflatten;
 pub use checker::{SlottedCheckError, check_claim, check_proof};
 pub use context::SourceError;
 pub use format::{
-    Claim, ClaimKind, ProofId, RulePremise, RuleProof, SlottedConclusion, SlottedProof,
-    SlottedProofStore,
+    Claim, ClaimKind, ProofId, RulePremise, RuleProof, SlottedProof, SlottedProofStore,
 };
 pub use program::ResolvedSlottedProgram;
 pub use resolve::resolve_program;

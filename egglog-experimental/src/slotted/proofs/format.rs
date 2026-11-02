@@ -31,16 +31,6 @@ pub struct Claim {
     pub rhs: TermId,
 }
 
-/// An ordinary proof of `lhs = rename(renaming, rhs)` for a surface claim.
-/// The witness belongs to the claim, not to the proof's equality propositions.
-#[derive(Clone, Debug)]
-pub struct SlottedConclusion {
-    /// The ordinary equality proof.
-    pub proof: ProofId,
-    /// How the requested right-hand term is named in the proof.
-    pub renaming: Renaming,
-}
-
 /// An equality proof, with typed source-rule premises and slotted equality steps.
 /// Every premise ID refers to the same [`SlottedProofStore`].
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -627,19 +617,15 @@ impl SlottedProofStore {
         proofs[&root]
     }
 
-    /// Print the proof, wrapped in a `Claim` when a renaming witness is needed.
-    pub fn conclusion_to_string(&mut self, conclusion: &SlottedConclusion) -> String {
-        let p = self.proposition(conclusion.proof).clone();
-        let rhs = rename(&mut self.term_dag, &conclusion.renaming.inverse(), p.rhs);
-        let witness = conclusion
-            .renaming
-            .restricted(&all_slots(&self.term_dag, rhs));
-        let names = self.display_names(
-            Some(conclusion.proof),
-            witness.entries().flat_map(|(a, b)| [a, b]),
-        );
+    /// Print a claim's proof with the renaming returned by [`super::check_claim`].
+    /// Wrap it in a printed `Claim` when the witness changes the right endpoint.
+    pub fn claim_to_string(&mut self, root: ProofId, renaming: &Renaming) -> String {
+        let p = self.proposition(root).clone();
+        let rhs = rename(&mut self.term_dag, &renaming.inverse(), p.rhs);
+        let witness = renaming.restricted(&all_slots(&self.term_dag, rhs));
+        let names = self.display_names(Some(root), witness.entries().flat_map(|(a, b)| [a, b]));
         let (mut dag, terms) = self.named_dag(&names);
-        let mut proof = self.proof_term(conclusion.proof, &mut dag, &terms, &names);
+        let mut proof = self.proof_term(root, &mut dag, &terms, &names);
         if rhs != p.rhs {
             let renaming = Self::renaming_term(&mut dag, &witness, &names);
             let rhs = dag.app("rename".into(), vec![renaming, terms[rhs]]);

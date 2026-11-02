@@ -1,12 +1,10 @@
 //! Checks surface proofs against the slotted source program.
 
 use super::context::{ProofContext, SourceFact, check_term_sort, pattern_term};
-use super::format::{
-    Claim, ClaimKind, RulePremise, RuleProof, SlottedConclusion, SlottedProof, SlottedProofStore,
-};
+use super::format::{Claim, ClaimKind, RulePremise, RuleProof, SlottedProof, SlottedProofStore};
 use super::guards::{GuardValidators, proof_body};
 use super::program::ResolvedSlottedProgram;
-use super::terms::{all_slots, rename, slot_of};
+use super::terms::{Renaming, all_slots, rename, slot_of, slot_term, term_renaming};
 use super::{HashMap, HashSet};
 use egglog::ast::{
     Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact, ResolvedNCommand, ResolvedVar,
@@ -113,15 +111,17 @@ pub fn check_proof(
 }
 
 /// Check a claim and its proof against the resolved original slotted program.
-/// Terms in `claim` and `conclusion` belong to `store`.
+/// Return the permutation from the claim's right endpoint to the proved one,
+/// after refreshing binders. For ordinary equality it must fix the free slots
+/// of at least one endpoint. The claim's terms and `root` belong to `store`.
 pub fn check_claim(
     store: &mut SlottedProofStore,
     source: &ResolvedSlottedProgram,
     claim: &Claim,
-    conclusion: &SlottedConclusion,
-) -> Result<(), SlottedCheckError> {
+    root: ProofId,
+) -> Result<Renaming, SlottedCheckError> {
     let program = source.for_proof(store)?;
-    check_claim_in_program(store, &program, claim, conclusion)
+    check_claim_in_program(store, &program, claim, root)
 }
 
 type CheckedProofs = HashMap<ProofId, Proposition>;
@@ -165,34 +165,35 @@ pub(super) fn check_claim_in_program(
     store: &mut SlottedProofStore,
     program: &ProofContext,
     claim: &Claim,
-    conclusion: &SlottedConclusion,
-) -> Result<(), SlottedCheckError> {
-    let proven = check_proof_in_program(store, program, conclusion.proof)?;
+    root: ProofId,
+) -> Result<Renaming, SlottedCheckError> {
+    let proven = check_proof_in_program(store, program, root)?;
     let lhs = program.refresh_binders(&mut store.term_dag, claim.lhs);
     let rhs = program.refresh_binders(&mut store.term_dag, claim.rhs);
-    let holds = proven.lhs == lhs
-        && proven.rhs == rename(&mut store.term_dag, &conclusion.renaming, rhs)
-        && match claim.kind {
-            ClaimKind::RenamingEq => true,
-            ClaimKind::Eq => {
-                let free_rhs = program.free_slots(&store.term_dag, rhs);
-                let free_lhs = program.free_slots(&store.term_dag, lhs);
-                !conclusion.renaming.moves_any(&free_rhs)
-                    || !conclusion.renaming.moves_any(&free_lhs)
-            }
+    if proven.lhs == lhs {
+        let witness = match claim.kind {
+            ClaimKind::RenamingEq => term_renaming(&store.term_dag, &[(rhs, proven.rhs)]),
+            ClaimKind::Eq => [rhs, lhs].into_iter().find_map(|endpoint| {
+                let mut pairs = vec![(rhs, proven.rhs)];
+                for slot in program.free_slots(&store.term_dag, endpoint) {
+                    let term = slot_term(&mut store.term_dag, slot);
+                    pairs.push((term, term));
+                }
+                term_renaming(&store.term_dag, &pairs)
+            }),
         };
-    if holds {
-        Ok(())
-    } else {
-        Err(SlottedCheckError::Claim {
-            kind: match claim.kind {
-                ClaimKind::Eq => "=".into(),
-                ClaimKind::RenamingEq => "renaming-=".into(),
-            },
-            proven: store.proposition_to_string(&proven),
-            claim: store.proposition_to_string(&Proposition::new(claim.lhs, claim.rhs)),
-        })
+        if let Some(witness) = witness {
+            return Ok(witness);
+        }
     }
+    Err(SlottedCheckError::Claim {
+        kind: match claim.kind {
+            ClaimKind::Eq => "=".into(),
+            ClaimKind::RenamingEq => "renaming-=".into(),
+        },
+        proven: store.proposition_to_string(&proven),
+        claim: store.proposition_to_string(&Proposition::new(claim.lhs, claim.rhs)),
+    })
 }
 
 fn proposition_string(dag: &TermDag, p: &Proposition) -> String {

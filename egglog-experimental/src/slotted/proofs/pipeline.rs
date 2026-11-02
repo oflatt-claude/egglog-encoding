@@ -3,7 +3,6 @@
 use super::HashMap;
 use super::checker::check_claim;
 use super::context::{ProofContext, SourceError};
-use super::format::SlottedConclusion;
 use super::lift_slots::{self, matched_frame};
 use super::program::ResolvedSlottedProgram;
 use super::resolve::resolve_program;
@@ -387,19 +386,16 @@ impl SlottedProofState {
         )
         .map_err(|e| format!("claim {claim}: {e}"))?;
         let (mut store, proof) = super::unflatten::lift(store, &program, proof)?;
-        check_claim(&mut store, &resolved, &source, &proof).map_err(|e| {
+        check_claim(&mut store, &resolved, &source, proof).map_err(|e| {
             format!(
                 "the translated proof does not check: {e}\n{}",
-                store.conclusion_to_string(&proof)
+                store.proof_to_string(proof)
             )
         })?;
-        let proof = SlottedConclusion {
-            proof: store.simplify(proof.proof),
-            ..proof
-        };
-        check_claim(&mut store, &resolved, &source, &proof)
+        let proof = store.simplify(proof);
+        let renaming = check_claim(&mut store, &resolved, &source, proof)
             .map_err(|e| format!("the normalized proof does not check: {e}"))?;
-        Ok(store.conclusion_to_string(&proof))
+        Ok(store.claim_to_string(proof, &renaming))
     }
 }
 

@@ -2,9 +2,7 @@ use super::{
     SlottedCheckError, check_claim_in_program as check_claim, check_proof_in_program as check_proof,
 };
 use crate::slotted::proofs::context::{ColumnKind, ProofContext};
-use crate::slotted::proofs::format::{
-    Claim, ClaimKind, ProofId, SlottedConclusion, SlottedProof, SlottedProofStore,
-};
+use crate::slotted::proofs::format::{Claim, ClaimKind, ProofId, SlottedProof, SlottedProofStore};
 use crate::slotted::proofs::terms::{Renaming, slot_term};
 use egglog::proof::{Justification, Proposition};
 use egglog::{TermDag, TermId};
@@ -46,16 +44,11 @@ fn redundancy_by_equivariance() {
         store.proposition_to_string(&proven),
         "(Mul (V $9) (Null)) = (Null)"
     );
-    check_claim(
-        &mut store,
-        &program,
-        &claim,
-        &SlottedConclusion {
-            proof,
-            renaming: Renaming::identity(),
-        },
-    )
-    .unwrap();
+    assert!(
+        check_claim(&mut store, &program, &claim, proof)
+            .unwrap()
+            .is_identity()
+    );
     let text = store.proof_to_string(proof);
     assert!(
         text.contains("(Equivariance") && text.contains("(renaming ($7 $9) ($9 $7))"),
@@ -91,7 +84,7 @@ fn equivariance_checks_both_endpoints() {
 }
 
 #[test]
-fn claim_witnesses_distinguish_free_and_bound_names() {
+fn inferred_claim_witnesses_distinguish_free_and_bound_names() {
     let mut dag = TermDag::default();
     let mut program = ProofContext::default();
     program.add_constructor("V", vec![ColumnKind::Var]);
@@ -107,29 +100,84 @@ fn claim_witnesses_distinguish_free_and_bound_names() {
         .unwrap();
     let mut store = SlottedProofStore::new(dag);
     let proof = store.fiat(free.lhs, free.lhs);
-    let witness = SlottedConclusion {
-        proof,
-        renaming: Renaming::new([(0, 1), (1, 0)]).unwrap(),
-    };
-    assert!(check_claim(&mut store, &program, &free, &witness).is_err());
+    assert!(check_claim(&mut store, &program, &free, proof).is_err());
     let renaming_claim = Claim {
         kind: ClaimKind::RenamingEq,
         ..free
     };
-    check_claim(&mut store, &program, &renaming_claim, &witness).unwrap();
-    let wrong = SlottedConclusion {
-        renaming: Renaming::identity(),
-        ..witness.clone()
+    let witness = Renaming::new([(0, 1), (1, 0)]).unwrap();
+    assert_eq!(
+        check_claim(&mut store, &program, &renaming_claim, proof).unwrap(),
+        witness
+    );
+    let reflexive = Claim {
+        rhs: free.lhs,
+        ..renaming_claim
     };
-    assert!(check_claim(&mut store, &program, &renaming_claim, &wrong).is_err());
+    assert!(
+        check_claim(&mut store, &program, &reflexive, proof)
+            .unwrap()
+            .is_identity()
+    );
     let proof = store.fiat(bound.lhs, bound.lhs);
-    check_claim(
-        &mut store,
-        &program,
-        &bound,
-        &SlottedConclusion { proof, ..witness },
-    )
-    .unwrap();
+    assert_eq!(
+        check_claim(&mut store, &program, &bound, proof).unwrap(),
+        witness
+    );
+}
+
+#[test]
+fn ordinary_claim_witness_can_fix_the_left_endpoints_free_names() {
+    let mut dag = TermDag::default();
+    let mut program = ProofContext::default();
+    program.add_constructor("V", vec![ColumnKind::Var]);
+    program.add_constructor("F", vec![ColumnKind::Child]);
+    program.add_let(&mut dag, "lhs", "(F (V $2))").unwrap();
+    program.add_let(&mut dag, "rhs", "(V $0)").unwrap();
+    program.add_union(&mut dag, "lhs", "rhs").unwrap();
+    let claim = program.claim(&mut dag, "=", "lhs", "(V $1)").unwrap();
+    let mut store = SlottedProofStore::new(dag);
+    let proof = store.fiat(program.lets["lhs"], program.lets["rhs"]);
+    let witness = check_claim(&mut store, &program, &claim, proof).unwrap();
+    assert_eq!(witness.apply(1), 0);
+    assert_eq!(witness.apply(2), 2);
+}
+
+#[test]
+fn claim_inference_requires_exact_structure_and_a_bijection() {
+    let mut dag = TermDag::default();
+    let mut program = ProofContext::default();
+    program.add_constructor("V", vec![ColumnKind::Var]);
+    program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+    program.add_constructor("Other", vec![ColumnKind::Child; 2]);
+    program
+        .add_let(&mut dag, "distinct", "(Pair (V $0) (V $1))")
+        .unwrap();
+    program
+        .add_let(&mut dag, "repeated", "(Pair (V $0) (V $0))")
+        .unwrap();
+    for (lhs, rhs) in [
+        ("distinct", "(Pair (V $2) (V $2))"),
+        ("repeated", "(Pair (V $2) (V $3))"),
+        ("distinct", "(Other (V $0) (V $1))"),
+    ] {
+        let claim = program.claim(&mut dag, "renaming-=", lhs, rhs).unwrap();
+        let mut store = SlottedProofStore::new(dag.clone());
+        let proof = store.fiat(claim.lhs, claim.lhs);
+        assert!(
+            matches!(
+                check_claim(&mut store, &program, &claim, proof),
+                Err(SlottedCheckError::Claim { .. })
+            ),
+            "{lhs} and {rhs} must not match"
+        );
+    }
+    let claim = program
+        .claim(&mut dag, "renaming-=", "distinct", "distinct")
+        .unwrap();
+    let mut store = SlottedProofStore::new(dag);
+    let wrong_root = store.fiat(program.lets["repeated"], program.lets["repeated"]);
+    assert!(check_claim(&mut store, &program, &claim, wrong_root).is_err());
 }
 
 #[test]
