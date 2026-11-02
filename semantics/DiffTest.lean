@@ -1056,7 +1056,7 @@ def main (args : List String) : IO UInt32 := do
     match Program.ofEgg text with
     | .error e => IO.eprintln s!"difftest: {src}: {e}"; return 1
     | .ok p =>
-      let some pfs := Resugar.checkProofs
+      let some pfs := Resugar.prove
           (fun Q => relationalExecAt runFuel FDatabase.empty Q.schedule) p
         | IO.eprintln "difftest: no proof of the check"; return 1
       -- Simplified for presentation, and checked again.

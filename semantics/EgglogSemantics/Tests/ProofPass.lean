@@ -31,6 +31,11 @@ def proofs : Option (List SourceProof.Proof) := do
 #guard run.any fun d =>
   (Provenance.proofs (Congruence.encode program) (Provenance.eraseLog d.terms)).isNone
 
+-- `prove` proves the final check, with proofs about the original program.
+#guard (Resugar.prove (fun Q => Relational.execSchedule runFuel FDatabase.empty Q.schedule)
+  program).any fun ps => ps.length == program.check.length && ps.all fun p =>
+    SourceProof.check program p == some p.claim
+
 /-- The computed proofs are subject to the general checked-output guarantee. -/
 theorem proofs_checked {ps : List SourceProof.Proof} (h : proofs = some ps) :
     ∀ p ∈ ps, SourceProof.check program p = some p.claim := by

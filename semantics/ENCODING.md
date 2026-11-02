@@ -279,6 +279,15 @@ checked again by `SourceProof.check`. `lift_sound` therefore inherits the source
 checker's soundness: a lifted claim whose endpoints the source holds is a source
 congruence.
 
+`Resugar.prove` is egglog's `prove`: a rule with the final check as its query and a fresh
+nullary goal as its head runs after the schedule, the goal's row is proved like any other,
+and the premises of that rule node are the proofs of the check's conjuncts, about the
+original program. `difftest paper-proof <file.egg>` prints that proof in the paper's
+notation, after `SourceProof.Proof.simplify` removes the reflexive detours of a mechanical
+lifting (a transitivity through a reflexive side, a congruence with a reflexive child, a
+doubled symmetry, the symmetry of a rule node whose firing states the reversed claim; the
+result is checked again).
+
 `Resugar.Export` writes proofs as JSON certificates with the program as `.egg` source,
 listing each tree's nodes in postorder with shared subtrees, and
 [proof_certificate.rs](../egglog/src/proofs/proof_certificate.rs) replays them through

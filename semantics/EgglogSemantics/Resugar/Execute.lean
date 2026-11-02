@@ -1,6 +1,5 @@
 import EgglogSemantics.Resugar.Lift
 import EgglogSemantics.Impl.Interp
-import EgglogSemantics.Congruence.Relational
 
 namespace Egglog.Resugar
 
@@ -13,28 +12,22 @@ def certificates (exec : Program → Option FDatabase) (P : Program) :
   let d ← exec annotated
   sourceProofs P d.terms
 
-/-- A checked source proof of every conjunct of the final check. The compiled check is
-matched against the final state, the lifted proof of each compiled premise is looked up
-among the certificates, and the source check is rebuilt from them exactly as a rule's
-premises are (`query`). A side of the check need not be built as a node: it is matched up
-to congruence, and the rebuilt proof carries that congruence. -/
-def checkProofs (exec : Program → Option FDatabase) (P : Program) : Option (List Proof) := do
-  let compiled := Congruence.compile P
-  let annotated ← Provenance.encode compiled.program
-  let d ← exec annotated
-  let certs ← sourceProofs P d.terms
-  let σ ← (Relational.matchQuery d.forgetSubsumed compiled.program.check).head?
-  let premises ← compiled.program.check.mapM fun p => do
-    let t ← match p with
-      | .expr e => e.eval σ
-      | .eq a b => do
-        let x ← a.eval σ
-        let y ← b.eval σ
-        if x == y then some x else none
-      | .ne _ _ => none
-    let c ← factClaim P t
-    certs.find? (·.claim == c)
-  let pfs ← query P P.check premises
-  if pfs.all (fun pf => SourceProof.check P pf == some pf.claim) then some pfs else none
+/-- A function name not used by the program: `base`, or `base` with the least number
+appended that makes it new. -/
+def freshName (P : Program) (base : String) : FnName :=
+  ((List.range (P.names.length + 1)).map fun n => if n = 0 then base else base ++ toString n)
+    |>.find? (fun s => !P.names.contains s) |>.getD base
+
+/-- Prove the final check as egglog's `prove` does: a rule with the check as its query and
+a fresh nullary goal as its head runs after the schedule, the goal's row gets its proof like
+any other row, and the proofs of the check's conjuncts are the premises of that rule node,
+each a proof about the original program. -/
+def prove (exec : Program → Option FDatabase) (P : Program) : Option (List Proof) := do
+  let goal : Term := .app (freshName P "prove") []
+  let rule : Rule := ⟨P.check, [.expr goal.toExpr]⟩
+  let certs ← certificates exec { schedule := .seq P.schedule (.run [rule]), check := P.check }
+  let root ← certs.find? (·.claim == (⟨goal, goal⟩ : SourceProof.Claim))
+  let .rule _ _ _ premises := root | none
+  if premises.all (fun p => SourceProof.check P p == some p.claim) then some premises else none
 
 end Egglog.Resugar

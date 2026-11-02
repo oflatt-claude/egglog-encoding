@@ -217,9 +217,10 @@ def compiled (source : Program) : String :=
 A source proof in the syntax of the paper's proof figure, `rule_i(c, σ; π₁, …, πₙ)`,
 `sym(π)`, `trans(π, π)` and `cong_k(π, π)`, with rule indices and child positions counted
 from one as the paper does. A node that fits on a line is printed inline; otherwise its
-arguments go on the following lines, one level in. Nested terms are named `t₁, t₂, …` and
-rule nodes with premises that occur more than once are named `π₁, π₂, …`, both in a
-`where` clause. -/
+arguments go on the following lines, one level in. A `where` clause names what recurs:
+nested terms mentioned in more than one place as `t₁, t₂, …`, substitutions of more than
+one rule node as `σ₁, σ₂, …`, and rule nodes with premises that occur more than once as
+`π₁, π₂, …`. -/
 
 open SourceProof (Proof Claim)
 
@@ -243,16 +244,31 @@ partial def queryVars (q : Query) : List Var :=
     | .eq a b | .ne a b => ofExpr a ++ ofExpr b
   (q.flatMap ofPattern).foldl (fun acc v => if acc.contains v then acc else acc ++ [v]) []
 
+/-- The variable order of rule `i`. -/
+def ruleOrder (P : Program) (i : Nat) : List Var :=
+  (P.rules[i]?.map fun r => queryVars r.query).getD []
+
 /-- A substitution, its bindings in the order the rule's query first mentions them. -/
 def subst (abbrevs : List Expr) (order : List Var) (σ : Env) : String :=
-  let σ := (order.filterMap fun v => (σ.find? (·.1 == v))) ++ σ.filter fun b => !order.contains b.1
+  let σ := (order.filterMap fun v => σ.find? (·.1 == v))
+    ++ σ.filter fun b => !order.contains b.1
   if σ.isEmpty then "\\emptyset"
   else "[" ++ String.intercalate ",\\ " (σ.map fun b => var b.1 ++ "\\mapsto " ++ term abbrevs b.2)
     ++ "]"
 
-/-- The variable order of rule `i`. -/
-def ruleOrder (P : Program) (i : Nat) : List Var :=
-  (P.rules[i]?.map fun r => queryVars r.query).getD []
+/-- Names for what recurs: terms (an abbreviation list), substitutions and rule nodes, the
+latter two by their rendered text. -/
+structure Names where
+  terms : List Expr
+  substs : List (String × Nat)
+  proofs : List (String × Nat × Proof)
+
+/-- A substitution, by its name when it has one. -/
+def substNamed (P : Program) (names : Names) (i : Nat) (σ : Env) : String :=
+  let text := subst names.terms (ruleOrder P i) σ
+  match names.substs.find? (·.1 == text) with
+  | some (_, k) => "\\sigma_{" ++ toString k ++ "}"
+  | none => text
 
 /-- The nested applications of a term under the leaf shorthand, innermost first: an
 argument that reads as a leaf, like `5` for `Num(5)`, does not make its parent nested. -/
@@ -270,7 +286,14 @@ partial def proofTerms : Proof → List Term
   | .symm p => proofTerms p
   | .trans p q | .congr p _ q => proofTerms p ++ proofTerms q
 
-/-- A proof on one line, without names for shared subproofs. -/
+/-- The rule nodes, in postorder. -/
+partial def ruleNodes : Proof → List Proof
+  | p@(.rule _ _ _ ps) => ps.flatMap ruleNodes ++ [p]
+  | .symm p => ruleNodes p
+  | .trans p q | .congr p _ q => ruleNodes p ++ ruleNodes q
+
+/-- A proof on one line, without names for substitutions or shared subproofs: the key a
+subproof is recognized by. -/
 partial def inlineProof (P : Program) (abbrevs : List Expr) : Proof → String
   | .rule c i σ ps =>
     "\\kw{rule}_{" ++ toString (i + 1) ++ "}(" ++ claim abbrevs c ++ ",\\ "
@@ -284,94 +307,111 @@ partial def inlineProof (P : Program) (abbrevs : List Expr) : Proof → String
     "\\kw{cong}_{" ++ toString (k + 1) ++ "}(" ++ inlineProof P abbrevs p ++ ",\\ "
       ++ inlineProof P abbrevs q ++ ")"
 
-/-- The rule nodes with premises, in postorder. -/
-partial def ruleNodes : Proof → List Proof
-  | p@(.rule _ _ _ ps) => ps.flatMap ruleNodes ++ (if ps.isEmpty then [] else [p])
-  | .symm p => ruleNodes p
-  | .trans p q | .congr p _ q => ruleNodes p ++ ruleNodes q
+/-- The keyed items whose key occurs at least twice, each once, in order of first occurrence. -/
+def recurring {α : Type} (keyed : List (String × α)) : List (String × α) :=
+  let firsts := keyed.foldl
+    (fun acc kp => if acc.any (·.1 == kp.1) then acc else acc ++ [kp]) []
+  firsts.filter fun kp => (keyed.filter (·.1 == kp.1)).length ≥ 2
 
-/-- The shared rule nodes, by their inline text, numbered in postorder of first occurrence,
-so that a named proof only refers to names before it. -/
-def sharedNodes (P : Program) (abbrevs : List Expr) (pf : Proof) :
-    List (String × Nat × Proof) :=
+/-- What recurs in a proof. Terms: the nested applications that occur, as subterms, in at
+least two of the claims and substitution values. Rule nodes with premises: those occurring
+at least twice, numbered in postorder of first occurrence so that a named proof refers only
+to names before it. Substitutions: those of at least two distinct rule nodes, so that a
+substitution a named subproof alone uses stays inline. -/
+def names (P : Program) (pf : Proof) : Names :=
+  let positions := proofTerms pf
+  let candidates := dedup (positions.flatMap fun t => proofSubs t.toExpr)
+  let terms := candidates.filter fun e =>
+    (positions.filter fun t =>
+      t.subtermList.any fun s => same s.toExpr e).length ≥ 2
   let nodes := ruleNodes pf
-  let keyed := nodes.map fun p => (inlineProof P abbrevs p, p)
-  let firsts := keyed.foldl (fun acc kp => if acc.any (·.1 == kp.1) then acc else acc ++ [kp]) []
-  let shared := firsts.filter fun kp => (keyed.filter (·.1 == kp.1)).length ≥ 2
-  shared.zipIdx.map fun (kp, k) => (kp.1, k + 1, kp.2)
+  let distinct := (recurring (nodes.map fun p => (inlineProof P terms p, p)) ++
+    nodes.map fun p => (inlineProof P terms p, p)).foldl
+      (fun acc kp => if acc.any (·.1 == kp.1) then acc else acc ++ [kp]) []
+  let substs := recurring (distinct.filterMap fun kp => match kp.2 with
+    | .rule _ i σ _ => if σ.isEmpty then none else some (subst terms (ruleOrder P i) σ, ())
+    | _ => none)
+  let proofs := recurring (nodes.filterMap fun p => match p with
+    | .rule _ _ _ ps => if ps.isEmpty then none else some (inlineProof P terms p, p)
+    | _ => none)
+  { terms := terms
+    substs := substs.zipIdx.map fun (kp, k) => (kp.1, k + 1)
+    proofs := proofs.zipIdx.map fun (kp, k) => (kp.1, k + 1, kp.2) }
 
 mutual
 
 /-- A proof at a depth, ending in `suffix`: one line if it fits, else spread over lines. -/
-partial def proofLines (P : Program) (names : List (String × Nat × Proof)) (abbrevs : List Expr)
-    (depth : Nat) (suffix : String) (p : Proof) : String :=
-  match names.find? (·.1 == inlineProof P abbrevs p) with
+partial def proofLines (P : Program) (names : Names) (depth : Nat) (suffix : String)
+    (p : Proof) : String :=
+  match names.proofs.find? (·.1 == inlineProof P names.terms p) with
   | some (_, k, _) => line depth ("\\pi_{" ++ toString k ++ "}" ++ suffix)
   | none =>
     let budget := 74 - 4 * depth
-    let one := inlineNamed P names abbrevs p ++ suffix
+    let one := inlineNamed P names p ++ suffix
     if visible one ≤ budget then line depth one else
     match p with
     | .rule c i σ ps =>
-      let head := "\\kw{rule}_{" ++ toString (i + 1) ++ "}(" ++ claim abbrevs c ++ ","
-      let bindings := subst abbrevs (ruleOrder P i) σ ++ (if ps.isEmpty then ")" ++ suffix else ";")
+      let head := "\\kw{rule}_{" ++ toString (i + 1) ++ "}(" ++ claim names.terms c ++ ","
+      let bindings := substNamed P names i σ ++ (if ps.isEmpty then ")" ++ suffix else ";")
       -- The claim and the substitution share a line when they fit.
-      let opening := if visible (head ++ " " ++ bindings) ≤ budget then line depth (head ++ "\\ " ++ bindings)
+      let opening :=
+        if visible (head ++ " " ++ bindings) ≤ budget then line depth (head ++ "\\ " ++ bindings)
         else line depth head ++ line (depth + 1) bindings
-      opening ++ argLines P names abbrevs (depth + 1) (")" ++ suffix) ps
-    | .symm q => line depth "\\kw{sym}(" ++ proofLines P names abbrevs (depth + 1) (")" ++ suffix) q
+      opening ++ argLines P names (depth + 1) (")" ++ suffix) ps
+    | .symm q => line depth "\\kw{sym}(" ++ proofLines P names (depth + 1) (")" ++ suffix) q
     | .trans q r =>
-      line depth "\\kw{trans}(" ++ argLines P names abbrevs (depth + 1) (")" ++ suffix) [q, r]
+      line depth "\\kw{trans}(" ++ argLines P names (depth + 1) (")" ++ suffix) [q, r]
     | .congr q k r =>
       line depth ("\\kw{cong}_{" ++ toString (k + 1) ++ "}(")
-        ++ argLines P names abbrevs (depth + 1) (")" ++ suffix) [q, r]
+        ++ argLines P names (depth + 1) (")" ++ suffix) [q, r]
 
 /-- Arguments on their own lines, comma-separated, the last closing with `close`. -/
-partial def argLines (P : Program) (names : List (String × Nat × Proof)) (abbrevs : List Expr)
-    (depth : Nat) (close : String) : List Proof → String
+partial def argLines (P : Program) (names : Names) (depth : Nat) (close : String) :
+    List Proof → String
   | [] => ""
-  | [p] => proofLines P names abbrevs depth close p
-  | p :: ps => proofLines P names abbrevs depth "," p ++ argLines P names abbrevs depth close ps
+  | [p] => proofLines P names depth close p
+  | p :: ps => proofLines P names depth "," p ++ argLines P names depth close ps
 
-/-- A proof on one line, with the shared subproofs named. -/
-partial def inlineNamed (P : Program) (names : List (String × Nat × Proof)) (abbrevs : List Expr)
-    (p : Proof) : String :=
-  match names.find? (·.1 == inlineProof P abbrevs p) with
+/-- A proof on one line, with the names in use. -/
+partial def inlineNamed (P : Program) (names : Names) (p : Proof) : String :=
+  match names.proofs.find? (·.1 == inlineProof P names.terms p) with
   | some (_, k, _) => "\\pi_{" ++ toString k ++ "}"
   | none =>
     match p with
     | .rule c i σ ps =>
-      "\\kw{rule}_{" ++ toString (i + 1) ++ "}(" ++ claim abbrevs c ++ ",\\ "
-        ++ subst abbrevs (ruleOrder P i) σ
+      "\\kw{rule}_{" ++ toString (i + 1) ++ "}(" ++ claim names.terms c ++ ",\\ "
+        ++ substNamed P names i σ
         ++ (if ps.isEmpty then ")"
-            else ";\\ " ++ String.intercalate ",\\ " (ps.map (inlineNamed P names abbrevs)) ++ ")")
-    | .symm q => "\\kw{sym}(" ++ inlineNamed P names abbrevs q ++ ")"
+            else ";\\ " ++ String.intercalate ",\\ " (ps.map (inlineNamed P names)) ++ ")")
+    | .symm q => "\\kw{sym}(" ++ inlineNamed P names q ++ ")"
     | .trans q r =>
-      "\\kw{trans}(" ++ inlineNamed P names abbrevs q ++ ",\\ " ++ inlineNamed P names abbrevs r
-        ++ ")"
+      "\\kw{trans}(" ++ inlineNamed P names q ++ ",\\ " ++ inlineNamed P names r ++ ")"
     | .congr q k r =>
-      "\\kw{cong}_{" ++ toString (k + 1) ++ "}(" ++ inlineNamed P names abbrevs q ++ ",\\ "
-        ++ inlineNamed P names abbrevs r ++ ")"
+      "\\kw{cong}_{" ++ toString (k + 1) ++ "}(" ++ inlineNamed P names q ++ ",\\ "
+        ++ inlineNamed P names r ++ ")"
 
 end
 
-/-- A proof as an `eggprogram`: the proof, then the named terms and the shared subproofs. -/
+/-- A proof as an `eggprogram`: the proof, then the named terms, substitutions and shared
+subproofs. -/
 def proof (P : Program) (pf : Proof) : String :=
-  let abbrevs := dedup ((proofTerms pf).flatMap fun t => proofSubs t.toExpr)
-  let names := sharedNodes P abbrevs pf
-  let main := proofLines P names abbrevs 0 "" pf
-  let defs := abbrevs.zipIdx.map fun (e, k) =>
-    "t_{" ++ toString (k + 1) ++ "} = " ++ expr (abbrevs.take k) e
-  let terms := if defs.isEmpty then "" else pack 0 "\\text{where }" ",\\ " defs none
-  let shared := String.join <| names.map fun (_, k, p) =>
-    let earlier := names.filter (·.2.1 < k)
-    let lead := (if k = 1 && defs.isEmpty then "\\text{where }" else "\\text{and }")
+  let ns := names P pf
+  let main := proofLines P ns 0 "" pf
+  let defs := ns.terms.zipIdx.map fun (e, k) =>
+    "t_{" ++ toString (k + 1) ++ "} = " ++ expr (ns.terms.take k) e
+  let lead (first : Bool) : String := if first then "\\text{where }" else "\\text{and }"
+  let terms := if defs.isEmpty then "" else pack 0 (lead true) ",\\ " defs none
+  let substs := String.join <| ns.substs.zipIdx.map fun ((text, k), j) =>
+    line 0 (lead (defs.isEmpty && j = 0) ++ "\\sigma_{" ++ toString k ++ "} = " ++ text)
+  let proofs := String.join <| ns.proofs.zipIdx.map fun ((_, k, p), j) =>
+    let earlier := { ns with proofs := ns.proofs.filter (·.2.1 < k) }
+    let head := lead (defs.isEmpty && ns.substs.isEmpty && j = 0)
       ++ "\\pi_{" ++ toString k ++ "} = "
     -- The body starts on the lead's line when it fits, else below it.
-    let one := inlineNamed P earlier abbrevs p
-    if visible (lead ++ one) ≤ 74 then line 0 (lead ++ one)
-    else line 0 lead ++ proofLines P earlier abbrevs 1 "" p
-  "\\begingroup\\small\n\\begin{eggprogram}\n" ++ main ++ terms ++ shared
+    let one := inlineNamed P earlier p
+    if visible (head ++ one) ≤ 74 then line 0 (head ++ one)
+    else line 0 head ++ proofLines P earlier 1 "" p
+  "\\begingroup\\small\n\\begin{eggprogram}\n" ++ main ++ terms ++ substs ++ proofs
     ++ "\\end{eggprogram}\n\\endgroup\n"
 
 end Egglog.PaperTex
