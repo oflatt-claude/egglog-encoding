@@ -49,7 +49,9 @@ checking with egglog, and minimal compilation metadata.
 5. **Make renaming-guard evidence explicit.** Ordinary proof premises establish
    equalities to representatives; a slotted validator checks their permutation.
    Existence alone must never establish `renaming-=`.
-6. **Separate checking from lifting.** Keep encoded row names, matching frames,
+6. **Separate checking from lifting.** The checker accepts native resolved source
+   commands with binder annotations; source resolution precedes checking, and the
+   checker derives its axiom/global context internally. Keep encoded row names, matching frames,
    generated variables, and flattening compensation out of the checker. Use
    explicit Alpha when bound spellings change; ordinary steps stay exact.
 7. **Delete superseded paths and validate.** Preserve proof snapshots, minimized

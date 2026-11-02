@@ -237,14 +237,19 @@ a rewrite's captured globals. Rewrites retain nested expressions and the
 original `:when` order. Unnamed rewrites receive names unique across scopes and
 successive inputs.
 
-The public `check_proof` and `check_claim` functions take the original source
-parsed with `egglog::ast::parse_sexps`, together with the proof store and root or
-claim. Supply the program prefix visible at the query; includes resolve from the
-working directory. The checker resolves declarations, scopes, globals, and
-axioms itself. Rewrites become native egglog rules with their root fact, original
-conditions, and union action. Rule variables use ordinary egglog type inference,
-with `Var` registered as a base sort. The proof store associates slot IDs with
-source spellings; checking requires no encoded tables or lowering metadata.
+The public `check_proof` and `check_claim` functions take a
+`ResolvedSlottedProgram`, together with the proof store and root or claim.
+It contains native `ResolvedNCommand`s and constructor binder positions.
+`resolve_program` prepares it from source parsed with `egglog::ast::parse_sexps`:
+supply the prefix visible at the query, with includes resolved from the working
+directory. Rewrites become typed rules with their root fact, original conditions,
+and union action; popped commands are removed. Nested terms and the distinction
+between local variables and global references are preserved.
+
+The checker derives its axiom and global context from the resolved commands.
+The resolved program can be reused across proof stores; each store associates its
+slot IDs with source spellings. Checking requires no encoded tables or lowering
+metadata.
 
 # Proof lifting
 

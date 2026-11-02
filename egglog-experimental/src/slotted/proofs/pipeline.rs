@@ -4,6 +4,8 @@ use super::HashMap;
 use super::checker::check_claim;
 use super::format::SlottedConclusion;
 use super::lift_slots::{self, matched_frame};
+use super::program::ResolvedSlottedProgram;
+use super::resolve::resolve_program;
 use super::source::{SlottedProgram, SourceError};
 use super::terms::FreshSlots;
 use crate::slotted::Compiler;
@@ -279,14 +281,11 @@ struct SlottedProofState {
 impl SlottedProofState {
     fn program(
         &self,
+        resolved: &ResolvedSlottedProgram,
         slot_names: &BTreeMap<String, i64>,
     ) -> Result<(SlottedProgram, SlottedProgram, TermDag), SourceError> {
         let mut dag = TermDag::default();
-        let program = super::program::resolve(
-            self.sources.iter().map(AsRef::as_ref),
-            &mut dag,
-            slot_names.clone(),
-        )?;
+        let program = resolved.context(&mut dag, slot_names.clone())?;
         let mut flattened = SlottedProgram {
             slot_names: program.slot_names.clone(),
             sorts: program.sorts.clone(),
@@ -335,8 +334,11 @@ impl SlottedProofState {
         root: ProofId,
         claim: &SlottedClaim,
     ) -> Result<String, String> {
-        let (program, flattened, mut dag) =
-            self.program(&claim.slot_names).map_err(|e| e.to_string())?;
+        let resolved =
+            resolve_program(self.sources.iter().map(AsRef::as_ref)).map_err(|e| e.to_string())?;
+        let (program, flattened, mut dag) = self
+            .program(&resolved, &claim.slot_names)
+            .map_err(|e| e.to_string())?;
         let frame = matched_frame(egg, root, &claim.names)?;
         let mut coordinates = BTreeMap::new();
         for &slot in program.slot_names.values() {
@@ -385,13 +387,7 @@ impl SlottedProofState {
         )
         .map_err(|e| format!("claim {claim}: {e}"))?;
         let (mut store, proof) = super::unflatten::lift(store, &program, proof)?;
-        check_claim(
-            &mut store,
-            self.sources.iter().map(AsRef::as_ref),
-            &source,
-            &proof,
-        )
-        .map_err(|e| {
+        check_claim(&mut store, &resolved, &source, &proof).map_err(|e| {
             format!(
                 "the translated proof does not check: {e}\n{}",
                 store.conclusion_to_string(&proof)
@@ -401,13 +397,8 @@ impl SlottedProofState {
             proof: store.simplify(proof.proof),
             ..proof
         };
-        check_claim(
-            &mut store,
-            self.sources.iter().map(AsRef::as_ref),
-            &source,
-            &proof,
-        )
-        .map_err(|e| format!("the normalized proof does not check: {e}"))?;
+        check_claim(&mut store, &resolved, &source, &proof)
+            .map_err(|e| format!("the normalized proof does not check: {e}"))?;
         Ok(store.conclusion_to_string(&proof))
     }
 }

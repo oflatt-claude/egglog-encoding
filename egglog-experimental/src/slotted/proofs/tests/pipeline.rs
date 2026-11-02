@@ -26,7 +26,8 @@ fn restricted_group_elements_lift_to_checked_source_equalities() {
         })
         .unwrap();
     let state = graph.extension_state::<SlottedProofState>().unwrap();
-    let (program, _, dag) = state.program(&BTreeMap::new()).unwrap();
+    let resolved = resolve_program(state.sources.iter().map(AsRef::as_ref)).unwrap();
+    let (program, _, dag) = state.program(&resolved, &BTreeMap::new()).unwrap();
     let checked = super::super::lift_slots::tests::check_restricted_symmetries(
         &program,
         dag,

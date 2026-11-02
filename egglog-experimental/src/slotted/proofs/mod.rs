@@ -10,6 +10,7 @@ mod lift_slots;
 mod normalize;
 pub(crate) mod pipeline;
 mod program;
+mod resolve;
 mod source;
 pub mod terms;
 mod unflatten;
@@ -19,6 +20,8 @@ pub use format::{
     Claim, ClaimKind, ProofId, RulePremise, RuleProof, SlottedConclusion, SlottedProof,
     SlottedProofStore,
 };
+pub use program::ResolvedSlottedProgram;
+pub use resolve::resolve_program;
 pub use source::SourceError;
 pub use terms::Renaming;
 

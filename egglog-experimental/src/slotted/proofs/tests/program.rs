@@ -1,12 +1,14 @@
-use crate::slotted::proofs::terms::{Renaming, slot_term};
-use crate::slotted::proofs::{RulePremise, SlottedProofStore, check_proof};
+use crate::slotted::proofs::terms::slot_term;
+use crate::slotted::proofs::{
+    ResolvedSlottedProgram, RulePremise, SlottedProofStore, check_proof, resolve_program,
+};
 use egglog::TermDag;
 use egglog::ast::{Literal, parse_sexps};
 use egglog::proof::Proposition;
 use std::collections::BTreeMap;
 
-fn program(text: &str) -> Vec<egglog::ast::Sexp> {
-    parse_sexps(None, text).unwrap()
+fn program(text: &str) -> ResolvedSlottedProgram {
+    resolve_program(&parse_sexps(None, text).unwrap()).unwrap()
 }
 
 #[test]
@@ -29,10 +31,16 @@ fn source_alone_supplies_axioms_and_binders() {
     let without_union =
         program("(datatype E (V Var) (Lam Var E :binder 0) (Zero)) (let id (Lam $0 (V $0)))");
     assert!(check_proof(&mut store, &without_union, proof).is_err());
-    let without_binder = program(
-        "(datatype E (V Var) (Lam Var E) (Zero)) (let id (Lam $0 (V $0))) (union id (Zero))",
+    assert!(
+        resolve_program(
+            &parse_sexps(
+                None,
+                "(datatype E (V Var) (Lam Var E) (Zero)) (let id (Lam $0 (V $0))) (union id (Zero))"
+            )
+            .unwrap()
+        )
+        .is_err()
     );
-    assert!(check_proof(&mut store, &without_binder, proof).is_err());
 }
 
 #[test]
@@ -91,14 +99,7 @@ fn scopes_and_original_when_are_checked_without_the_compiler() {
 
 #[test]
 fn source_unions_cannot_equate_rigid_names() {
-    let mut dag = TermDag::default();
-    let a = slot_term(&mut dag, 0);
-    let b = slot_term(&mut dag, 1);
-    let mut store = SlottedProofStore::new(dag);
-    let proof = store.fiat(a, b);
-    assert!(check_proof(&mut store, &program("(union $0 $1)"), proof).is_err());
-    let renamed = store.equivariance(proof, Renaming::new([(0, 1), (1, 0)]).unwrap());
-    assert!(check_proof(&mut store, &program("(union $0 $1)"), renamed).is_err());
+    assert!(resolve_program(&parse_sexps(None, "(union $0 $1)").unwrap()).is_err());
 }
 
 #[test]
@@ -130,4 +131,81 @@ fn disequality_validator_respects_alpha_equivalence() {
         );
         assert_eq!(check_proof(&mut store, &source, proof).is_ok(), distinct);
     }
+}
+
+#[test]
+fn resolved_source_is_reusable_across_proof_arenas_and_slot_ids() {
+    let source = program("(datatype E (V Var) (Zero)) (let a (V $a)) (union a (Zero))");
+    for slot in [0, 123, i64::MIN] {
+        let mut dag = TermDag::default();
+        if slot != 0 {
+            dag.lit(Literal::String("unrelated term".into()));
+        }
+        let name = slot_term(&mut dag, slot);
+        let a = dag.app("V".into(), vec![name]);
+        let zero = dag.app("Zero".into(), vec![]);
+        let mut store =
+            SlottedProofStore::new(dag).with_slot_names(&BTreeMap::from([("$a".into(), slot)]));
+        let proof = store.fiat(a, zero);
+        assert_eq!(
+            check_proof(&mut store, &source, proof).unwrap(),
+            Proposition::new(a, zero)
+        );
+
+        let mut without_union = source.clone();
+        without_union.commands.retain(|cmd| {
+            !matches!(
+                cmd,
+                egglog::ast::ResolvedNCommand::CoreAction(egglog::ast::GenericAction::Union(..))
+            )
+        });
+        assert!(check_proof(&mut store, &without_union, proof).is_err());
+    }
+}
+
+#[test]
+fn resolved_rules_keep_nested_terms_guards_and_global_references() {
+    use egglog::ast::{ResolvedExpr, ResolvedFact, ResolvedNCommand};
+    let source = program(
+        r#"
+        (datatype E (N i64) (V Var) (Pair E E) (Lam Var E :binder 0))
+        (let n $a)
+        (rewrite (Pair (N n) (V n)) (Pair (V n) (N n))
+            :when ((not-free $fresh (V n))) :name swap)
+    "#,
+    );
+    assert_eq!(source.binders, BTreeMap::from([("Lam".into(), vec![0])]));
+    let ResolvedNCommand::NormRule { rule } = source.commands.last().unwrap() else {
+        panic!("expected a resolved rule")
+    };
+    let [
+        ResolvedFact::Fact(ResolvedExpr::Call(_, _, children)),
+        ResolvedFact::Fact(ResolvedExpr::Call(_, guard, args)),
+    ] = rule.body.as_slice()
+    else {
+        panic!("expected the original root and guard")
+    };
+    assert_eq!(guard.name(), "not-free");
+    assert!(matches!(&args[1], ResolvedExpr::Call(_, head, _) if head.name() == "V"));
+    let [
+        ResolvedExpr::Call(_, n, local),
+        ResolvedExpr::Call(_, v, global),
+    ] = children.as_slice()
+    else {
+        panic!("nested constructor patterns must be preserved")
+    };
+    assert_eq!(n.name(), "N");
+    assert_eq!(v.name(), "V");
+    let [ResolvedExpr::Var(_, local)] = local.as_slice() else {
+        panic!()
+    };
+    let [ResolvedExpr::Var(_, global)] = global.as_slice() else {
+        panic!()
+    };
+    assert_eq!(local.name, "n");
+    assert_eq!(global.name, "n");
+    assert_eq!(local.sort.name(), "i64");
+    assert_eq!(global.sort.name(), "Var");
+    assert!(!local.is_global_ref);
+    assert!(global.is_global_ref);
 }

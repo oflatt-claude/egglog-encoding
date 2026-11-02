@@ -4,11 +4,12 @@ use super::format::{
     Claim, ClaimKind, RulePremise, RuleProof, SlottedConclusion, SlottedProof, SlottedProofStore,
 };
 use super::guards::{GuardValidators, proof_body};
+use super::program::ResolvedSlottedProgram;
 use super::source::{SlottedProgram, SourceFact, pattern_term};
 use super::terms::{all_slots, rename, slot_of};
 use super::{HashMap, HashSet};
 use egglog::ast::{
-    Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact, ResolvedNCommand, ResolvedVar, Sexp,
+    Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact, ResolvedNCommand, ResolvedVar,
 };
 use egglog::proof::{Justification, Proof, ProofCheckContext, ProofId, ProofStore, Proposition};
 use egglog::util::{FreshGen, INTERNAL_SYMBOL_PREFIX, SymbolGen};
@@ -99,28 +100,27 @@ pub enum SlottedCheckError {
     },
 }
 
-/// Check a proof against the original slotted program, parsed with
-/// [`egglog::ast::parse_sexps`]. The program is the prefix visible at the proof's
-/// query; includes resolve from the process working directory.
-/// Declarations, scoped globals, source axioms, and rewrite rules are resolved here.
-pub fn check_proof<'a>(
+/// Check a proof against the resolved original slotted program.
+/// The program must be typechecked and retain the source's binder annotations.
+/// Its axioms and scoped globals are interpreted in `store`'s term arena.
+pub fn check_proof(
     store: &mut SlottedProofStore,
-    source: impl IntoIterator<Item = &'a Sexp>,
+    source: &ResolvedSlottedProgram,
     root: ProofId,
 ) -> Result<Proposition, SlottedCheckError> {
-    let program = super::program::for_proof(source, store)?;
+    let program = source.for_proof(store)?;
     check_proof_in_program(store, &program, root)
 }
 
-/// Check a claim and its proof against the original slotted program.
+/// Check a claim and its proof against the resolved original slotted program.
 /// Terms in `claim` and `conclusion` belong to `store`.
-pub fn check_claim<'a>(
+pub fn check_claim(
     store: &mut SlottedProofStore,
-    source: impl IntoIterator<Item = &'a Sexp>,
+    source: &ResolvedSlottedProgram,
     claim: &Claim,
     conclusion: &SlottedConclusion,
 ) -> Result<(), SlottedCheckError> {
-    let program = super::program::for_proof(source, store)?;
+    let program = source.for_proof(store)?;
     check_claim_in_program(store, &program, claim, conclusion)
 }
 

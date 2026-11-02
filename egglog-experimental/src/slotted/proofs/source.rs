@@ -1,18 +1,11 @@
 //! Native source rules, declaration scopes, and binding semantics for proof checking.
 
 use super::format::{Claim, ClaimKind};
-use super::guards::{GUARDS, GuardSignature};
 use super::terms::{FreshSlots, Renaming, slot_of};
 use super::{HashMap, HashSet};
-use crate::slotted::var_sort::VarSort;
-use egglog::ast::{
-    Expr, Fact, FunctionDecl, GenericAction, GenericActions, ResolvedExpr, ResolvedFact,
-    ResolvedRule, Rule, Schema,
-};
-use egglog::prelude::BaseSort;
-use egglog::sort::{EqSort, UnitSort};
+use egglog::ast::{Expr, GenericAction, ResolvedExpr, ResolvedFact, ResolvedRule};
 use egglog::util::{FreshGen, INTERNAL_SYMBOL_PREFIX, IndexMap, SymbolGen};
-use egglog::{EGraph, ResolvedCall, Term, TermDag, TermId};
+use egglog::{ResolvedCall, Term, TermDag, TermId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -100,6 +93,55 @@ impl Error for SourceError {}
 pub const SINGLE_SORT: &str = "U";
 
 impl SourceRule {
+    pub(super) fn capture(rule: ResolvedRule, globals: &IndexMap<String, TermId>) -> Self {
+        let mut variables = Vec::new();
+        let rule = rule.visit_exprs(&mut |expr| {
+            if let ResolvedExpr::Var(_, var) = &expr {
+                variables.push(var.clone());
+            }
+            expr
+        });
+        let names: BTreeSet<_> = variables
+            .iter()
+            .map(|v| v.name.clone())
+            .chain(globals.keys().cloned())
+            .collect();
+        let locals: BTreeSet<_> = variables
+            .iter()
+            .filter(|v| !v.is_global_ref)
+            .map(|v| v.name.clone())
+            .collect();
+        let mut prefix = format!("{INTERNAL_SYMBOL_PREFIX}slotted-resolve-");
+        while names.iter().any(|name| name.starts_with(&prefix)) {
+            prefix.push('-');
+        }
+        let mut symbols = SymbolGen::new(prefix);
+        let aliases: BTreeMap<_, _> = globals
+            .keys()
+            .map(|name| {
+                let alias = if locals.contains(name) {
+                    symbols.fresh(format!("captured-{name}").as_str())
+                } else {
+                    name.clone()
+                };
+                (name.clone(), alias)
+            })
+            .collect();
+        let rule = rule.visit_exprs(&mut |expr| match expr {
+            ResolvedExpr::Var(span, mut var) if var.is_global_ref => {
+                var.name = aliases[&var.name].clone();
+                var.is_global_ref = false;
+                ResolvedExpr::Var(span, var)
+            }
+            other => other,
+        });
+        let globals = globals
+            .iter()
+            .map(|(name, &term)| (aliases[name].clone(), term))
+            .collect();
+        Self { rule, globals }
+    }
+
     pub(super) fn endpoints(&self) -> (&ResolvedExpr, &ResolvedExpr) {
         let [GenericAction::Union(_, lhs, rhs)] = self.rule.head.0.as_slice() else {
             unreachable!("source rewrites have one union action")
@@ -297,246 +339,9 @@ impl SlottedProgram {
         source: &egglog::ast::Rewrite,
     ) -> Result<String, SourceError> {
         let name = source.name.clone();
-        let rule = self.resolve_rewrite(dag, source)?;
+        let rule = SourceRule::capture(self.resolve_rewrite(dag, source)?, &self.lets);
         self.rewrites.insert(name.clone(), rule);
         Ok(name)
-    }
-
-    fn resolve_rewrite(
-        &self,
-        dag: &TermDag,
-        source: &egglog::ast::Rewrite,
-    ) -> Result<SourceRule, SourceError> {
-        let err = |e: &dyn Display| SourceError(e.to_string());
-        let mut graph = EGraph::default();
-        egglog::prelude::add_base_sort(&mut graph, VarSort, source.span.clone())
-            .map_err(|e| err(&e))?;
-        let source_terms: Vec<_> = std::iter::once(&source.lhs)
-            .chain(std::iter::once(&source.rhs))
-            .chain(source.conditions.iter().flat_map(|fact| match fact {
-                Fact::Eq(_, a, b) => vec![a, b],
-                Fact::Fact(Expr::Call(_, head, args)) if is_guard(head) => args.iter().collect(),
-                Fact::Fact(expr) => vec![expr],
-            }))
-            .collect();
-        let source_names: BTreeSet<_> = source_terms
-            .iter()
-            .flat_map(|expr| expr.vars())
-            .chain(self.lets.keys().cloned())
-            .collect();
-        let mut prefix = format!("{INTERNAL_SYMBOL_PREFIX}slotted-resolve-");
-        while source_names.iter().any(|name| name.starts_with(&prefix)) {
-            prefix.push('-');
-        }
-        let mut symbols = SymbolGen::new(prefix);
-        let carriers = &self.sorts;
-        for name in carriers {
-            graph
-                .add_sort(EqSort { name: name.clone() }, source.span.clone())
-                .map_err(|e| err(&e))?;
-        }
-        for op in self.constructors.values() {
-            let decl = FunctionDecl::constructor(
-                source.span.clone(),
-                op.name.clone(),
-                Schema {
-                    input: op.input_sorts().map(str::to_owned).collect(),
-                    outputs: vec![op.sort.clone()],
-                },
-                None,
-                false,
-                false,
-            );
-            graph
-                .type_info()
-                .typecheck_function(&mut symbols, &decl)
-                .map_err(|e| err(&e))?;
-        }
-        for name in GUARDS {
-            if name != "!=" {
-                graph.add_pure_primitive(GuardSignature(name), None);
-            }
-        }
-
-        // Captured carrier globals and local payload variables have distinct scopes.
-        let mut payload_vars = BTreeSet::new();
-        for expr in &source_terms {
-            expr.fold(&mut |expr, _: Vec<()>| {
-                if let Expr::Call(_, head, args) = expr
-                    && let Some(op) = self.constructors.get(head)
-                {
-                    for (arg, column) in args.iter().zip(&op.columns) {
-                        if matches!(column, ColumnKind::Payload(_)) {
-                            payload_vars.extend(arg.vars());
-                        }
-                    }
-                }
-            });
-        }
-        let aliases: BTreeMap<_, _> = self
-            .lets
-            .keys()
-            .map(|name| {
-                let alias = if payload_vars.contains(name) {
-                    symbols.fresh(format!("captured-{name}").as_str())
-                } else {
-                    name.clone()
-                };
-                (name.clone(), alias)
-            })
-            .collect();
-        let globals: IndexMap<_, _> = self
-            .lets
-            .iter()
-            .map(|(name, &term)| (aliases[name].clone(), term))
-            .collect();
-        fn capture(
-            program: &SlottedProgram,
-            expr: &Expr,
-            payload: bool,
-            aliases: &BTreeMap<String, String>,
-        ) -> Expr {
-            match expr {
-                Expr::Var(span, name) if !payload && aliases.contains_key(name) => {
-                    Expr::Var(span.clone(), aliases[name].clone())
-                }
-                Expr::Call(span, head, args) => Expr::Call(
-                    span.clone(),
-                    head.clone(),
-                    args.iter()
-                        .enumerate()
-                        .map(|(i, arg)| {
-                            let payload = program.constructors.get(head).is_some_and(|op| {
-                                matches!(op.columns.get(i), Some(ColumnKind::Payload(_)))
-                            });
-                            capture(program, arg, payload, aliases)
-                        })
-                        .collect(),
-                ),
-                _ => expr.clone(),
-            }
-        }
-        let lhs = capture(self, &source.lhs, false, &aliases);
-        let rhs = capture(self, &source.rhs, false, &aliases);
-        let mut body = vec![Fact::Fact(lhs.clone())];
-        body.extend(source.conditions.iter().map(|fact| {
-            match fact {
-                Fact::Eq(span, a, b) => Fact::Eq(
-                    span.clone(),
-                    capture(self, a, false, &aliases),
-                    capture(self, b, false, &aliases),
-                ),
-                Fact::Fact(Expr::Call(span, head, args)) if is_guard(head) => {
-                    Fact::Fact(Expr::Call(
-                        span.clone(),
-                        head.clone(),
-                        args.iter()
-                            .map(|arg| capture(self, arg, false, &aliases))
-                            .collect(),
-                    ))
-                }
-                Fact::Fact(expr) => Fact::Fact(capture(self, expr, false, &aliases)),
-            }
-        }));
-        let mut rule = Rule {
-            span: source.span.clone(),
-            head: GenericActions(vec![GenericAction::Union(source.span.clone(), lhs, rhs)]),
-            body,
-            name: source.name.clone(),
-            ruleset: String::new(),
-            eval_mode: Default::default(),
-            no_decomp: false,
-            include_subsumed: false,
-        };
-        // Slot literals have the rigid Var sort. Captured globals retain the
-        // sort of their source term; constructor signatures infer all other locals.
-        let var_ty = VarSort.to_arcsort();
-        let mut bindings: IndexMap<_, _> = source_terms
-            .iter()
-            .flat_map(|expr| expr.vars())
-            .filter(|name| name.starts_with('$') && !payload_vars.contains(name))
-            .map(|name| (name, (source.span.clone(), var_ty.clone())))
-            .collect();
-        for (name, &term) in &globals {
-            let sort = self
-                .sort_of(dag, term)
-                .ok_or_else(|| SourceError(format!("unknown sort for global {name}")))?;
-            let ty = graph
-                .get_sort_by_name(&sort)
-                .ok_or_else(|| SourceError(format!("unknown sort {sort}")))?
-                .clone();
-            bindings.insert(name.clone(), (source.span.clone(), ty));
-        }
-        let expression_sort = |expr: &Expr| match expr {
-            Expr::Call(_, head, _) => self.constructors.get(head).map(|c| c.sort.clone()),
-            Expr::Var(_, name) if name.starts_with('$') => Some("Var".into()),
-            Expr::Var(_, name) => globals.get(name).and_then(|&t| self.sort_of(dag, t)),
-            Expr::Lit(_, lit) => Some(egglog::sort::literal_sort(lit).name().to_owned()),
-        };
-        // Infer plain facts in their source context: guards return Unit, while
-        // constructor patterns return the carrier. Remove these type constraints
-        // after resolution; the checker sees the original facts.
-        let plain_facts: Vec<_> = rule
-            .body
-            .iter_mut()
-            .enumerate()
-            .map(|(i, fact)| {
-                let Fact::Fact(expr) = fact else { return false };
-                let guard = i > 0 && matches!(expr, Expr::Call(_, head, _) if is_guard(head));
-                let name = symbols.fresh("source-fact");
-                let sort = if guard {
-                    Some(UnitSort.to_arcsort())
-                } else {
-                    expression_sort(expr).map(|sort| {
-                        graph
-                            .get_sort_by_name(&sort)
-                            .expect("source sort is registered")
-                            .clone()
-                    })
-                };
-                if let Some(sort) = sort {
-                    bindings.insert(name.clone(), (expr.span(), sort));
-                }
-                *fact = Fact::Eq(expr.span(), Expr::Var(expr.span(), name), expr.clone());
-                true
-            })
-            .collect();
-        let bindings = bindings
-            .iter()
-            .map(|(name, value)| (name.as_str(), value.clone()))
-            .collect();
-        let mut rule = graph
-            .type_info()
-            .typecheck_rule_with_bindings(&mut symbols, &rule, false, &bindings)
-            .map_err(|e| err(&e))?;
-        for (fact, plain) in rule.body.iter_mut().zip(plain_facts) {
-            if plain {
-                let ResolvedFact::Eq(_, _, expr) = fact else {
-                    unreachable!("resolved fact retains its syntax")
-                };
-                *fact = ResolvedFact::Fact(expr.clone());
-            }
-        }
-        for fact in &rule.body {
-            if let ResolvedFact::Fact(ResolvedExpr::Call(_, ResolvedCall::Primitive(head), args)) =
-                fact
-            {
-                let head = head.name();
-                if !is_guard(head) {
-                    return Err(SourceError(format!("unsupported source guard {head}")));
-                }
-                let valid = match head {
-                    "!=" | "renaming-=" | "renaming-!=" => args.len() == 2,
-                    "free" | "not-free" => args.len() >= 2,
-                    "free-names-are" => !args.is_empty(),
-                    _ => true,
-                };
-                if !valid {
-                    return Err(SourceError(format!("wrong arity for {head}")));
-                }
-            }
-        }
-        Ok(SourceRule { rule, globals })
     }
 
     /// Resolve a ground source expression against its globals and slot names.
@@ -792,10 +597,6 @@ impl SlottedProgram {
             .iter()
             .any(|u| (u.lhs, u.rhs) == (lhs, rhs) || (u.lhs, u.rhs) == (rhs, lhs))
     }
-}
-
-fn is_guard(name: &str) -> bool {
-    GUARDS.contains(&name)
 }
 
 #[cfg(test)]
