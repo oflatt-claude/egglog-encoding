@@ -1,6 +1,7 @@
 import EgglogSemantics.Tests.Congruence
 import EgglogSemantics.Congruence.Reader
 import EgglogSemantics.Provenance.Log
+import EgglogSemantics.SourceProof.Simplify
 import EgglogSemantics.Resugar.Export
 import EgglogSemantics.Tests.Egg
 import EgglogSemantics.Tests.Parse
@@ -1048,6 +1049,21 @@ def main (args : List String) : IO UInt32 := do
       unless decide p.Fragment do
         IO.eprintln s!"difftest: {src} is outside the source fragment"
       IO.print (PaperTex.compiled p)
+      return 0
+  | ["paper-proof", src] =>
+    -- The lifted proofs of the final check of a source `.egg` file, on stdout.
+    let text ← IO.FS.readFile src
+    match Program.ofEgg text with
+    | .error e => IO.eprintln s!"difftest: {src}: {e}"; return 1
+    | .ok p =>
+      let some pfs := Resugar.checkProofs
+          (fun Q => relationalExecAt runFuel FDatabase.empty Q.schedule) p
+        | IO.eprintln "difftest: no proof of the check"; return 1
+      -- Simplified for presentation, and checked again.
+      for pf in pfs do
+        let simple := pf.simplify p
+        let shown := if SourceProof.check p simple == some pf.claim then simple else pf
+        IO.print (PaperTex.proof p shown)
       return 0
   | ["time", fuel, name] =>
     match fuel.toNat? with

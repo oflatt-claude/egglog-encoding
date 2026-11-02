@@ -37,7 +37,7 @@ def fireAction (k : Nat) (r : Rule) : Action :=
 @[blueprint "def:instrument"
   (statement := /--
   \[
-  (Q\Rightarrow H)_i\ \leadsto\ Q\Rightarrow H\cup\{\mathtt{fire}_i(x_1,\ldots,x_n)\}
+  \operatorname{instrument}_i(Q\Rightarrow H)\ \triangleq\ Q\Rightarrow H\cup\{\mathtt{fire}_i(x_1,\ldots,x_n)\}
   \qquad\text{where }\{x_1,\ldots,x_n\}=\operatorname{FV}(Q)
   \]
   -/)

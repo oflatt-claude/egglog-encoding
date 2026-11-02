@@ -1,4 +1,5 @@
 import EgglogSemantics.Congruence.Encode
+import EgglogSemantics.SourceProof.Format
 import EgglogSemantics.Tests.Egg
 
 /-!
@@ -209,6 +210,168 @@ def compiled (source : Program) : String :=
   let check := pack 0 "\\kw{check}\\ " "\\land " (c.program.check.map (pattern [])) none
     (sepAtEnd := false)
   "\\begingroup\\small\n\\begin{eggprogram}\n" ++ mBlock ++ sched ++ check
+    ++ "\\end{eggprogram}\n\\endgroup\n"
+
+/-! ## Proofs
+
+A source proof in the syntax of the paper's proof figure, `rule_i(c, σ; π₁, …, πₙ)`,
+`sym(π)`, `trans(π, π)` and `cong_k(π, π)`, with rule indices and child positions counted
+from one as the paper does. A node that fits on a line is printed inline; otherwise its
+arguments go on the following lines, one level in. Nested terms are named `t₁, t₂, …` and
+rule nodes with premises that occur more than once are named `π₁, π₂, …`, both in a
+`where` clause. -/
+
+open SourceProof (Proof Claim)
+
+/-- A term at the top level; the leaf shorthand applies there too. -/
+def term (abbrevs : List Expr) (t : Term) : String :=
+  let e := t.toExpr
+  (leafSugar e).getD (expr abbrevs e)
+
+def claim (abbrevs : List Expr) (c : Claim) : String :=
+  term abbrevs c.lhs ++ " = " ++ term abbrevs c.rhs
+
+/-- The variables of a query, left to right, each once. -/
+partial def queryVars (q : Query) : List Var :=
+  let rec ofExpr : Expr → List Var
+    | .var v => [v]
+    | .app _ args => args.flatMap ofExpr
+    | .min a b => ofExpr a ++ ofExpr b
+    | .lit _ => []
+  let ofPattern : Pattern → List Var
+    | .expr e => ofExpr e
+    | .eq a b | .ne a b => ofExpr a ++ ofExpr b
+  (q.flatMap ofPattern).foldl (fun acc v => if acc.contains v then acc else acc ++ [v]) []
+
+/-- A substitution, its bindings in the order the rule's query first mentions them. -/
+def subst (abbrevs : List Expr) (order : List Var) (σ : Env) : String :=
+  let σ := (order.filterMap fun v => (σ.find? (·.1 == v))) ++ σ.filter fun b => !order.contains b.1
+  if σ.isEmpty then "\\emptyset"
+  else "[" ++ String.intercalate ",\\ " (σ.map fun b => var b.1 ++ "\\mapsto " ++ term abbrevs b.2)
+    ++ "]"
+
+/-- The variable order of rule `i`. -/
+def ruleOrder (P : Program) (i : Nat) : List Var :=
+  (P.rules[i]?.map fun r => queryVars r.query).getD []
+
+/-- The nested applications of a term under the leaf shorthand, innermost first: an
+argument that reads as a leaf, like `5` for `Num(5)`, does not make its parent nested. -/
+partial def proofSubs (e : Expr) : List Expr :=
+  let args := match e with | .app _ args => args | _ => []
+  let inner := dedup (args.flatMap proofSubs)
+  let deep := args.any fun a => match a with
+    | .app _ _ => (leafSugar a).isNone
+    | _ => false
+  if deep && !has inner e then inner ++ [e] else inner
+
+/-- The terms a proof mentions: the claims of its rule nodes and their substitutions. -/
+partial def proofTerms : Proof → List Term
+  | .rule c _ σ ps => c.lhs :: c.rhs :: σ.map (·.2) ++ ps.flatMap proofTerms
+  | .symm p => proofTerms p
+  | .trans p q | .congr p _ q => proofTerms p ++ proofTerms q
+
+/-- A proof on one line, without names for shared subproofs. -/
+partial def inlineProof (P : Program) (abbrevs : List Expr) : Proof → String
+  | .rule c i σ ps =>
+    "\\kw{rule}_{" ++ toString (i + 1) ++ "}(" ++ claim abbrevs c ++ ",\\ "
+      ++ subst abbrevs (ruleOrder P i) σ
+      ++ (if ps.isEmpty then ")"
+          else ";\\ " ++ String.intercalate ",\\ " (ps.map (inlineProof P abbrevs)) ++ ")")
+  | .symm p => "\\kw{sym}(" ++ inlineProof P abbrevs p ++ ")"
+  | .trans p q =>
+    "\\kw{trans}(" ++ inlineProof P abbrevs p ++ ",\\ " ++ inlineProof P abbrevs q ++ ")"
+  | .congr p k q =>
+    "\\kw{cong}_{" ++ toString (k + 1) ++ "}(" ++ inlineProof P abbrevs p ++ ",\\ "
+      ++ inlineProof P abbrevs q ++ ")"
+
+/-- The rule nodes with premises, in postorder. -/
+partial def ruleNodes : Proof → List Proof
+  | p@(.rule _ _ _ ps) => ps.flatMap ruleNodes ++ (if ps.isEmpty then [] else [p])
+  | .symm p => ruleNodes p
+  | .trans p q | .congr p _ q => ruleNodes p ++ ruleNodes q
+
+/-- The shared rule nodes, by their inline text, numbered in postorder of first occurrence,
+so that a named proof only refers to names before it. -/
+def sharedNodes (P : Program) (abbrevs : List Expr) (pf : Proof) :
+    List (String × Nat × Proof) :=
+  let nodes := ruleNodes pf
+  let keyed := nodes.map fun p => (inlineProof P abbrevs p, p)
+  let firsts := keyed.foldl (fun acc kp => if acc.any (·.1 == kp.1) then acc else acc ++ [kp]) []
+  let shared := firsts.filter fun kp => (keyed.filter (·.1 == kp.1)).length ≥ 2
+  shared.zipIdx.map fun (kp, k) => (kp.1, k + 1, kp.2)
+
+mutual
+
+/-- A proof at a depth, ending in `suffix`: one line if it fits, else spread over lines. -/
+partial def proofLines (P : Program) (names : List (String × Nat × Proof)) (abbrevs : List Expr)
+    (depth : Nat) (suffix : String) (p : Proof) : String :=
+  match names.find? (·.1 == inlineProof P abbrevs p) with
+  | some (_, k, _) => line depth ("\\pi_{" ++ toString k ++ "}" ++ suffix)
+  | none =>
+    let budget := 74 - 4 * depth
+    let one := inlineNamed P names abbrevs p ++ suffix
+    if visible one ≤ budget then line depth one else
+    match p with
+    | .rule c i σ ps =>
+      let head := "\\kw{rule}_{" ++ toString (i + 1) ++ "}(" ++ claim abbrevs c ++ ","
+      let bindings := subst abbrevs (ruleOrder P i) σ ++ (if ps.isEmpty then ")" ++ suffix else ";")
+      -- The claim and the substitution share a line when they fit.
+      let opening := if visible (head ++ " " ++ bindings) ≤ budget then line depth (head ++ "\\ " ++ bindings)
+        else line depth head ++ line (depth + 1) bindings
+      opening ++ argLines P names abbrevs (depth + 1) (")" ++ suffix) ps
+    | .symm q => line depth "\\kw{sym}(" ++ proofLines P names abbrevs (depth + 1) (")" ++ suffix) q
+    | .trans q r =>
+      line depth "\\kw{trans}(" ++ argLines P names abbrevs (depth + 1) (")" ++ suffix) [q, r]
+    | .congr q k r =>
+      line depth ("\\kw{cong}_{" ++ toString (k + 1) ++ "}(")
+        ++ argLines P names abbrevs (depth + 1) (")" ++ suffix) [q, r]
+
+/-- Arguments on their own lines, comma-separated, the last closing with `close`. -/
+partial def argLines (P : Program) (names : List (String × Nat × Proof)) (abbrevs : List Expr)
+    (depth : Nat) (close : String) : List Proof → String
+  | [] => ""
+  | [p] => proofLines P names abbrevs depth close p
+  | p :: ps => proofLines P names abbrevs depth "," p ++ argLines P names abbrevs depth close ps
+
+/-- A proof on one line, with the shared subproofs named. -/
+partial def inlineNamed (P : Program) (names : List (String × Nat × Proof)) (abbrevs : List Expr)
+    (p : Proof) : String :=
+  match names.find? (·.1 == inlineProof P abbrevs p) with
+  | some (_, k, _) => "\\pi_{" ++ toString k ++ "}"
+  | none =>
+    match p with
+    | .rule c i σ ps =>
+      "\\kw{rule}_{" ++ toString (i + 1) ++ "}(" ++ claim abbrevs c ++ ",\\ "
+        ++ subst abbrevs (ruleOrder P i) σ
+        ++ (if ps.isEmpty then ")"
+            else ";\\ " ++ String.intercalate ",\\ " (ps.map (inlineNamed P names abbrevs)) ++ ")")
+    | .symm q => "\\kw{sym}(" ++ inlineNamed P names abbrevs q ++ ")"
+    | .trans q r =>
+      "\\kw{trans}(" ++ inlineNamed P names abbrevs q ++ ",\\ " ++ inlineNamed P names abbrevs r
+        ++ ")"
+    | .congr q k r =>
+      "\\kw{cong}_{" ++ toString (k + 1) ++ "}(" ++ inlineNamed P names abbrevs q ++ ",\\ "
+        ++ inlineNamed P names abbrevs r ++ ")"
+
+end
+
+/-- A proof as an `eggprogram`: the proof, then the named terms and the shared subproofs. -/
+def proof (P : Program) (pf : Proof) : String :=
+  let abbrevs := dedup ((proofTerms pf).flatMap fun t => proofSubs t.toExpr)
+  let names := sharedNodes P abbrevs pf
+  let main := proofLines P names abbrevs 0 "" pf
+  let defs := abbrevs.zipIdx.map fun (e, k) =>
+    "t_{" ++ toString (k + 1) ++ "} = " ++ expr (abbrevs.take k) e
+  let terms := if defs.isEmpty then "" else pack 0 "\\text{where }" ",\\ " defs none
+  let shared := String.join <| names.map fun (_, k, p) =>
+    let earlier := names.filter (·.2.1 < k)
+    let lead := (if k = 1 && defs.isEmpty then "\\text{where }" else "\\text{and }")
+      ++ "\\pi_{" ++ toString k ++ "} = "
+    -- The body starts on the lead's line when it fits, else below it.
+    let one := inlineNamed P earlier abbrevs p
+    if visible (lead ++ one) ≤ 74 then line 0 (lead ++ one)
+    else line 0 lead ++ proofLines P earlier abbrevs 1 "" p
+  "\\begingroup\\small\n\\begin{eggprogram}\n" ++ main ++ terms ++ shared
     ++ "\\end{eggprogram}\n\\endgroup\n"
 
 end Egglog.PaperTex

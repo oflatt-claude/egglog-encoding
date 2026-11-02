@@ -33,6 +33,7 @@ import EgglogSemantics.Congruence.Relational
 import EgglogSemantics.SourceProof.Checker
 import EgglogSemantics.SourceProof.Evaluate
 import EgglogSemantics.SourceProof.Format
+import EgglogSemantics.SourceProof.Simplify
 
 -- Provenance
 import EgglogSemantics.Provenance.Checker
