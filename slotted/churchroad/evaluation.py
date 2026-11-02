@@ -520,7 +520,13 @@ def provenance(paths, full):
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "discovery":
+        from .discovery_eval import main as discovery_main
+
+        return discovery_main(argv[1:])
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.epilog = "For bounded module discovery: churchroad-eval.py discovery --help"
     parser.add_argument("--toolchain", type=Path, default=ROOT / "benchmarks/local/reproduction/slotted-churchroad")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--case", choices=["wide-mul", "simple-mul"], default="wide-mul")

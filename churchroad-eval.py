@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure Churchroad's native, named, and slotted DSP mapping pipelines."""
+"""Measure Churchroad's DSP mapping or bounded module discovery."""
 
 import importlib
 import sys

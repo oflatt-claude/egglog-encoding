@@ -6,10 +6,12 @@ module definitions. Module inputs use `BindInput`; application uses the existing
 capture-avoiding `subst`. Half-adder and shared-input slice-pair recognition use
 multipatterns. The root Egglog workspace supplies the execution engine.
 
-Candidate cuts are enumerated in Python before entering the slotted e-graph.
-This does not yet port Churchroad's e-graph-based module enumeration or its normal
-DSP mapping pipeline. Candidate parity with a native run and comparative runtime
-have not been established.
+The original command described below enumerates candidate cuts in Python before
+entering the slotted e-graph. Its counts are not native Churchroad measurements.
+The new [module-discovery evaluation](DISCOVERY.md), invoked with
+`./churchroad-eval.py discovery`, instead runs discovery inside Egglog and compares
+complete candidate sets against native Churchroad on the same frozen input and
+round budget. It includes native, vector, and slotted performance controls.
 
 The separate [DSP evaluation](EVALUATION.md), invoked through
 `./churchroad-eval.py`, now measures native DSP mapping against matched named and
@@ -79,21 +81,18 @@ using the existing capture patch to stop before Lakeroad. That establishes that
 the original mapping code runs, but supplies neither a candidate-set comparison
 nor an end-to-end synthesis result.
 
-No Churchroad speedup or slowdown has been measured. The report's
+For this original Python-selected search, no native speed comparison has been
+measured. The report's
 `egglog_wall_sec` measures one supervised slotted-engine process, including startup,
 parsing, rewriting, checks, extraction, and supervision overhead. It excludes
 Python candidate enumeration/export, frontend import, and Yosys verification.
 Single-run observations of approximately 0.15 s (half-adder), 0.50 s (ripple-adder),
 and 0.15 s (wide multiply) are execution diagnostics, not a comparative benchmark.
 
-For this module-discovery prototype, the next research step is to port the actual
-enumeration rules into the slotted e-graph, using the same input expressions and
-explicit search bounds as a native enumeration harness. Compare canonical
-module/application sets, including input
-aliasing, before timing repeated runs with matched build profiles and phase
-boundaries. Evaluate multi-output recognition separately as an extension. Only
-then integrate the resulting modules with DSP mapping and Lakeroad; a full driver
-refactor is not required to establish whether slots help this phase.
+The separate [discovery harness](DISCOVERY.md) now implements that native/slotted
+comparison for single-output modules. Multi-output recognition remains an
+extension in this original prototype. Connecting the enumerated modules to DSP
+mapping and Lakeroad remains further work.
 
 ## IR and matching
 

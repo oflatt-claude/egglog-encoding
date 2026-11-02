@@ -4,6 +4,8 @@
 mapping adapter. It is independent of `bench.py` and never reads or writes its
 cache. It does not generate proofs. The earlier bounded module-discovery
 prototype remains available through `python3 -m slotted.churchroad`.
+The new `./churchroad-eval.py discovery` subcommand separately measures actual
+e-graph module enumeration; see [DISCOVERY.md](DISCOVERY.md).
 
 ```sh
 ./churchroad-eval.py --output-dir /tmp/churchroad-eval --samples 3
@@ -200,8 +202,8 @@ not separate those further. Eliminating saturation would therefore have little
 effect on this example's total runtime. The slotted adapter is slower than the
 typed named control here, including higher rule-loading costs. The experiment
 currently provides no evidence of a speed benefit from slots in normal DSP
-mapping. A claim about module-enumeration performance requires a separate
-experiment that actually runs those rules.
+mapping. The separate [discovery experiment](DISCOVERY.md) runs module-enumeration
+rules and reports its own candidate parity and performance results.
 
 Regression coverage is in `tests/test_churchroad_eval.py`; `make check` also
 builds/lints the current Rust measurement worker. The external native worker,
