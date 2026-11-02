@@ -10,6 +10,6 @@ def certificates (exec : Program → Option FDatabase) (P : Program) :
     Option (List Proof) := do
   let annotated ← Provenance.encode (Congruence.encode P)
   let d ← exec annotated
-  extractAll P d.terms
+  sourceProofs P d.terms
 
 end Egglog.Resugar

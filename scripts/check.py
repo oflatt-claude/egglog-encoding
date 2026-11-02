@@ -31,7 +31,7 @@ PAPER_MODULES = (
     "EgglogSemantics.SourceProof.Format",
     "EgglogSemantics.SourceProof.Checker",
     "EgglogSemantics.Provenance.Encode",
-    "EgglogSemantics.Provenance.Extract",
+    "EgglogSemantics.Provenance.Log",
     "EgglogSemantics.Resugar.Claim",
     "EgglogSemantics.Resugar.Builder",
     "EgglogSemantics.Resugar.Query",

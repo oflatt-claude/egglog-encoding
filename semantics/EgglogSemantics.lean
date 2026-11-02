@@ -37,7 +37,7 @@ import EgglogSemantics.SourceProof.Format
 -- Provenance
 import EgglogSemantics.Provenance.Checker
 import EgglogSemantics.Provenance.Encode
-import EgglogSemantics.Provenance.Extract
+import EgglogSemantics.Provenance.Log
 
 -- Lifting
 import EgglogSemantics.Resugar.Builder

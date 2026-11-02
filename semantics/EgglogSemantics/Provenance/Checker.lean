@@ -11,9 +11,6 @@ export SourceProof (Proof)
 def unionFree (P : Program) : Bool := P.rules.all fun r =>
   r.actions.all fun a => match a with | .union _ _ => false | _ => true
 
-/-- The fact a proof states: the term of its reflexive claim. -/
-def _root_.Egglog.SourceProof.Proof.fact (pf : SourceProof.Proof) : Term := pf.claim.lhs
-
 /-- Check a proof about the compiled program, which has no `union`, and return the fact it
 establishes. -/
 def check (P : Program) (pf : SourceProof.Proof) : Option Term := do

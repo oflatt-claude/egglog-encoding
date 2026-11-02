@@ -17,7 +17,7 @@ def run : Option FDatabase := do
 
 def proofs : Option (List SourceProof.Proof) := do
   let d ← run
-  Resugar.extractAll program d.terms
+  Resugar.sourceProofs program d.terms
 
 #guard run.isSome
 #guard run.any fun d => d.terms.any fun t => match t with
@@ -27,15 +27,15 @@ def proofs : Option (List SourceProof.Proof) := do
   SourceProof.check program p == some p.claim
 #guard proofs.any fun ps => ps.any fun p =>
   p.claim == (⟨a, b⟩ : SourceProof.Claim) || p.claim == (⟨b, a⟩ : SourceProof.Claim)
--- With the firing log removed, extraction cannot justify any of the data rows.
+-- With the firing log removed, no row has a proof.
 #guard run.any fun d =>
-  (Provenance.extract (Congruence.encode program) (Provenance.eraseLog d.terms)).isNone
+  (Provenance.proofs (Congruence.encode program) (Provenance.eraseLog d.terms)).isNone
 
-/-- The computed extraction is subject to the general checked-output guarantee. -/
+/-- The computed proofs are subject to the general checked-output guarantee. -/
 theorem proofs_checked {ps : List SourceProof.Proof} (h : proofs = some ps) :
     ∀ p ∈ ps, SourceProof.check program p = some p.claim := by
   obtain ⟨_, _, he⟩ := Option.bind_eq_some_iff.mp h
-  exact Resugar.extractAll_checked he
+  exact Resugar.sourceProofs_checked he
 
 private def registered : Database :=
   Database.empty
@@ -81,7 +81,7 @@ theorem source_saturated (rs : List Rule) (hc : rs ∈ program.runs) :
 theorem extracted_claim_infers {ps : List SourceProof.Proof} (h : proofs = some ps) :
     ∀ p ∈ ps, reached.Infers p.claim.lhs p.claim.rhs := by
   obtain ⟨_, _, he⟩ := Option.bind_eq_some_iff.mp h
-  exact Resugar.extractAll_infers source_reached (source_reached.wf Database.WF.empty)
+  exact Resugar.sourceProofs_infers source_reached (source_reached.wf Database.WF.empty)
     source_saturated he
 
 end Egglog.Tests.ProofPass

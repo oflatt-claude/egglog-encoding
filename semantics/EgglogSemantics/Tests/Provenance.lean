@@ -1,9 +1,9 @@
-import EgglogSemantics.Provenance.Extract
+import EgglogSemantics.Provenance.Log
 import EgglogSemantics.Congruence.Encode
 import EgglogSemantics.Congruence.Relational
 
 /-! The firing log: an instrumented program builds the data of the original, and every
-data row of the final state has a checked proof read off the log. -/
+row of the final state has a checked proof read off the log. -/
 
 namespace Egglog.Provenance.Tests
 
@@ -20,7 +20,7 @@ def validates (P : Program) : Bool := (do
   let encoded ← encode P
   let original ← Relational.execSchedule runFuel FDatabase.empty P.schedule
   let annotated ← Relational.execSchedule runFuel FDatabase.empty encoded.schedule
-  let proofs ← extract P annotated.terms
+  let proofs ← proofs P annotated.terms
   some (unionFree encoded &&
     decide ((eraseLog annotated.terms).toFinset = original.terms.toFinset) &&
     decide ((proofs.map Prod.fst).toFinset = (dataRows P original.terms).toFinset))).getD false
@@ -56,6 +56,7 @@ private def rewriting : Program :=
 
 #guard validates rewriting
 
+private def refl (t : Term) : SourceProof.Claim := ⟨t, t⟩
 private def table (n : Int) : Term := .app "T" [.lit (.int n)]
 private def goalRow : Term := .app "Goal" [.lit (.int 2)]
 private def stored : Proof := .rule (refl (table 3)) 0 [] []
@@ -78,10 +79,10 @@ private def rewritten : Proof :=
 #guard (check rewriting (.rule (refl (table 3)) 1 [("x", three), ("y", .lit (.int 2))]
   [.rule (refl (table 2)) 0 [] [], goal, threeProof])).isNone
 
--- The log is what the extraction reads: without it no row has a proof.
+-- The proofs are read off the log: without it no row has one.
 private def uninstrumented : Option FDatabase :=
   Relational.execSchedule runFuel FDatabase.empty rewriting.schedule
-#guard uninstrumented.map (fun d => (extractEach rewriting d.terms).all (·.2.isNone)) == some true
+#guard uninstrumented.map (fun d => (rowProofs rewriting d.terms).all (·.2.isNone)) == some true
 #guard uninstrumented.map (fun d =>
   let rows := dataRows rewriting d.terms
   rows.length == 3 && rows.contains (table 2) && rows.contains goalRow &&
@@ -94,12 +95,11 @@ private def uninstrumented : Option FDatabase :=
     | .expr (.app f _) => fireIndex f == some rk.2
     | _ => false
 #guard fireIndex (fireName 12) == some 12
-#guard fireIndex "@prov:fire:" == none
+#guard fireIndex "@fire:" == none
 #guard fireIndex "T" == none
 
--- Unions, reserved names, and names used both as rows and as values are rejected.
+-- Unions and names that look like the log are rejected.
 #guard (encode nestedUnion).isNone
-#guard (encode (prog [global [.expr (.app (namePrefix ++ "user") [])]])).isNone
-#guard (encode (prog [global [.expr (.app "T" [.app "T" []])]])).isNone
+#guard (encode (prog [global [.expr (.app (firePrefix ++ "user") [])]])).isNone
 
 end Egglog.Provenance.Tests

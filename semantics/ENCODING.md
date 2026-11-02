@@ -140,17 +140,17 @@ the original, round for round, subsumes the same rows, and settles when the orig
 The difftest checks this literally: the instrumented final state minus the log is the
 original final state (`difftest provenance 64`).
 
-Proofs are read off the log afterwards (`Provenance/Extract.lean`), in the one proof
-language of `SourceProof/Format.lean`: a certificate for the compiled program is a rule
-node `rule_i((t = t), σ; π̄)` for a row `t` the firing wrote, checked by the same checker as
-a source certificate (`Provenance.check` is `SourceProof.checkIn` on a union-free program,
-returning the row). A firing is justified once every premise is established: a row premise
-by the proof of its instance, an equality or disequality premise by the proof of a row of
-the same firing retargeted to the side in question (`part`), a reflexive claim about one of
-its subterms. Passes over the log justify firings until none is left that can be, each data
-row keeps the first proof found for it, and every returned proof is checked. Proof lifting
-(`Resugar/Lift.lean`) turns each such proof into a source proof that `SourceProof.check` and
-the Rust checker accept.
+Proofs are read off the log afterwards (`Provenance/Log.lean`), in the one proof language
+of `SourceProof/Format.lean`: a certificate for the compiled program is a rule node
+`rule_i((t = t), σ; π̄)` stating the reflexivity of a row `t` the firing wrote, or of a
+subterm of one, checked by the same checker as a source certificate (`Provenance.check` is
+`SourceProof.checkIn` on a union-free program, returning the term). A logged firing is
+justified once every premise has a proof: a row premise by the proof of its instance, an
+equality or disequality premise by the proof of the side in question. `reconstruct`
+justifies firings one at a time until none is left that can be, so a row gets a proof
+exactly when the checker has a derivation for it whose rule nodes are logged firings.
+Proof lifting (`Resugar/Lift.lean`) turns each such proof into a source proof that
+`SourceProof.check` and the Rust checker accept.
 
 The previous design, a proof column on every row with rules firing once per proof,
 does not work with row replacement: a row re-derived with a new proof is a new row for one
@@ -180,7 +180,7 @@ identity out of the data entirely.
   (`PROOF-PORT-A.md` … `PROOF-PORT-G.md` record every statement change; `Proofs/Lookup.lean`
   bridges query lookup and evaluation, `Proofs/Subsume.lean` and
   `Proofs/InterpSubsume.lean` replace the deletion theory). `SourceProof.check_infers` and
-  `Resugar.extractAll_infers` give checked and lifted certificates their meaning in the
+  `Resugar.sourceProofs_infers` give checked and lifted certificates their meaning in the
   reached, saturated source state. The reference interpreter refines the specification
   up to `SameMeaning` for subsume-free programs (`exec_programStep`) and for union-free
   programs with subsumption, disequalities and `min` (`exec_programStep_noUnions`,
@@ -294,7 +294,7 @@ checks the whole corpus.
 The congruence gate compares every pair of held source terms against the compiled
 program's reading, and checks that execution with and without equality reasoning agrees.
 The provenance gate checks data preservation
-and every retained row's extracted proof. The resugar gate lifts those proofs and checks
+and every retained row's proof read off the log. The resugar gate lifts those proofs and checks
 them against the original source program, and the certificate gate exports the same
 proofs and checks them with Rust egglog. Failures, stuck executions, and
 insufficient fuel fail the command. Out-of-domain cases are counted separately.

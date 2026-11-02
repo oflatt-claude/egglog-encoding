@@ -45,9 +45,9 @@ theorem lift_check_claim {P : Program} {input : SourceProof.Proof}
         · contradiction
     · contradiction
 
-/-- Every proof returned by extraction and lifting checks against the source program. -/
-theorem extractAll_checked {P : Program} {terms : List Term} {outputs : List SourceProof.Proof}
-    (h : extractAll P terms = some outputs) :
+/-- Every proof read off the log and lifted checks against the source program. -/
+theorem sourceProofs_checked {P : Program} {terms : List Term} {outputs : List SourceProof.Proof}
+    (h : sourceProofs P terms = some outputs) :
     ∀ output ∈ outputs, SourceProof.check P output = some output.claim := by
   obtain ⟨rows, _, h⟩ := Option.bind_eq_some_iff.mp h
   have aux : ∀ (xs : Provenance.Facts) (ys : List SourceProof.Proof),
@@ -73,7 +73,7 @@ theorem certificates_checked {exec : Program → Option FDatabase} {P : Program}
     ∀ output ∈ outputs, SourceProof.check P output = some output.claim := by
   obtain ⟨_, _, h⟩ := Option.bind_eq_some_iff.mp h
   obtain ⟨_, _, h⟩ := Option.bind_eq_some_iff.mp h
-  exact extractAll_checked h
+  exact sourceProofs_checked h
 
 /-- Lifting establishes the mapped claim in the reached, saturated source state. -/
 theorem lift_supported {P : Program} {db : Database}
@@ -109,12 +109,12 @@ theorem lift_infers {P : Program} {db : Database}
   SourceProof.check_infers hs hw hclosed (lift_checked hf hc h)
 
 /-- Every extracted source proof infers its claim in the reached, saturated source model. -/
-theorem extractAll_infers {P : Program} {db : Database} {terms : List Term}
+theorem sourceProofs_infers {P : Program} {db : Database} {terms : List Term}
     {outputs : List SourceProof.Proof}
     (hs : Reach Database.empty P.schedule db) (hw : db.WF)
-    (hclosed : ∀ rs ∈ P.runs, RunSaturated rs db) (h : extractAll P terms = some outputs) :
+    (hclosed : ∀ rs ∈ P.runs, RunSaturated rs db) (h : sourceProofs P terms = some outputs) :
     ∀ output ∈ outputs, db.Infers output.claim.lhs output.claim.rhs :=
-  fun output ho => SourceProof.check_infers hs hw hclosed (extractAll_checked h output ho)
+  fun output ho => SourceProof.check_infers hs hw hclosed (sourceProofs_checked h output ho)
 
 /-- Running the public certificate pipeline has the same source inference guarantee. -/
 theorem certificates_infers {exec : Program → Option FDatabase} {P : Program} {db : Database}

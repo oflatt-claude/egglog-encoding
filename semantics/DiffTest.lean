@@ -1,6 +1,6 @@
 import EgglogSemantics.Tests.Congruence
 import EgglogSemantics.Congruence.Reader
-import EgglogSemantics.Provenance.Extract
+import EgglogSemantics.Provenance.Log
 import EgglogSemantics.Resugar.Export
 import EgglogSemantics.Tests.Egg
 import EgglogSemantics.Tests.Parse
@@ -876,7 +876,7 @@ private def provenanceCheck (fuel : Nat) (p : Program) (liftProofs : Bool) : Lis
   -- Without its log, the instrumented state is the original state.
   if (Provenance.eraseLog annotated.terms).toFinset != original.terms.toFinset then
     errors := errors ++ ["states differ without the log"]
-  let proofs := Provenance.extractEach q annotated.terms
+  let proofs := Provenance.rowProofs q annotated.terms
   let bad := proofs.filter fun tp => match tp.2 with
     | none => true
     | some pf => liftProofs && (Resugar.lift p pf).isNone

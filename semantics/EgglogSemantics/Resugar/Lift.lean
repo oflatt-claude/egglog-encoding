@@ -1,5 +1,5 @@
 import EgglogSemantics.Resugar.Query
-import EgglogSemantics.Provenance.Extract
+import EgglogSemantics.Provenance.Log
 import EgglogSemantics.Resugar.Claim
 import Architect
 
@@ -128,10 +128,10 @@ def lift (P : Program) (pf : Proof) : Option Proof := do
     let result ← liftProof P compiled.origins pf
     if SourceProof.check P result == some wanted then some result else none
 
-/-- Lift a source proof of every data row of the compiled program from the final state of
-its instrumented run. -/
-def extractAll (P : Program) (terms : List Term) : Option (List Proof) := do
-  let rows ← Provenance.extract (Congruence.encode P) terms
+/-- A source proof of every row of the compiled program, read off the log of its
+instrumented run and lifted. -/
+def sourceProofs (P : Program) (terms : List Term) : Option (List Proof) := do
+  let rows ← Provenance.proofs (Congruence.encode P) terms
   rows.mapM fun tp => lift P tp.2
 
 end Egglog.Resugar

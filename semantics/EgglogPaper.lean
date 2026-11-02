@@ -51,10 +51,10 @@ assert_no_sorry Egglog.exec_complete_noUnions
 assert_no_sorry Egglog.observe_eval_noUnions
 assert_no_sorry Egglog.Congruence.exec_encode_programStep
 
--- Certificates: checked source proofs infer their claims, and so does everything the
--- firing-log extraction and lifting return.
+-- Certificates: checked source proofs infer their claims, and so does every proof read
+-- off the firing log and lifted.
 assert_no_sorry Egglog.SourceProof.check_infers
-assert_no_sorry Egglog.Provenance.extract_checked
+assert_no_sorry Egglog.Provenance.proofs_checked
 assert_no_sorry Egglog.Provenance.Generated.check_uf_infers
-assert_no_sorry Egglog.Resugar.extractAll_infers
+assert_no_sorry Egglog.Resugar.sourceProofs_infers
 assert_no_sorry Egglog.Resugar.certificates_infers

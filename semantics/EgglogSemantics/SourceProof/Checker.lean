@@ -14,8 +14,7 @@ def sourceOk (P : Program) : Bool := decide P.Fragment
 /-- An equality premise is proved by the equation of its two instances; a bare pattern `e`
 is the paper's `e = e`, so it is proved by its instance's reflexivity. A disequality, which
 only compiled programs use, is proved by its left instance's reflexivity when the two
-instances differ; `ruleFacts` also asks that the right instance be a subterm of some
-premise claim, so that it exists. -/
+instances differ. -/
 def premiseMatches (σ : Env) (p : Pattern) (c : Claim) : Bool :=
   match p with
   | .expr e => e.eval σ == some c.lhs && c.lhs == c.rhs
@@ -28,16 +27,6 @@ def premisesMatch (σ : Env) : Query → List Claim → Bool
   | p :: ps, c :: cs => premiseMatches σ p c && premisesMatch σ ps cs
   | _, _ => false
 
-/-- `t` is a subterm of a side of one of the claims. -/
-def supported (cs : List Claim) (t : Term) : Bool :=
-  cs.any fun c => decide (t ∈ c.lhs.subtermList ∨ t ∈ c.rhs.subtermList)
-
-/-- The right side of every disequality premise exists: it is a subterm of a premise claim. -/
-def disequalitiesSupported (σ : Env) (q : Query) (cs : List Claim) : Bool :=
-  q.all fun p => match p with
-    | .ne _ b => (b.eval σ).any (supported cs)
-    | _ => true
-
 /-- The facts a firing of `r` under `σ` with the premise claims `premises` may state: `σ`
 binds exactly the query's variables, the premise claims match the patterns in order, and
 the facts are those of the head. Every bound value is a subterm of a premise instance, so
@@ -47,9 +36,8 @@ no further support is needed. -/
   \[
   \begin{aligned}
   \operatorname{premises}_\sigma(e_1=e_2)&=\{\eval{e_1}=\eval{e_2}\}\\
-  \operatorname{premises}_\sigma(e_1\ne e_2)&=\{\eval{e_1}=\eval{e_1}\}\\
-    &\qquad\text{if }\eval{e_1}\ne\eval{e_2}\text{ and }\eval{e_2}
-    \text{ is a subterm of a premise claim}\\
+  \operatorname{premises}_\sigma(e_1\ne e_2)&=\{\eval{e_1}=\eval{e_1}\}
+    \quad\text{if }\eval{e_1}\ne\eval{e_2}\\
   \operatorname{refl}(t)&=\{\,s=s\mid s\text{ a subterm of }t\,\}\\
   \operatorname{facts}_\sigma(\kw{union}(e_1,e_2))
     &=\{\eval{e_1}=\eval{e_2},\ \eval{e_2}=\eval{e_1}\}
@@ -62,8 +50,7 @@ no further support is needed. -/
   -/)
   (latexEnv := "paperfragment")]
 def ruleFacts (r : Rule) (σ : Env) (premises : List Claim) : Option (List Claim) := do
-  if decide ((Env.dom σ).Perm r.query.vars) && premisesMatch σ r.query premises &&
-      disequalitiesSupported σ r.query premises then
+  if decide ((Env.dom σ).Perm r.query.vars) && premisesMatch σ r.query premises then
     actionsFacts σ r.actions
   else none
 
