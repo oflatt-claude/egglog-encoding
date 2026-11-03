@@ -1,4 +1,7 @@
-//! Flatten nested patterns into constructor atoms before encoding their matches.
+//! Flatten nested patterns into constructor atoms and lift proofs back to source rules.
+
+pub(super) mod unflatten;
+
 use super::model::*;
 use super::query::{Conditions, ProofNames};
 use egglog::ast::{Expr, Fact, Rewrite as SourceRewrite};

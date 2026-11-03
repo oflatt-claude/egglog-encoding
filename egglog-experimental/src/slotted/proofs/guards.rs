@@ -33,7 +33,7 @@ pub(super) fn validator_name(name: &str) -> &str {
 
 /// Normalize ordinary guard operands and bind the lifted terms at their source spelling.
 /// `renaming-=` retains one fact, with its representatives supplied by `RenamingEq`.
-pub(super) fn proof_body(
+pub(in crate::slotted) fn proof_body(
     rule: &SourceRule,
     dag: &mut TermDag,
     bindings: &HashMap<String, TermId>,

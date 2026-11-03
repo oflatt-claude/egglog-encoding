@@ -127,7 +127,7 @@ pub fn check_claim(
 type CheckedProofs = HashMap<ProofId, Proposition>;
 
 /// Check an equality proof and every proof it depends on, returning what it proves.
-pub(super) fn check_proof_in_program(
+pub(in crate::slotted) fn check_proof_in_program(
     store: &mut SlottedProofStore,
     program: &ProofContext,
     root: ProofId,

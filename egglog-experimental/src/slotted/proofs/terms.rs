@@ -317,7 +317,10 @@ pub fn is_subterm(dag: &TermDag, needle: TermId, haystack: TermId) -> bool {
 }
 
 /// A permutation mapping each pair of terms exactly, or `None` if none exists.
-pub(super) fn term_renaming(dag: &TermDag, pairs: &[(TermId, TermId)]) -> Option<Renaming> {
+pub(in crate::slotted) fn term_renaming(
+    dag: &TermDag,
+    pairs: &[(TermId, TermId)],
+) -> Option<Renaming> {
     let mut work = pairs.to_vec();
     let mut names = BTreeMap::new();
     while let Some((a, b)) = work.pop() {

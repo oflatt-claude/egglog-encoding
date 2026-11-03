@@ -8,7 +8,7 @@ use super::program::ResolvedSlottedProgram;
 use super::resolve::resolve_program;
 use super::terms::FreshSlots;
 use crate::slotted::Compiler;
-use crate::slotted::flatten::Rewrite as FlatRewrite;
+use crate::slotted::flatten::{Rewrite as FlatRewrite, unflatten};
 use crate::slotted::query::ProofNames;
 use egglog::TermDag;
 use egglog::ast::{Command, Expr, Fact, Literal, Macro, ParseError, Parser, Sexp, Span};
@@ -385,7 +385,7 @@ impl SlottedProofState {
             [&claim.lhs_root, &claim.rhs_root],
         )
         .map_err(|e| format!("claim {claim}: {e}"))?;
-        let (mut store, proof) = super::unflatten::lift(store, &program, proof)?;
+        let (mut store, proof) = unflatten::lift(store, &program, proof)?;
         check_claim(&mut store, &resolved, &source, proof).map_err(|e| {
             format!(
                 "the translated proof does not check: {e}\n{}",

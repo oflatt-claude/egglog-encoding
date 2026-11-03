@@ -1,10 +1,10 @@
 //! Lift proofs of flattened rewrites back to the original source rules.
-use super::context::{ProofContext, pattern_term};
-use super::coordinates::Coordinates;
-use super::format::{ProofId, RulePremise, SlottedProof, SlottedProofStore};
-use super::guards::proof_body;
-use super::terms::{Renaming, term_renaming};
-use super::{HashMap, HashSet};
+use crate::slotted::proofs::context::{ProofContext, pattern_term};
+use crate::slotted::proofs::coordinates::Coordinates;
+use crate::slotted::proofs::format::{ProofId, RulePremise, SlottedProof, SlottedProofStore};
+use crate::slotted::proofs::guards::proof_body;
+use crate::slotted::proofs::terms::{Renaming, term_renaming};
+use crate::slotted::proofs::{HashMap, HashSet};
 use egglog::ast::{Literal, ResolvedExpr, ResolvedFact};
 use egglog::proof::{Justification as Step, Proposition};
 use egglog::{Term, TermId};
@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 
 type Result<T> = std::result::Result<T, String>;
 
-pub(super) fn lift(
+pub(in crate::slotted) fn lift(
     old: SlottedProofStore,
     program: &ProofContext,
     root: ProofId,

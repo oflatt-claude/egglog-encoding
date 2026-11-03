@@ -9,11 +9,11 @@ use egglog::TermId;
 use egglog::proof::{Justification, Proposition};
 use std::ops::{Deref, DerefMut};
 
-pub(super) type ViewId = usize;
+pub(in crate::slotted) type ViewId = usize;
 
 /// Coordinates for an encoded edge, whose actual proof states `lhs = rename(m, rhs)`.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub(super) struct AppliedEquality {
+pub(in crate::slotted) struct AppliedEquality {
     pub lhs: TermId,
     pub renaming: Renaming,
     pub rhs: TermId,
@@ -26,7 +26,7 @@ struct View {
     chain: Option<(ViewId, ViewId)>,
 }
 
-pub(super) struct Coordinates {
+pub(in crate::slotted) struct Coordinates {
     store: SlottedProofStore,
     views: Vec<View>,
     index: HashMap<View, ViewId>,

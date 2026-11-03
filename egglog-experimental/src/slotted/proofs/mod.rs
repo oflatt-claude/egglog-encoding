@@ -4,17 +4,16 @@
 
 mod bindings;
 pub mod checker;
-mod context;
-mod coordinates;
+pub(super) mod context;
+pub(super) mod coordinates;
 pub mod format;
-mod guards;
+pub(super) mod guards;
 mod lift_slots;
 mod normalize;
 pub(crate) mod pipeline;
 mod program;
 mod resolve;
 pub mod terms;
-mod unflatten;
 
 pub use checker::{SlottedCheckError, check_claim, check_proof};
 pub use context::SourceError;
@@ -28,5 +27,5 @@ pub use terms::Renaming;
 use rustc_hash::FxHasher;
 use std::hash::BuildHasherDefault;
 
-type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
-type HashSet<K> = hashbrown::HashSet<K, BuildHasherDefault<FxHasher>>;
+pub(super) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub(super) type HashSet<K> = hashbrown::HashSet<K, BuildHasherDefault<FxHasher>>;

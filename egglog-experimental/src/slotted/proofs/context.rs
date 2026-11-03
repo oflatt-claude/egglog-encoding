@@ -55,7 +55,7 @@ impl SourceFact for ResolvedFact {
     }
 }
 
-pub(super) fn pattern_term(dag: &mut TermDag, expr: &ResolvedExpr) -> TermId {
+pub(in crate::slotted) fn pattern_term(dag: &mut TermDag, expr: &ResolvedExpr) -> TermId {
     dag.expr_to_term(&expr.clone().make_unresolved())
 }
 
@@ -123,7 +123,7 @@ impl SourceRule {
         Self { rule, globals }
     }
 
-    pub(super) fn endpoints(&self) -> (&ResolvedExpr, &ResolvedExpr) {
+    pub(in crate::slotted) fn endpoints(&self) -> (&ResolvedExpr, &ResolvedExpr) {
         let [GenericAction::Union(_, lhs, rhs)] = self.rule.head.0.as_slice() else {
             unreachable!("source rewrites have one union action")
         };
@@ -134,7 +134,7 @@ impl SourceRule {
         &self.rule.body[1..]
     }
 
-    pub(super) fn patterns(&self) -> impl Iterator<Item = &ResolvedExpr> {
+    pub(in crate::slotted) fn patterns(&self) -> impl Iterator<Item = &ResolvedExpr> {
         let (lhs, rhs) = self.endpoints();
         [lhs, rhs]
             .into_iter()
@@ -302,7 +302,12 @@ impl ProofContext {
     }
 
     /// Compare terms up to scoped bound names and a bijection of free slots.
-    pub(super) fn eq_modulo_renaming(&self, dag: &mut TermDag, lhs: TermId, rhs: TermId) -> bool {
+    pub(in crate::slotted) fn eq_modulo_renaming(
+        &self,
+        dag: &mut TermDag,
+        lhs: TermId,
+        rhs: TermId,
+    ) -> bool {
         self.renaming_between(dag, lhs, rhs).is_some()
     }
 
