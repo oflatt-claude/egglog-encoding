@@ -15,6 +15,7 @@ members = [
   "benchmark-memory",
   "egraph-isomorphism",
   "egglog-experimental",
+  "slotted-reference",
 ]
 
 [workspace.package]

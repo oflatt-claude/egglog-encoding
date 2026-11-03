@@ -1,0 +1,821 @@
+//! Paper coverage is driven by the figure catalog and the shared ignore file.
+//! Each trial runs in an isolated process with the existing local allocator cap.
+use egglog::{CommandOutput, Read};
+use egglog_experimental::{DisequalityEncoding, EGraph, new_experimental_egraph_with_options};
+use libtest_mimic::Trial;
+use serde::Deserialize;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    io::{Read as _, Seek},
+    path::{Path, PathBuf},
+    process::Command as Process,
+    time::{Duration, Instant},
+};
+
+#[path = "support/extraction.rs"]
+mod extraction;
+#[path = "support/extraction_comparison.rs"]
+mod extraction_comparison;
+#[path = "support/paper_oracles.rs"]
+mod paper_oracles;
+#[path = "support/table_comparison.rs"]
+mod table_comparison;
+
+#[global_allocator]
+static ALLOCATOR: benchmark_memory::LimitedAllocator = benchmark_memory::LimitedAllocator;
+const LIMIT: u64 = 10 * 1024 * 1024 * 1024;
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Ignore {
+    file: String,
+    #[serde(default)]
+    treatments: Vec<String>,
+    disequality_encoding: Option<String>,
+    kind: String,
+    reason: String,
+    evidence: String,
+    memory_limit_bytes: Option<u64>,
+    expected_table_sizes: Option<BTreeMap<String, (usize, usize)>>,
+    #[serde(skip)]
+    matched: BTreeSet<PathBuf>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Observations {
+    tables: BTreeMap<String, usize>,
+    math_classes: Option<usize>,
+    stable: String,
+    /// Terms and variant order are compared in addition to best-term costs.
+    extractions: Vec<extraction_comparison::Extraction>,
+    comparison_in_root_class: Vec<Option<bool>>,
+}
+
+fn observe(
+    file: &Path,
+    mode: &str,
+    encoding: DisequalityEncoding,
+    expected: Option<&Observations>,
+) -> Observations {
+    let mut graph = new_experimental_egraph_with_options(mode == "off", encoding);
+    graph.set_num_threads(1);
+    graph = match mode {
+        "off" => graph,
+        "term" => graph.with_term_encoding_enabled(),
+        "proof-testing" => graph.with_proofs_enabled().with_proof_testing(),
+        _ => panic!("unsupported egglog correctness mode {mode}"),
+    };
+    let source = std::fs::read_to_string(file).unwrap();
+    let commands = graph
+        .parse_program(Some(file.display().to_string()), &source)
+        .unwrap();
+    let baseline_terms: Vec<_> = expected
+        .into_iter()
+        .flat_map(|expected| &expected.extractions)
+        .map(|(cost, terms)| (cost.is_some() && terms.len() == 1).then(|| terms[0].as_str()))
+        .collect();
+    let checked = extraction::run_program_with_extract_checks(
+        &mut graph,
+        commands,
+        mode == "proof-testing",
+        &baseline_terms,
+    )
+    .unwrap_or_else(|error| panic!("{} / {mode}: {error}", file.display()));
+    let outputs = checked.outputs;
+    let CommandOutput::PrintAllFunctionsSize(sizes) = graph.print_size(None).unwrap() else {
+        unreachable!()
+    };
+    let extractions: Vec<_> = outputs
+        .iter()
+        .filter_map(|output| match output {
+            CommandOutput::ExtractBest(dag, cost, term) => {
+                Some((Some(cost.to_string()), vec![dag.to_string(*term)]))
+            }
+            CommandOutput::ExtractVariants(dag, terms) => Some((
+                None,
+                terms.iter().map(|term| dag.to_string(*term)).collect(),
+            )),
+            _ => None,
+        })
+        .collect();
+    Observations {
+        math_classes: file
+            .ends_with("math-iteration-12.egg")
+            .then(|| math_counts(&graph).1),
+        tables: sizes.into_iter().collect(),
+        stable: CommandOutput::snapshot_non_proof_stable_under_proof_encoding(&outputs),
+        extractions,
+        comparison_in_root_class: checked.comparison_in_root_class,
+    }
+}
+
+fn math_counts(graph: &EGraph) -> (BTreeMap<String, usize>, usize) {
+    let CommandOutput::PrintAllFunctionsSize(sizes) = graph.print_size(None).unwrap() else {
+        unreachable!()
+    };
+    let constructors: BTreeMap<_, _> = sizes.into_iter().collect();
+    let mut classes = HashSet::new();
+    graph.read(|state| {
+        for (name, count) in &constructors {
+            let mut rows = 0;
+            state
+                .constructor_enodes(name, |node| {
+                    rows += 1;
+                    classes.insert(node.eclass);
+                })
+                .unwrap();
+            assert_eq!(rows, *count);
+        }
+    });
+    (constructors, classes.len())
+}
+
+fn check_case(root: &Path, file: &Path, requested: &BTreeSet<String>) {
+    use slotted_reference::{Matcher, Substitution};
+    paper_oracles::validate(root, file, requested).unwrap();
+    if requested.iter().any(|mode| mode.starts_with("slotted")) {
+        let source = std::fs::read_to_string(file).unwrap();
+        let frozen = std::fs::read_to_string(file.with_extension("ref")).unwrap();
+        // The generator's standalone fixtures contain exactly one positive run.
+        // Parse its source forms rather than matching text in comments or strings.
+        let forms = egglog::ast::parse_sexps(Some(file.display().to_string()), &source).unwrap();
+        let runs: Vec<_> = forms
+            .iter()
+            .enumerate()
+            .filter_map(|(i, form)| {
+                let (name, args, _) = form.expect_call("workload command").unwrap();
+                if name != "run" {
+                    return None;
+                }
+                assert_eq!(args.len(), 1);
+                let n = args[0].expect_uint::<usize>("run budget").unwrap();
+                (n > 0).then_some((i, n))
+            })
+            .collect();
+        assert_eq!(
+            runs.len(),
+            1,
+            "frozen workload must have exactly one positive run"
+        );
+        let (boundary, budget) = runs[0];
+        let rendered: Vec<_> = forms
+            .iter()
+            .map(|form| form.span().string().to_owned())
+            .collect();
+        let before = rendered[..=boundary].join("\n");
+        let tail = rendered[boundary + 1..].join("\n");
+        let mut counts = BTreeMap::new();
+        for (name, nested) in [("slotted", false), ("slotted-no-aliasing", true)] {
+            if !requested.contains(name) {
+                continue;
+            }
+            eprintln!("Validating {name}");
+            let mut compiler = egglog_experimental::slotted::Compiler::new(
+                egglog_experimental::slotted::Options {
+                    no_aliasing: nested,
+                },
+            );
+            let mut graph = egglog_experimental::slotted::new_egraph();
+            graph.set_num_threads(1);
+            let lowered = compiler.compile(None, &before).unwrap();
+            graph.parse_and_run_program(None, &lowered).unwrap();
+            let size = egglog_experimental::slotted::export::counts(&graph).unwrap();
+            counts.insert(nested, (size.classes, size.nodes));
+            let lowered = compiler.compile(None, &tail).unwrap();
+            graph.parse_and_run_program(None, &lowered).unwrap();
+        }
+        for (name, matcher, policy) in [
+            ("slotted-ref-multi", Matcher::Multi, Substitution::Snapshot),
+            (
+                "slotted-ref-nested-snapshot",
+                Matcher::Nested,
+                Substitution::Snapshot,
+            ),
+            (
+                "slotted-ref-nested",
+                Matcher::Nested,
+                Substitution::Syntactic,
+            ),
+        ] {
+            if !requested.contains(name) {
+                continue;
+            }
+            eprintln!("Validating {name}");
+            let spec = slotted_reference::select_frozen_spec(&frozen, matcher).unwrap();
+            let budgets: Vec<_> = spec
+                .lines()
+                .filter_map(|line| line.strip_prefix("rounds "))
+                .collect();
+            assert_eq!(
+                budgets,
+                [budget.to_string()],
+                "source/reference schedule mismatch"
+            );
+            let native = slotted_reference::run_spec(&spec, policy).unwrap();
+            assert!(
+                !native.goals.is_empty(),
+                "paper workloads must prescribe a goal"
+            );
+            assert!(
+                native.goals.iter().all(|&goal| goal),
+                "{name} did not establish the prescribed target"
+            );
+            if policy == Substitution::Snapshot {
+                let nested = matcher == Matcher::Nested;
+                let expected = counts.get(&nested).expect(
+                    "native snapshot comparison requires an enabled encoded count oracle; exclude dependent modes when the oracle is excluded",
+                );
+                assert_eq!(
+                    *expected,
+                    (native.classes, native.nodes),
+                    "{name}: policy-matched logical counts differ"
+                );
+            }
+        }
+        return;
+    }
+    let encoding = DisequalityEncoding::Nee;
+    let policy: Vec<Ignore> = serde_json::from_str(
+        &std::fs::read_to_string(root.join("benchmarks/ignore.json")).unwrap(),
+    )
+    .unwrap();
+    let file_identity = file.canonicalize().unwrap();
+    let mut observations = BTreeMap::new();
+    let mut modes = BTreeSet::new();
+    for mode in requested {
+        match mode.as_str() {
+            "off" | "term" => {
+                modes.insert(mode.as_str());
+            }
+            "proofs" | "proof-extraction" | "proof-testing" => {
+                modes.insert("proof-testing");
+            }
+            _ => {}
+        }
+    }
+    // Native comparisons require this same source execution as their oracle.
+    if requested.iter().any(|mode| mode.starts_with("egg")) {
+        assert!(
+            requested.contains("off"),
+            "native comparison requires an enabled off oracle; exclude dependent modes when the oracle is excluded"
+        );
+        modes.insert("off");
+    }
+    // Off checks the actual term-mode alternatives on ordinary pre-command
+    // clones; equality only in the encoded candidate graph is insufficient.
+    // Strict mode instead supplies independently checked source proofs.
+    for mode in ["term", "off", "proof-testing"] {
+        if !modes.contains(mode) {
+            continue;
+        }
+        eprintln!("Validating {mode}");
+        let reference = if mode == "off" { "term" } else { "off" };
+        let observed = observe(file, mode, encoding, observations.get(reference));
+        observations.insert(mode, observed);
+    }
+    for mode in ["term", "proof-testing"] {
+        if let Some(mut observed) = observations.remove(mode) {
+            let expected = observations
+                .get("off")
+                .expect("comparisons require enabled off mode");
+            let (equality, evidence) = if mode == "term" {
+                (&expected.comparison_in_root_class, "ordinary root check")
+            } else {
+                (&observed.comparison_in_root_class, "checked source proof")
+            };
+            let context = format!("{} / {mode}, {evidence}", file.display());
+            let ties = extraction_comparison::compare(
+                &mut observed.extractions,
+                &expected.extractions,
+                equality,
+                &context,
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+            if ties > 0 {
+                eprintln!(
+                    "Extraction tie summary: {context}: {ties} verified equal-cost best-term alternatives"
+                );
+            }
+            let expected_failure = policy.iter().find(|rule| {
+                rule.kind == "expected-failure"
+                    && rule.treatments.iter().any(|treatment| treatment == mode)
+                    && rule
+                        .disequality_encoding
+                        .as_deref()
+                        .is_none_or(|value| value == "nee")
+                    && root
+                        .join("benchmarks")
+                        .join(&rule.file)
+                        .canonicalize()
+                        .unwrap()
+                        == file_identity
+            });
+            let xfailed = table_comparison::compare(
+                &observed.tables,
+                &expected.tables,
+                expected_failure.map(|rule| rule.expected_table_sizes.as_ref().unwrap()),
+            )
+            .unwrap_or_else(|error| panic!("{} / {mode}: {error}", file.display()));
+            if xfailed {
+                let rule = expected_failure.unwrap();
+                eprintln!(
+                    "XFAIL {} / {mode}: {:?}; {} [{}]",
+                    file.display(),
+                    rule.expected_table_sizes.as_ref().unwrap(),
+                    rule.reason,
+                    rule.evidence
+                );
+            }
+            assert_eq!(
+                observed.math_classes, expected.math_classes,
+                "{mode}: classes"
+            );
+            assert_eq!(observed.stable, expected.stable, "{mode}: stable outputs");
+            assert!(
+                observed.extractions == expected.extractions,
+                "{mode}: extracted terms/costs differ"
+            );
+        }
+    }
+    for mode in requested {
+        if matches!(
+            mode.as_str(),
+            "egg" | "egg-proofs" | "egg-proof-extraction" | "egg-proof-testing"
+        ) {
+            use egg_math_benchmark::{MATH12_CHECK_LEFT, MATH12_CHECK_RIGHT, ProofMode};
+            assert!(
+                file.ends_with("math-iteration-12.egg"),
+                "unregistered native Math workload"
+            );
+            let policy = if mode == "egg" {
+                ProofMode::Off
+            } else {
+                ProofMode::Check
+            };
+            eprintln!("Validating {mode}: actual Math12 witness and iteration boundary");
+            let (_, native, established) =
+                egg_math_benchmark::run_math(policy, 11, MATH12_CHECK_LEFT, MATH12_CHECK_RIGHT)
+                    .unwrap();
+            assert!(
+                !established,
+                "Math12 witness must be absent at eleven rounds"
+            );
+            drop(native);
+            let (_, native, established) =
+                egg_math_benchmark::run_math(policy, 12, MATH12_CHECK_LEFT, MATH12_CHECK_RIGHT)
+                    .unwrap();
+            assert!(established);
+            let counts = egg_math_benchmark::native_graph_size(&native);
+            drop(native);
+            let expected = &observations["off"];
+            assert_eq!(
+                (&expected.tables, expected.math_classes),
+                (&counts.0, Some(counts.1)),
+                "native Math constructor/class counts differ"
+            );
+            let mut graph =
+                new_experimental_egraph_with_options(policy == ProofMode::Off, encoding);
+            graph.set_num_threads(1);
+            if policy == ProofMode::Check {
+                graph = graph.with_proofs_enabled().with_proof_testing();
+            }
+            let source = std::fs::read_to_string(file)
+                .unwrap()
+                .replacen("(run 12)", "(run 11)", 1);
+            let error = graph.parse_and_run_program(None, &source).unwrap_err();
+            match error {
+                egglog::Error::CheckError(..) if policy == ProofMode::Off => {}
+                egglog::Error::ProofError { error, .. } if policy == ProofMode::Check => {
+                    assert!(
+                        error
+                            .to_string()
+                            .starts_with("Could not find a proof due to query not matching ")
+                    );
+                }
+                error => panic!("expected unestablished Math12 equality at eleven: {error}"),
+            }
+        } else if mode.starts_with("egg-") {
+            assert!(
+                file.ends_with("parameter-analysis.egg"),
+                "unregistered author-driver input"
+            );
+            eprintln!("Validating {mode}");
+            let binary = root
+                .join("benchmarks/local/parameter-native/target/release")
+                .join(mode);
+            let (method, nodes, classes) = match mode.as_str() {
+                "egg-de" => ("de", 1_462_208, 1_362_208),
+                "egg-ee" => ("ee", 1_499_310, 1_362_209),
+                "egg-nee" => ("nee-no-saturation", 1_472_210, 1_372_210),
+                "egg-oee" => ("nee-with-saturation", 1_482_201, 1_362_210),
+                _ => unreachable!(),
+            };
+            let canaries = root.join("benchmarks/disequality/correctness");
+            for (input, base, diseq_num, contradiction, sizes) in [
+                (canaries.join("contradiction.in"), 1, 0, "Y", None),
+                (canaries.join("consistent.in"), 1, 0, "N", None),
+                (
+                    file.with_extension("in"),
+                    100000,
+                    10000,
+                    "Y",
+                    Some((nodes, classes)),
+                ),
+            ] {
+                let output = Process::new(&binary)
+                    .arg(&input)
+                    .arg(base.to_string())
+                    .arg(diseq_num.to_string())
+                    .output()
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{}: {error}; run make check to prepare author drivers",
+                            binary.display()
+                        )
+                    });
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let text = String::from_utf8(output.stdout).unwrap();
+                let mut rows = text.lines();
+                let headers: Vec<_> = rows.next().unwrap().split(',').collect();
+                let values: Vec<_> = rows.next().unwrap().split(',').collect();
+                for (column, expected) in [("method", method), ("contradiction", contradiction)] {
+                    let index = headers.iter().position(|&name| name == column).unwrap();
+                    assert_eq!(
+                        values[index],
+                        expected,
+                        "{mode}: {} / {column}",
+                        input.display()
+                    );
+                }
+                let mut counts = vec![("base", base), ("diseq_num", diseq_num)];
+                if let Some((nodes, classes)) = sizes {
+                    counts.extend([("number_nodes", nodes), ("number_classes", classes)]);
+                }
+                for (column, expected) in counts {
+                    let index = headers.iter().position(|&name| name == column).unwrap();
+                    assert_eq!(
+                        values[index].parse::<usize>().unwrap(),
+                        expected,
+                        "{mode}: {} / {column}",
+                        input.display()
+                    );
+                }
+                assert!(rows.next().is_none());
+            }
+        }
+    }
+}
+
+/// Bound a correctness trial's runtime and retain its full diagnostics. This is
+/// test orchestration, independent of the shared performance measurement path.
+fn run_child(
+    file: &Path,
+    modes: &BTreeSet<String>,
+    deadline: Duration,
+    memory_limit_bytes: Option<u64>,
+) -> Result<(), libtest_mimic::Failed> {
+    let mut stdout = tempfile::tempfile()?;
+    let mut stderr = tempfile::tempfile()?;
+    let mut command = Process::new(std::env::current_exe()?);
+    if let Some(limit) = memory_limit_bytes {
+        command
+            .arg(format!("--memory-limit-bytes={limit}"))
+            .envs(benchmark_memory::ALLOCATOR_ENV);
+    }
+    command
+        .args([
+            "--paper-child",
+            file.to_str().unwrap(),
+            &modes.iter().cloned().collect::<Vec<_>>().join(","),
+        ])
+        .stdout(stdout.try_clone()?)
+        .stderr(stderr.try_clone()?);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() > deadline {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            }
+            #[cfg(not(unix))]
+            child.kill()?;
+            child.wait()?;
+            return Err(format!(
+                "test deadline exceeded after {} seconds",
+                deadline.as_secs()
+            )
+            .into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    if !status.success() {
+        let mut output = String::new();
+        stdout.rewind()?;
+        stdout.read_to_string(&mut output)?;
+        stderr.rewind()?;
+        stderr.read_to_string(&mut output)?;
+        let category = if status.code() == Some(86) {
+            "resource: allocator cap exceeded"
+        } else {
+            "correctness failure"
+        };
+        return Err(format!("{category}\n{output}\nchild status: {status}").into());
+    }
+    stderr.rewind()?;
+    let mut diagnostics = String::new();
+    stderr.read_to_string(&mut diagnostics)?;
+    for line in diagnostics
+        .lines()
+        .filter(|line| line.starts_with("Extraction tie") || line.starts_with("XFAIL "))
+    {
+        eprintln!("{line}");
+    }
+    Ok(())
+}
+
+fn main() {
+    let raw = benchmark_memory::configure(std::env::args_os());
+    let raw: Vec<String> = raw
+        .into_iter()
+        .map(|arg| arg.into_string().unwrap())
+        .collect();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    if raw.get(1).is_some_and(|arg| arg == "--paper-child") {
+        std::env::set_current_dir(&root).unwrap();
+        check_case(
+            &root,
+            Path::new(&raw[2]),
+            &raw[3].split(',').map(str::to_owned).collect(),
+        );
+        return;
+    }
+    let catalog_path = root.join("figures/catalog.json");
+    eprintln!(
+        "Paper native reference internal checks: {}",
+        slotted_reference::CHECKS_ENABLED
+    );
+    let catalog: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&catalog_path).unwrap()).unwrap();
+    let mut ignores: Vec<Ignore> = serde_json::from_str(
+        &std::fs::read_to_string(root.join("benchmarks/ignore.json")).unwrap(),
+    )
+    .unwrap();
+    let mut cells: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
+    for figure in catalog["figures"].as_object().unwrap().values() {
+        let modes: BTreeSet<_> = figure["treatments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(
+                figure
+                    .get("checks")
+                    .and_then(|v| v.as_array())
+                    .into_iter()
+                    .flatten(),
+            )
+            .map(|mode| mode.as_str().unwrap().to_owned())
+            .collect();
+        assert!(
+            !modes.iter().any(|mode| matches!(
+                mode.as_str(),
+                "proofs" | "proof-extraction" | "egg-proofs" | "egg-proof-extraction"
+            )),
+            "the paper catalog must name strict proof-testing or egg-proof-testing; generation-only comparison CLI treatments cannot bypass the strict oracle's exclusions"
+        );
+        for pattern in figure["files"].as_array().unwrap() {
+            let pattern = catalog_path
+                .parent()
+                .unwrap()
+                .join(pattern.as_str().unwrap());
+            let matches: Vec<_> = glob::glob(pattern.to_str().unwrap())
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert!(!matches.is_empty(), "catalog pattern matched nothing");
+            for file in matches {
+                cells
+                    .entry(file.canonicalize().unwrap())
+                    .or_default()
+                    .extend(modes.iter().cloned());
+            }
+        }
+    }
+    for file in glob::glob(
+        root.join("benchmarks/slotted/inputs/**/*.egg")
+            .to_str()
+            .unwrap(),
+    )
+    .unwrap()
+    {
+        cells
+            .entry(file.unwrap().canonicalize().unwrap())
+            .or_default()
+            .extend(
+                [
+                    "slotted",
+                    "slotted-no-aliasing",
+                    "slotted-ref-multi",
+                    "slotted-ref-nested-snapshot",
+                    "slotted-ref-nested",
+                ]
+                .map(str::to_owned),
+            );
+    }
+    // This is the Rust execution dispatch contract, checked against Python's treatment table.
+    let supported = [
+        "off",
+        "term",
+        "proofs",
+        "proof-extraction",
+        "proof-testing",
+        "egg",
+        "egg-proofs",
+        "egg-proof-extraction",
+        "egg-proof-testing",
+        "egg-de",
+        "egg-ee",
+        "egg-nee",
+        "egg-oee",
+        "slotted",
+        "slotted-no-aliasing",
+        "slotted-ref-multi",
+        "slotted-ref-nested",
+        "slotted-ref-nested-snapshot",
+    ];
+    for rule in &mut ignores {
+        assert!(matches!(
+            rule.kind.as_str(),
+            "resource" | "unsupported" | "expected-failure"
+        ));
+        if rule.kind == "expected-failure" {
+            assert!(
+                rule.expected_table_sizes
+                    .as_ref()
+                    .is_some_and(|sizes| !sizes.is_empty()
+                        && sizes.keys().all(|name| !name.is_empty())
+                        && sizes.values().all(|(off, candidate)| off != candidate))
+            );
+            assert!(
+                matches!(rule.treatments.as_slice(), [mode] if matches!(mode.as_str(), "term" | "proof-testing"))
+            );
+            assert!(
+                !rule.file.contains(['*', '?', '[']),
+                "expected failures name one exact file"
+            );
+        } else {
+            assert!(rule.expected_table_sizes.is_none());
+        }
+        assert!(!rule.reason.trim().is_empty() && !rule.evidence.trim().is_empty());
+        assert!(
+            rule.treatments
+                .iter()
+                .all(|mode| supported.contains(&mode.as_str())),
+            "unknown ignored treatment"
+        );
+        assert!(
+            rule.memory_limit_bytes
+                .is_none_or(|limit| limit > 0 && rule.kind == "resource")
+        );
+        assert!(
+            rule.disequality_encoding
+                .as_ref()
+                .is_none_or(|value| matches!(value.as_str(), "nee" | "ee"))
+        );
+        assert!(
+            !Path::new(&rule.file).is_absolute()
+                && !Path::new(&rule.file)
+                    .components()
+                    .any(|c| c == std::path::Component::ParentDir)
+        );
+        rule.matched = glob::glob(root.join("benchmarks").join(&rule.file).to_str().unwrap())
+            .unwrap()
+            .map(|path| path.unwrap().canonicalize().unwrap())
+            .collect();
+        assert!(!rule.matched.is_empty(), "stale ignore pattern");
+    }
+    let memory_limit_bytes = match std::env::var("PAPER_TEST_MEMORY_LIMIT_BYTES").as_deref() {
+        Err(_) => Some(LIMIT),
+        Ok("none") => None,
+        Ok(value) => Some(
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|&limit| limit > 0)
+                .expect("PAPER_TEST_MEMORY_LIMIT_BYTES must be positive or none"),
+        ),
+    };
+    let mut trials = Vec::new();
+    let mut excluded = 0;
+    let mut enabled = 0;
+    let mut expected_failures = 0;
+    let mut applied_expected_failures = BTreeSet::new();
+    let deadline = Duration::from_secs(catalog["timeout_sec"].as_u64().unwrap() * 3);
+    for (file, mut modes) in cells {
+        let name = format!("paper/{}", file.strip_prefix(&root).unwrap().display());
+        assert!(
+            modes.iter().all(|mode| supported.contains(&mode.as_str())),
+            "unknown paper treatment"
+        );
+        paper_oracles::validate(&root, &file, &modes).unwrap();
+        let mut xfail_modes = Vec::new();
+        modes.retain(|mode| {
+            let mut matching = ignores.iter().enumerate().filter(|(_, rule)| {
+                rule.matched.contains(&file)
+                    && (rule.treatments.is_empty() || rule.treatments.contains(mode))
+                    && rule
+                        .disequality_encoding
+                        .as_ref()
+                        .is_none_or(|value| value == "nee")
+                    && rule
+                        .memory_limit_bytes
+                        .is_none_or(|bound| memory_limit_bytes.is_some_and(|limit| limit <= bound))
+            });
+            let matched = matching.next();
+            assert!(
+                matching.next().is_none(),
+                "overlapping benchmark exclusions for {name}/{mode}"
+            );
+            if let Some((index, rule)) = matched {
+                if rule.kind == "expected-failure" {
+                    applied_expected_failures.insert(index);
+                    expected_failures += 1;
+                    xfail_modes.push(mode.clone());
+                    return true;
+                }
+                excluded += 1;
+                eprintln!(
+                    "Excluded {name}/{mode}: {}: {} [{}]",
+                    rule.kind, rule.reason, rule.evidence
+                );
+                false
+            } else {
+                true
+            }
+        });
+        enabled += modes.len();
+        let skipped = modes.is_empty();
+        let mut kind = if skipped {
+            "excluded".to_owned()
+        } else {
+            modes.iter().cloned().collect::<Vec<_>>().join(",")
+        };
+        if !xfail_modes.is_empty() {
+            kind += &format!("; XFAIL {}", xfail_modes.join(","));
+        }
+        trials.push(
+            Trial::test(name, move || {
+                if modes.is_empty() {
+                    return Err("remove the shared ignore entry to execute this trial".into());
+                }
+                run_child(
+                    &file,
+                    &modes,
+                    deadline.saturating_mul(modes.len() as u32),
+                    memory_limit_bytes,
+                )
+            })
+            .with_kind(kind)
+            .with_ignored_flag(skipped),
+        );
+    }
+    for (index, rule) in ignores.iter().enumerate() {
+        if rule.kind == "expected-failure" {
+            assert!(
+                applied_expected_failures.contains(&index),
+                "expected failure is not registered by the paper catalog: {}/{}",
+                rule.file,
+                rule.treatments[0]
+            );
+        }
+    }
+    eprintln!(
+        "Paper coverage: {enabled} runnable configurations; expected failures: {expected_failures}; excluded: {excluded}; benchmarks/ignore.json"
+    );
+    let mut args = libtest_mimic::Arguments::from_iter(raw);
+    if args.test_threads.is_none() {
+        args.test_threads = std::env::var("RUST_TEST_THREADS").ok().map(|value| {
+            value
+                .parse::<usize>()
+                .ok()
+                .filter(|&threads| threads > 0)
+                .expect("RUST_TEST_THREADS must be a positive integer")
+        });
+    }
+    libtest_mimic::run(&args, trials).exit();
+}

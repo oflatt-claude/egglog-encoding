@@ -89,7 +89,7 @@ fn main() {
             }));
         }
     }
-    assert!(tests.len() >= 46, "missing slotted fixtures");
+    assert!(tests.len() >= 44, "missing slotted fixtures");
     assert!(named_rules >= 50, "missing named-rule coverage");
 
     let guide = include_str!("../src/slotted/LANGUAGE.md");

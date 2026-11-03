@@ -13,7 +13,8 @@ const ALLOCATION_EXIT: i32 = 86;
 const SETUP_EXIT: i32 = 87;
 // Mimalloc reads these before main. Disallow startup reservations that could
 // become resident without requesting more VM after the limit is installed.
-const ALLOCATOR_ENV: [(&str, &str); 4] = [
+/// Startup settings required by executables using the local allocation limit.
+pub const ALLOCATOR_ENV: [(&str, &str); 4] = [
     ("MIMALLOC_ARENA_RESERVE", "0"),
     ("MIMALLOC_DISALLOW_ARENA_ALLOC", "1"),
     ("MIMALLOC_RESERVE_OS_MEMORY", "0"),

@@ -1,0 +1,101 @@
+[
+  {
+    "file": "slotted/inputs/logic/*.egg",
+    "treatments": [
+      "slotted-no-aliasing",
+      "slotted-ref-nested",
+      "slotted-ref-nested-snapshot"
+    ],
+    "kind": "unsupported",
+    "reason": "The logic fixtures use multipattern side conditions unsupported by the nested matcher.",
+    "evidence": "The corresponding frozen .ref files have nested=null and record this translation limit."
+  },
+  {
+    "file": "corpus/math/math-iteration-12.egg",
+    "treatments": [
+      "proof-testing"
+    ],
+    "kind": "resource",
+    "reason": "Strict proof testing of the actual Math12 witness exits 86 under the local 10 GiB allocator/address-space cap, including in a fresh process. This exclusion applies to the recorded capped profile.",
+    "evidence": "2026-10-31 fresh-process exit 86 after 37.85 s; peak RSS 3916398592 bytes; binary sha256:42572a2c2eb3b972262ec81f1d5d0084d3e3593fd3ffbca66a256d6dd0e9c36f; input sha256:fde0b4a62c8d5904014babd00dfce11fcab429fa26125280ccd4515f9dd6915f. Saved capture: benchmarks/local/validation/math12-strict-isolation-probe.json",
+    "memory_limit_bytes": 10737418240
+  },
+  {
+    "file": "corpus/math/math-iteration-12.egg",
+    "treatments": [
+      "egg-proof-testing"
+    ],
+    "kind": "resource",
+    "reason": "Native egg checked proofs for the actual Math12 witness exit 86 under the local 10 GiB allocator/address-space cap in a fresh workload-driver process. This exclusion applies to the recorded capped profile.",
+    "evidence": "2026-10-31 fresh-process exit 86 after 25.59 s; peak RSS 3978248192 bytes; binary sha256:073e1c089826d2deb7ca4d81bce1fceb775e31ad4cecdb748a6dd621ae46bab3; input sha256:fde0b4a62c8d5904014babd00dfce11fcab429fa26125280ccd4515f9dd6915f. Saved capture: benchmarks/local/validation/math12-native-check-isolation-probe.json",
+    "memory_limit_bytes": 10737418240
+  },
+  {
+    "file": "disequality/parameter-analysis.egg",
+    "treatments": [
+      "proof-testing"
+    ],
+    "disequality_encoding": "nee",
+    "kind": "resource",
+    "reason": "Strict NEE proofs for the full parameter-analysis input exceed the local 10 GiB allocator/address-space cap in a fresh process. This configuration is deferred from the artifact correctness claim across profiles; uncapped validation has not been established. A smaller input does not certify this workload.",
+    "evidence": "2026-10-31 fresh CLI exit 86 after 370.01 s; peak RSS 6001508352 bytes; binary sha256:ec35c542b3cd098e039aa1524a922f6cc2a915da86e109a1f9ca28403818975a; input sha256:5aa2025d8c0056378264a0609f0651af442ea958c3cd2ae1ea31f91f958961bd. Saved capture: benchmarks/local/validation/parameter-strict-isolation-probe.json. Remove this entry only after validating the full configuration on a suitable machine. A fresh release CLI probe also exited86 after344.01s, peakRSS4614504448B, binarysha256:987a778042da6ac8529764015983e7e0e35dd04d676beb9528906d8b957ddd05; same input/cap. Saved capture: benchmarks/local/validation/parameter-strict-production-probe.json. This is diagnostic evidence, not a paper timing observation."
+  },
+  {
+    "file": "corpus/eggcc/cholesky_decomp-statewalk-call-03.egg",
+    "treatments": [
+      "term"
+    ],
+    "disequality_encoding": "nee",
+    "kind": "expected-failure",
+    "reason": "Known Smaller count bug (#164): 777 rows in ordinary mode, 785 in term mode.",
+    "evidence": "https://github.com/saulshanabrook/egglog-encoding/issues/164. Actual input sha256:0502b1f9162548d0326384e59e4b6c311daea0186b9cd3495fe0aabb0dfe15a7. All other source table counts and all eight extracted terms/costs match; full ordinary/strict certificate checks passed. Approved as a narrow expected failure by the user on 2026-10-31.",
+    "expected_table_sizes": {
+      "Smaller": [
+        777,
+        785
+      ]
+    }
+  },
+  {
+    "file": "corpus/eggcc/nussinov-statewalk-call-03.egg",
+    "treatments": [
+      "term"
+    ],
+    "disequality_encoding": "nee",
+    "kind": "expected-failure",
+    "reason": "Known Smaller count bug (#164): 2301 rows in ordinary mode, 2312 in term mode.",
+    "evidence": "https://github.com/saulshanabrook/egglog-encoding/issues/164. Manually reproduced additional configuration of the same count defect under the user instruction to track merge-related count differences as known bugs. Input sha256:4be8c849046d66d44b148907b453273c66a9aa8bfc75589e21d4615e48cc281b. Captures: benchmarks/local/validation/nussinov03-repro.json and nussinov03-prefix.json.",
+    "expected_table_sizes": {
+      "Smaller": [
+        2301,
+        2312
+      ]
+    }
+  },
+  {
+    "file": "corpus/eggcc/nussinov-statewalk-call-03.egg",
+    "treatments": [
+      "proof-testing"
+    ],
+    "disequality_encoding": "nee",
+    "kind": "expected-failure",
+    "reason": "Known Smaller count bug (#164): 2301 rows in ordinary mode, 2312 in strict proof-testing.",
+    "evidence": "https://github.com/saulshanabrook/egglog-encoding/issues/164. Manually reproduced additional configuration of the same count defect under the user instruction to track merge-related count differences as known bugs. Input sha256:4be8c849046d66d44b148907b453273c66a9aa8bfc75589e21d4615e48cc281b. Captures: benchmarks/local/validation/nussinov03-repro.json and nussinov03-prefix.json.",
+    "expected_table_sizes": {
+      "Smaller": [
+        2301,
+        2312
+      ]
+    }
+  },
+  {
+    "file": "slotted/inputs/sdql/batax_2nd-44rules.egg",
+    "treatments": [
+      "slotted",
+      "slotted-ref-multi"
+    ],
+    "kind": "resource",
+    "reason": "The second BATAX phase exceeds the local 10 GiB cap in encoded multipattern mode. Uncapped validation is unestablished, so this source/native Multi-Snapshot count pair is deferred across profiles.",
+    "evidence": "Fresh actual paper test exits86 after52.94s under10737418240B; capture benchmarks/local/validation/batax2-repro.json, binary5610de2337d2a2dcfc8c41136849a4871de94b9b23b29c16dc61d2add0e2bada. Fresh release CLI also exits86 after66.54s, peakRSS5722030080B, binaryd93be0578aaa0feead5e0836bd75f17620a6b985efc415c15be9316fc312cabd; capture benchmarks/local/validation/batax2-production-cap-probe.json. Source input87277868e931935c2f885433d8135bd3ca01618f911356dd46b2a16e53197cc1; pairedref902232ad6185e35f865cb27b1726b385ce35d93a4d7281f43b359c89064d43ff. These are correctness diagnostics, not paper timing observations. The native Multi/Snapshot comparison is explicitly deferred with its unavailable encoded count oracle; a goal-only run cannot replace that check. Nested timing and matched-count treatments remain registered separately. Remove only after validating the full pair on a suitable machine."
+  }
+]

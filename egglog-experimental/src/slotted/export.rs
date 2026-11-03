@@ -36,6 +36,61 @@ pub struct Counts {
     pub nodes: usize,
 }
 
+/// Count logical nodes and leader components without serializing symmetries.
+/// This reads the same native constructor tables as [`export`], and never runs
+/// maintenance or constructs the goal being tested.
+pub fn counts(graph: &EGraph) -> Result<Counts, String> {
+    let layouts = Layouts::load(graph)?;
+    let mut counts = Counts {
+        classes: 0,
+        nodes: 0,
+    };
+    for symbols in &layouts.carriers {
+        counts.nodes += graph.get_size(&symbols.var);
+        for constructor in layouts
+            .constructors
+            .values()
+            .filter(|op| op.sort == symbols.sort)
+        {
+            counts.nodes += graph.get_size(&constructor.name);
+        }
+        let mut edges = BTreeMap::<Value, Vec<Value>>::new();
+        graph
+            .function_entries(&symbols.free_vars, |row| {
+                edges.entry(row.inputs[0]).or_default();
+            })
+            .map_err(|error| error.to_string())?;
+        let mut missing = false;
+        graph
+            .constructor_enodes(&symbols.renames, |row| {
+                let (from, to) = (row.children[0], row.children[2]);
+                missing |= !edges.contains_key(&from) || !edges.contains_key(&to);
+                edges.entry(from).or_default().push(to);
+                edges.entry(to).or_default().push(from);
+            })
+            .map_err(|error| error.to_string())?;
+        if missing {
+            return Err("leader relation references a class without FreeVars".into());
+        }
+        let mut seen = BTreeSet::new();
+        for &start in edges.keys() {
+            if !seen.insert(start) {
+                continue;
+            }
+            counts.classes += 1;
+            let mut pending = vec![start];
+            while let Some(class) = pending.pop() {
+                for &other in &edges[&class] {
+                    if seen.insert(other) {
+                        pending.push(other);
+                    }
+                }
+            }
+        }
+    }
+    Ok(counts)
+}
+
 /// An annotated egraph-serialize document with independently collected counts.
 /// The extra `counts` field is ignored by consumers of [`AnnotatedEGraph`].
 #[derive(Debug, Serialize)]

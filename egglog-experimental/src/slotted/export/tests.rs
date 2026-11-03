@@ -367,3 +367,22 @@ fn frame_traversal_handles_both_directions_and_out_of_order_links() {
         assert_eq!(Graph::try_from(&doc).unwrap().counts(), (1, 1));
     }
 }
+
+#[test]
+fn count_only_observation_agrees_with_export_without_mutation() {
+    for source in [
+        "(sort U) (constructor F (U U) U) (constructor Lam (U U) U :binder 0) (let a (Lam $x (F $x $y))) (run 0)",
+        "(sort U) (constructor F (U U) U) (let a (F $0 $1)) (union (F $0 $1) (F $1 $0)) (run 0)",
+        "(datatype* (A (A0) (F A)) (B (B0) (G B))) (let a (F (A0))) (let b (G (B0))) (run 0)",
+    ] {
+        let graph = run(source);
+        let before = graph.print_size(None).unwrap().to_string();
+        let counted = counts(&graph).unwrap();
+        let exported = export(&graph).unwrap();
+        assert_eq!(
+            (counted.classes, counted.nodes),
+            (exported.counts.classes, exported.counts.nodes)
+        );
+        assert_eq!(graph.print_size(None).unwrap().to_string(), before);
+    }
+}
