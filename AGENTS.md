@@ -26,25 +26,26 @@ make check
 
 `make nits` runs formatting checks, linting, type checking, and lockfile
 validation without tests. Use `uv run --locked pytest` or `cargo test` directly
-for focused reruns. The root Makefile exposes only `check`, `nits`,
-and the externally required `nightly` entrypoint.
+for focused reruns. `check` combines `nits`, `test-python`, `test-rust`, and
+`test-figures`; CI runs those four parts in parallel. `nightly` is the externally
+required entrypoint.
 
 The catalog-driven Rust paper target and frozen slotted differential pairs run
 in the normal Cargo workspace suite. `make check` prepares unchanged native
 parameter-analysis drivers first and includes Vega tests. No separate Python
 slotted orchestration or live fixture generation belongs in routine validation.
-The Make recipe runs checked workspace regressions with `--skip paper/`, then
-selects the paper target's package alone. This prevents workspace feature merging
+The Make recipe runs the workspace suite without `paper-tests`, then
+selects the `benchmarks/paper-tests` package alone. This prevents workspace feature merging
 from enabling the reference's expensive internal checks on the large paper cases;
 all paper oracles and the ordinary Rust debug assertions remain active.
-CI uses `make check` with the explicitly partial `RUST_TEST_ARGS="--skip paper/"`
-filter. Local `make check` runs all enabled paper cases. The paper target honors
+CI sets the explicitly partial `RUST_TEST_ARGS="--skip paper/"` filter for
+`make test-rust`. Local `make check` runs all enabled paper cases. The paper target honors
 the normal `--test-threads` option and `RUST_TEST_THREADS` environment variable.
 The local Make invocation defaults to two paper workers; ordinary Rust tests
 keep their usual parallelism. Its allocator limit is per child; set
 `RUST_TEST_THREADS=1` for a serial paper run.
 The paper target
-uses the existing 10 GiB allocator/address-space cap by default;
+uses the allocator/address-space cap from `benchmarks/resources.json` by default;
 `PAPER_TEST_MEMORY_LIMIT_BYTES=none` runs it uncapped. Apply the shared ignore
 policy against that selected profile, and print excluded configuration counts.
 
@@ -134,13 +135,15 @@ or modify the JSONL.
   selected treatment controls proof extraction, and cover strict proof validity
   in proof tests.
 - Benchmark files are resolved relative to the command invocation directory,
-  not relative to comparison targets.
-- Cache identity includes binary SHA-256, the complete physical input/include
-  closure and facts SHA-256, treatment, disequality encoding, allocator cap
-  (integer or null) and persisted effective execution-settings digest. Cap changes
-  always require new observations. Successful rows can cross timeouts when their
-  observed wall time fits; raising a timeout retires timeout failures. Historical
-  observations remain append-only; incompatible schemas require a new cache.
+  not relative to comparison targets. Require self-contained files without
+  `(include ...)`; `(input ...)` must stay inside a supplied `--fact-directory`.
+- Cache identity includes binary SHA-256, physical file and fact-directory
+  SHA-256, treatment, disequality encoding, and capped/uncapped allocator profile.
+  Within a profile, reuse successes at larger caps and retry allocation failures
+  only after raising the cap. Raising a timeout retires timeout failures;
+  successful rows can cross timeouts when their observed wall time fits.
+  Historical observations remain append-only; runtime-contract/schema changes
+  require a new cache.
 - Shared exclusions live only in `benchmarks/ignore.json`, with reason/evidence.
   A cap-specific resource exclusion applies only to a set cap no larger than the
   recorded bound, never to uncapped runs. Unsupported entries apply across profiles.

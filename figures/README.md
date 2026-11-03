@@ -64,9 +64,9 @@ Each figure requests the product of its own files and treatments. Collection
 merges identical requests across figures into one plan and one progress display.
 Runtime and memory views therefore share launches. It reuses compatible cached
 observations and collects only missing observations; there is no separate
-cached/render-only mode. Ordinary errors and memory-limit failures remain cached
-within their exact execution profile. Timeouts are retried after the timeout
-increases. Allocator profiles have separate
+cached/render-only mode. Ordinary errors remain cached. Memory-limit failures
+are retried after raising the cap; timeouts are retried after raising the deadline.
+Successes under lower caps can fill larger capped budgets. Allocator profiles have separate
 identities for both successes and failures: capped runs never supply uncapped
 measurements. After lowering the timeout, a successful run's recorded timeout or
 completed wall time must fit the new deadline.
@@ -85,7 +85,8 @@ Final collection defaults to ten uncapped observations per endpoint. Use a clean
 environment with allocator and thread overrides unset, and retain the machine
 and environment description with the observations. Local
 verification can use three rounds and `--memory-limit`, which applies the existing
-10 GiB address-space/allocator cap where supported. Peak RSS is measured separately
+address-space/allocator cap from `benchmarks/resources.json` where supported
+(`--memory-limit-bytes N` selects another bound). Peak RSS is measured separately
 in either profile. The original native disequality executables do not support this
 cap and are identified as uncapped. Keep verification outputs under `/tmp`;
 they do not replace final paper measurements or images.
@@ -126,8 +127,8 @@ recorded observations. Source targets are checked and rebound on each figure
 invocation. An ordinary comparison that assigns the same label/engine to two
 different binaries is rejected before launch. The raw
 `.reports.jsonl` remains append-only. The shared selector matches the current
-executable, complete physical input/include/facts hashes, treatment, encoding and
-resolved execution settings (including allocator profile), then selects
+executable, physical input file and fact-directory hashes, treatment, encoding and
+capped/uncapped allocator profile, then selects
 rows applicable to the requested resource bounds. It binds their original row
 indices into the Vega-Lite specifications. They never borrow missing measurements
 from an older executable.

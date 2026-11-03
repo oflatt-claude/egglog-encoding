@@ -1,0 +1,115 @@
+# Paper experiment inputs and correctness
+
+| Source | Responsibility |
+| --- | --- |
+| [`egglog/`](../egglog) and [`egglog-experimental/`](../egglog-experimental) | Integrated engine and encoding implementations, with their Rust tests |
+| [`figures/catalog.json`](../figures/catalog.json) | Workload globs, timed treatments, correctness-only `checks`, rounds and timeout |
+| [`benchmarking/`](../benchmarking) | Runner, cache, reports, figures and nightly collection |
+| [`benchmarking/native_memory.py`](../benchmarking/native_memory.py) | Startup policy shared with independent reproduction tools; Rust enforces the cap |
+| [`benchmarks/`](.) | Frozen disequality, published-corpus and slotted inputs, provenance, and shared exclusions |
+| [`benchmarking/tests/`](../benchmarking/tests) | Python tooling tests |
+| [`benchmarks/paper-tests/tests/paper.rs`](paper-tests/tests/paper.rs) | Actual catalog inputs/schedules, source-visible per-table sizes, stable outputs, exact extracted terms/variant order/costs, strict proof checks and family oracles |
+| [`benchmarks/paper-tests/tests/slotted_differential.rs`](paper-tests/tests/slotted_differential.rs) | 122 frozen semantic differential cases, including guards, aliases, substitution, and a pinned known limitation |
+| [`slotted-reference/`](../slotted-reference) and [`egg-math-benchmark/`](../egg-math-benchmark) | Native algorithms shared by Rust tests and workload drivers |
+| [`benchmark-memory/`](../benchmark-memory) and [`egraph-isomorphism/`](../egraph-isomorphism) | Allocator support and the independent graph-isomorphism library/CLI |
+| [`benchmarks/reproduction/`](reproduction) | Explicit historical acquisition and fixture regeneration, outside routine tests/figure collection |
+| [`semantics/`](../semantics) and [`paper/`](../paper) | Independent Lean model, differential-test scripts and its formal-semantics writeup |
+
+The paper test target compares ordinary, term-encoded and strict proof-testing
+runs of each enabled input. It excludes internal encoding/proof tables from the
+size map. Extraction checks compare the actual returned terms and costs, and
+strict extraction verifies certificates for those returned terms in order,
+including a checked connection to the requested source root. Supplementary
+extraction checks use a clone and do not mutate the workload being observed.
+One explicit normalization handles equal-cost best-term ties: a different single
+best expression is accepted only when its reported cost matches and the alternate
+expression is checked equal to the requested root in the ordinary configuration
+at that command boundary, or by a checked source proof in strict mode.
+Strict mode proves that equality. The suite reports each accepted tie and its
+count; raw outputs and certificate right-hand sides remain exact. Variant order,
+variant counts and costs are not normalized. Paper inputs must expose their
+extractions at top level so every extraction is intercepted.
+
+Native Math uses the frozen twelve-round witness, its eleven-round negative
+boundary, and logical constructor/class counts. Native disequality checks the
+prescribed contradiction against the four original drivers. Slotted tests use
+matched-policy class/node counts; timing pairs also check their prescribed
+targets. Syntactic and snapshot substitution can produce different graphs.
+Count equality is a size check and does not establish graph isomorphism.
+Matched snapshot comparisons require their encoded count oracle; shared
+exclusions must name both members when that oracle is unavailable.
+The second-phase BATAX multipattern pair is deferred across profiles after a
+fresh local-cap failure; uncapped validation is unestablished. Its nested timing
+and matched-count configurations remain separate checks on the full input.
+The full parameter-analysis NEE strict-proof configuration exceeds the local
+cap even in a fresh process and is explicitly deferred across profiles; it has
+not been certified uncapped. The proofs-off figure is unaffected. General NEE/EE
+pass composition is checked in the smaller semantic cases, which do not
+certify that excluded full workload. Math12 strict modes are excluded only under
+the local cap and have separately passed the actual uncapped correctness trial.
+
+The slotted benchmark suite has 23 frozen `.egg`/`.ref` pairs: ten full-rule SDQL
+kernel/phase inputs, eleven array parameter counts, and two logic fixtures.
+Its 122 small semantic pairs live beside them in `benchmarks/slotted/correctness`.
+Routine commands read these bytes. Regeneration is explicit:
+
+```bash
+python -m benchmarks.reproduction.slotted.generate --check
+python -m benchmarks.reproduction.slotted.generate_differential --check
+```
+
+The reusable `egraph-isomorphism` library/CLI retains its independent tests. Paper
+correctness does not require an isomorphism search. See the
+[slotted source guide](../egglog-experimental/src/slotted/LANGUAGE.md) for the
+language and [encoding explanation](../egglog-experimental/src/slotted/ENCODING.md)
+for policy details.
+
+The Python suite includes a real CLI integration test on small Math and
+disequality fixtures. It uses a temporary report and checks successful runtime/RSS
+observations through the same public runner.
+
+For a disposable three-round verification preview:
+
+```bash
+./bench.py figures --rounds 3 --memory-limit \
+  --report /tmp/egglog-paper-preview.jsonl --output-dir /tmp/egglog-paper-preview
+```
+
+Preview observations use the local allocator/address-space cap configured in
+`benchmarks/resources.json`; `--memory-limit-bytes N` overrides it.
+The cap bounds address space; peak RSS is measured separately. The comparison
+CLI defaults to the cap, while figures default to uncapped collection. Capped and uncapped runs use different
+allocator profiles, so a preview cannot populate uncapped paper measurements.
+Within the capped profile, successes can be reused at larger memory budgets;
+allocation failures and timeouts are retried when their respective budget increases. Cached reruns collect only missing observations.
+
+[`benchmarks/ignore.json`](ignore.json) is the shared exclusion policy
+for Rust tests, comparisons, and figures. Each entry records a reason and
+evidence; optional treatment/encoding selectors narrow it. A resource entry
+with `memory_limit_bytes` applies only when the selected cap is no larger than
+that recorded bound. It never excludes an uncapped run. Entries without a cap
+selector apply across profiles. Excluded conditions remain visible in reports and figure
+coverage, and are never observations or successful correctness checks.
+
+Known table-size bugs use `kind: "expected-failure"` with an issue and exact
+`expected_table_sizes` pairs in `[ordinary, candidate]` order. Rust still executes
+the case and checks every other table, output, extraction and proof. An unexpected
+pass or a different failure fails the suite. The affected condition cannot supply
+verified figure measurements, even if older successful timing rows are cached.
+The current count discrepancy is tracked in
+[issue #164](https://github.com/saulshanabrook/egglog-encoding/issues/164).
+
+The normal Rust paper suite uses the local cap. To run that same suite uncapped:
+
+```bash
+PAPER_TEST_MEMORY_LIMIT_BYTES=none make check
+```
+
+The final paper recipe is `./bench.py figures`: the catalog supplies ten
+observations, a 500-second timeout, and baseline-only cohort selection. The
+final collection uses a clean environment with allocator and thread overrides
+unset; retain its machine/environment description with the data. The
+three-round preview is implementation validation and does not replace paper
+figures or performance numbers. Outputs are `disequality-runtime`,
+`math-runtime`, `corpus-congruence-cdf`, `corpus-proofs-cdf`, and
+`slotted-runtime`, each in PDF/SVG/PNG form.
