@@ -6,6 +6,11 @@ benchmarks/data/pointer-analysis-initdb/*.csv linguist-generated=true
 
 # Prepared compiler inputs are data; source adaptations retain upstream whitespace.
 benchmarks/corpus/**/*.egg linguist-generated=true -whitespace
+# Frozen Slotted programs/specs are generated; review their source and manifests.
+benchmarks/slotted/inputs/**/*.egg linguist-generated=true
+benchmarks/slotted/inputs/**/*.ref linguist-generated=true
+benchmarks/slotted/correctness/**/*.egg linguist-generated=true
+benchmarks/slotted/correctness/**/*.ref linguist-generated=true
 benchmarks/reproduction/patches/*.diff -whitespace
 benchmarks/reproduction/fixtures/** -whitespace
 egglog-experimental/tests/slotted/snapshots/*.snap linguist-generated=true

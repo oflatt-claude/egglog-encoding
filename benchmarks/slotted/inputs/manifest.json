@@ -1,0 +1,486 @@
+{
+  "sources": {
+    "sdql": {
+      "repository": "https://github.com/memoryleak47/slotted-egraphs-artifact",
+      "revision": "83f2e5bee2b3aa45bf97ef1e3a8abe953790c735",
+      "rule_library": "egglog-experimental/tests/slotted/languages/sdql-rules.egg",
+      "rule_library_sha256": "sha256:d0514c2b73976c6c02fe84fc9f1a8fadfb2796762cfba27c1ad1214ba54ca093",
+      "target_contract": "The artifact compares extraction costs; these source fixtures check the stronger supplied target syntax."
+    },
+    "reference": {
+      "repository": "https://github.com/oflatt-claude/slotted-egraphs",
+      "revision": "4480b8f3085b61d93a576ea3eb5e2390ac6a507f"
+    }
+  },
+  "preparation": {
+    "source_revision": "d26e379bc896e4751bcd53b925b1682828dea19b",
+    "command": "python -m benchmarks.reproduction.slotted.generate",
+    "note": "Frozen bytes retain the historical benchmarks.slotted.generate header; generation is an explicit reproduction operation."
+  },
+  "workloads": [
+    {
+      "id": "array/goal-2d-4f-N0",
+      "file": "array/goal-2d-4f-N0.egg",
+      "file_sha256": "sha256:a469562e4e91d835831bb00f9c7d186209d6c9e6df2b763d57b683992da45ebe",
+      "reference": "array/goal-2d-4f-N0.ref",
+      "reference_sha256": "sha256:c83d7317681159f06b8c3fd419c8814890fb183fae307233dc9a8f38f842a742",
+      "family": "array",
+      "rounds": 6,
+      "run_budgets": [
+        6
+      ],
+      "rules": 8,
+      "unsupported_nested": "",
+      "source": {
+        "generator": "benchmarks/reproduction/slotted/array.py",
+        "extra_parameters": 0
+      }
+    },
+    {
+      "id": "array/goal-2d-4f-N1",
+      "file": "array/goal-2d-4f-N1.egg",
+      "file_sha256": "sha256:91a92ad11edfe028d990d2656f1ed2cd277d4d7175318463abde71ef39ee793d",
+      "reference": "array/goal-2d-4f-N1.ref",
+      "reference_sha256": "sha256:b582f6760524d3b8192bebaa61d8ab2717a7f923e57334ebfe06cf3ae3da4dc0",
+      "family": "array",
+      "rounds": 6,
+      "run_budgets": [
+        6
+      ],
+      "rules": 8,
+      "unsupported_nested": "",
+      "source": {
+        "generator": "benchmarks/reproduction/slotted/array.py",
+        "extra_parameters": 1
+      }
+    },
+    {
+      "id": "array/goal-2d-4f-N10",
+      "file": "array/goal-2d-4f-N10.egg",
+      "file_sha256": "sha256:cfb57627f62e22c6f76ff363cef8232e7fb75e1e2f8e548350012f2861e52d67",
+      "reference": "array/goal-2d-4f-N10.ref",
+      "reference_sha256": "sha256:17af3582ac95f235641356a7f76ae8d66cbe3cde205bb8622599547569e07f2b",
+      "family": "array",
+      "rounds": 6,
+      "run_budgets": [
+        6
+      ],
+      "rules": 8,
+      "unsupported_nested": "",
+      "source": {
+        "generator": "benchmarks/reproduction/slotted/array.py",
+        "extra_parameters": 10
+      }
+    },
+    {
+      "id": "array/goal-2d-4f-N2",
+      "file": "array/goal-2d-4f-N2.egg",
+      "file_sha256": "sha256:abf66063df0576b6c5704b8b11aabd024cce312abbc4bf784b2ee9e084c93993",
+      "reference": "array/goal-2d-4f-N2.ref",
+      "reference_sha256": "sha256:ce3870628a56d1c4806d63ed56305d58fe6a95dcd4b671a7345e8206a29bce20",
+      "family": "array",
+      "rounds": 6,
+      "run_budgets": [
+        6
+      ],
+      "rules": 8,
+      "unsupported_nested": "",
+      "source": {
+        "generator": "benchmarks/reproduction/slotted/array.py",
+        "extra_parameters": 2
+      }
+    },
+    {
+      "id": "array/goal-2d-4f-N3",
+      "file": "array/goal-2d-4f-N3.egg",
+      "file_sha256": "sha256:7dde2b7efb9c4e8fce6c769ae391ac973da343a8ef7430f40c731e686360cdd3",
+      "reference": "array/goal-2d-4f-N3.ref",
+      "reference_sha256": "sha256:14e137f9f379264b9834207530a478861f49bbe2b289508e10fdef9641f18f6a",
+      "family": "array",
+      "rounds": 6,
+      "run_budgets": [
+        6
+      ],
+      "rules": 8,
+      "unsupported_nested": "",
+      "source": {
+        "generator": "benchmarks/reproduction/slotted/array.py",
+        "extra_parameters": 3
+      }
+    },
+    {
+      "id": "array/goal-2d-4f-N4",
+      "file": "array/goal-2d-4f-N4.egg",
+      "file_sha256": "sha256:a37192150ca4321347f4a65d9596b96edfa1ea4d54ed3e9c34434d9a6f78c51d",
+      "reference": "array/goal-2d-4f-N4.ref",
+      "reference_sha256": "sha256:0b2dbddc93bc2d570a523d96d6e79e6d63ebd57ec8f8fa60d29116234fd3c6e6",
+      "family": "array",
+      "rounds": 6,
+      "run_budgets": [
+        6
+      ],
+      "rules": 8,
+      "unsupported_nested": "",
+      "source": {
+        "generator": "benchmarks/reproduction/slotted/array.py",
+        "extra_parameters": 4
+      }
+    },
+    {
+      "id": "array/goal-2d-4f-N5",
+      "file": "array/goal-2d-4f-N5.egg",
+      "file_sha256": "sha256:59b5d196fd43f84186440d424d8643cf58f07832f6c622c83299b5565d42cab8",
+      "reference": "array/goal-2d-4f-N5.ref",
+      "reference_sha256": "sha256:ab1030ec8f2387f41e1b32ca043eeda168b53c0406ef184848e95e4285470a5a",
+      "family": "array",
+      "rounds": 6,
+      "run_budgets": [
+        6
+      ],
+      "rules": 8,
+      "unsupported_nested": "",
+      "source": {
+        "generator": "benchmarks/reproduction/slotted/array.py",
+        "extra_parameters": 5
+      }
+    },
+    {
+      "id": "array/goal-2d-4f-N6",
+      "file": "array/goal-2d-4f-N6.egg",
+      "file_sha256": "sha256:a31c605ef07a71fb8e55a561918b18cdaa054fbc112036d59574eff8fbd1dd9f",
+      "reference": "array/goal-2d-4f-N6.ref",
+      "reference_sha256": "sha256:82c5a7f26c9b621ab5d1eb64da8487cc4f8042bd9c1b5b7e6e4f267d7cd206c6",
+      "family": "array",
+      "rounds": 6,
+      "run_budgets": [
+        6
+      ],
+      "rules": 8,
+      "unsupported_nested": "",
+      "source": {
+        "generator": "benchmarks/reproduction/slotted/array.py",
+        "extra_parameters": 6
+      }
+    },
+    {
+      "id": "array/goal-2d-4f-N7",
+      "file": "array/goal-2d-4f-N7.egg",
+      "file_sha256": "sha256:bca00ea8797b9bf9b371a8fa63f241144c200c341119169b4d6543d00edd1240",
+      "reference": "array/goal-2d-4f-N7.ref",
+      "reference_sha256": "sha256:9cf2b2b9a46226d6ce08d440c27fb4651e03f88a8d06018908b54794e9a1870c",
+      "family": "array",
+      "rounds": 6,
+      "run_budgets": [
+        6
+      ],
+      "rules": 8,
+      "unsupported_nested": "",
+      "source": {
+        "generator": "benchmarks/reproduction/slotted/array.py",
+        "extra_parameters": 7
+      }
+    },
+    {
+      "id": "array/goal-2d-4f-N8",
+      "file": "array/goal-2d-4f-N8.egg",
+      "file_sha256": "sha256:6b1d502bbabbde578e592cc5eb294638978a7a4d0c4adb1248c06ca05c04409b",
+      "reference": "array/goal-2d-4f-N8.ref",
+      "reference_sha256": "sha256:71b20ab5894b96a414baa017d6d95fbc55629afef5379572c42490ee69fd4b28",
+      "family": "array",
+      "rounds": 6,
+      "run_budgets": [
+        6
+      ],
+      "rules": 8,
+      "unsupported_nested": "",
+      "source": {
+        "generator": "benchmarks/reproduction/slotted/array.py",
+        "extra_parameters": 8
+      }
+    },
+    {
+      "id": "array/goal-2d-4f-N9",
+      "file": "array/goal-2d-4f-N9.egg",
+      "file_sha256": "sha256:71829f6ed3d6d8c9a4b922e49669e6b5d15c3bdc64e5907e62abd8b205672a34",
+      "reference": "array/goal-2d-4f-N9.ref",
+      "reference_sha256": "sha256:752d701f41063a1e8fcc7b745629d433a9a08b982a4ac748b4c01064c84a8b00",
+      "family": "array",
+      "rounds": 6,
+      "run_budgets": [
+        6
+      ],
+      "rules": 8,
+      "unsupported_nested": "",
+      "source": {
+        "generator": "benchmarks/reproduction/slotted/array.py",
+        "extra_parameters": 9
+      }
+    },
+    {
+      "id": "logic/first-order-logic",
+      "file": "logic/first-order-logic.egg",
+      "file_sha256": "sha256:25d08b53d15c57320c91266a62a80d4e2ca28ed71b98f3621003de0b3cc1a79e",
+      "reference": "logic/first-order-logic.ref",
+      "reference_sha256": "sha256:7cd9a8a46d10c69606f51aa6dbbb6c211926ff9273093685211424f1202c71ab",
+      "family": "logic",
+      "rounds": 2,
+      "run_budgets": [
+        2
+      ],
+      "rules": 2,
+      "unsupported_nested": "requires a single nested pattern; found multipattern :when conditions",
+      "source": {
+        "input": "egglog-experimental/benches/slotted/logic/first-order-logic.egg",
+        "input_sha256": "sha256:c1c4732a07a1ef1c87ee2acf3b7276b948b3157c81bcd2627b48c0bf773a31a4"
+      }
+    },
+    {
+      "id": "logic/first-order-logic2",
+      "file": "logic/first-order-logic2.egg",
+      "file_sha256": "sha256:2eac61fd74050e2e9f0f8cac4081800535fe94f46599e3592e81f957830b4a14",
+      "reference": "logic/first-order-logic2.ref",
+      "reference_sha256": "sha256:0c0e69c914f06780cd64f1415d9eda7457d0eb101fd8807c5fc68d4c4de07e88",
+      "family": "logic",
+      "rounds": 5,
+      "run_budgets": [
+        5
+      ],
+      "rules": 12,
+      "unsupported_nested": "requires a single nested pattern; found multipattern :when conditions",
+      "source": {
+        "input": "egglog-experimental/benches/slotted/logic/first-order-logic2.egg",
+        "input_sha256": "sha256:a2c0514acca7b9c30fe646b627a8fde5832ac40ffbe038d35c749502034044fb"
+      }
+    },
+    {
+      "id": "sdql/batax_1st-44rules",
+      "file": "sdql/batax_1st-44rules.egg",
+      "file_sha256": "sha256:e41027e48ab509ea8553ea6f5bd475370f9da119b12abba04257402171bb4b7a",
+      "reference": "sdql/batax_1st-44rules.ref",
+      "reference_sha256": "sha256:0be815ada87c0aa928b571e68e3328a9bb5af98cde47a343e11c7db31601cf5d",
+      "family": "sdql",
+      "rounds": 13,
+      "run_budgets": [
+        13,
+        0
+      ],
+      "rules": 44,
+      "unsupported_nested": "",
+      "source": {
+        "artifact_input": "sdql/slotted/progs/batax_1st.sexp",
+        "artifact_target": "sdql/baseline/progs/batax_1st_esat.sexp",
+        "input": "benchmarks/reproduction/slotted/fixtures/sdql/batax_1st.sexp",
+        "target": "benchmarks/reproduction/slotted/fixtures/sdql/batax_1st_esat.sexp",
+        "input_sha256": "sha256:79fe328519c47086000d19a8c18e16cb8964040b432c341dd2cfaf5bcef4f8b1",
+        "target_sha256": "sha256:9dfb9431a33cfcfdd342152d791644100fbfc4a522b391a42956b7488d7db56e"
+      }
+    },
+    {
+      "id": "sdql/batax_2nd-44rules",
+      "file": "sdql/batax_2nd-44rules.egg",
+      "file_sha256": "sha256:87277868e931935c2f885433d8135bd3ca01618f911356dd46b2a16e53197cc1",
+      "reference": "sdql/batax_2nd-44rules.ref",
+      "reference_sha256": "sha256:902232ad6185e35f865cb27b1726b385ce35d93a4d7281f43b359c89064d43ff",
+      "family": "sdql",
+      "rounds": 12,
+      "run_budgets": [
+        12,
+        0
+      ],
+      "rules": 44,
+      "unsupported_nested": "",
+      "source": {
+        "artifact_input": "sdql/slotted/progs/batax_2nd.sexp",
+        "artifact_target": "sdql/baseline/progs/batax_2nd_esat.sexp",
+        "input": "benchmarks/reproduction/slotted/fixtures/sdql/batax_2nd.sexp",
+        "target": "benchmarks/reproduction/slotted/fixtures/sdql/batax_2nd_esat.sexp",
+        "input_sha256": "sha256:56d79c9b03e4519fc5efb1bb9d2b076be96d07f7a5121d077e546763a3d7e4bf",
+        "target_sha256": "sha256:624416ad4d34c22899f7f9da52cddb5ac299acedea4920b00ee8cce2882f1f9a"
+      }
+    },
+    {
+      "id": "sdql/mmm_1st-44rules",
+      "file": "sdql/mmm_1st-44rules.egg",
+      "file_sha256": "sha256:dafabe24077fedae4905b98590a3c94b1e01a84ad3ec71070ed59d8eceacfe8e",
+      "reference": "sdql/mmm_1st-44rules.ref",
+      "reference_sha256": "sha256:17ed2c0d33989955113243efda545ae0d622f32bdf218751800b61f33da3bd4b",
+      "family": "sdql",
+      "rounds": 30,
+      "run_budgets": [
+        30,
+        0
+      ],
+      "rules": 44,
+      "unsupported_nested": "",
+      "source": {
+        "artifact_input": "sdql/slotted/progs/mmm_1st.sexp",
+        "artifact_target": "sdql/baseline/progs/mmm_1st_esat.sexp",
+        "input": "benchmarks/reproduction/slotted/fixtures/sdql/mmm_1st.sexp",
+        "target": "benchmarks/reproduction/slotted/fixtures/sdql/mmm_1st_esat.sexp",
+        "input_sha256": "sha256:753240502d980779927ac9bbb76f9b5b40c3c1a545fa782b31699dc3822b90b5",
+        "target_sha256": "sha256:c67a1ab0d992280e9f0d35ffa1c9e9c380e49d7d8fa7f063003ca36ee73a25be"
+      }
+    },
+    {
+      "id": "sdql/mmm_2nd-44rules",
+      "file": "sdql/mmm_2nd-44rules.egg",
+      "file_sha256": "sha256:44f23b505b48e69aac074d9d19ef2d2aabdd3191e42e0de672e90c4e962637a3",
+      "reference": "sdql/mmm_2nd-44rules.ref",
+      "reference_sha256": "sha256:97d90052b569dbafcaea6a24c2a2cb4f58794e8da770b34a94f3e8ee00e68e07",
+      "family": "sdql",
+      "rounds": 30,
+      "run_budgets": [
+        30,
+        0
+      ],
+      "rules": 44,
+      "unsupported_nested": "",
+      "source": {
+        "artifact_input": "sdql/slotted/progs/mmm_2nd.sexp",
+        "artifact_target": "sdql/baseline/progs/mmm_2nd_esat.sexp",
+        "input": "benchmarks/reproduction/slotted/fixtures/sdql/mmm_2nd.sexp",
+        "target": "benchmarks/reproduction/slotted/fixtures/sdql/mmm_2nd_esat.sexp",
+        "input_sha256": "sha256:91213928c2b76956e8580df36a9e35f4cd8921db4cfcbe8b57b212acab5102f9",
+        "target_sha256": "sha256:e925c06fd461130498af9620aa050e76094b36214d095fa30fa484cdf52588f0"
+      }
+    },
+    {
+      "id": "sdql/mmm_sum_1st-44rules",
+      "file": "sdql/mmm_sum_1st-44rules.egg",
+      "file_sha256": "sha256:ccbc48815f391677596099dff283ea5aafad1ac9653accf0a298205a4cf1af43",
+      "reference": "sdql/mmm_sum_1st-44rules.ref",
+      "reference_sha256": "sha256:964f9945b4b0958faa60ee5f2f8434f3638930ba542835e4cc0d5f26cdf4baaa",
+      "family": "sdql",
+      "rounds": 30,
+      "run_budgets": [
+        30,
+        0
+      ],
+      "rules": 44,
+      "unsupported_nested": "",
+      "source": {
+        "artifact_input": "sdql/slotted/progs/mmm_sum_1st.sexp",
+        "artifact_target": "sdql/baseline/progs/mmm_sum_1st_esat.sexp",
+        "input": "benchmarks/reproduction/slotted/fixtures/sdql/mmm_sum_1st.sexp",
+        "target": "benchmarks/reproduction/slotted/fixtures/sdql/mmm_sum_1st_esat.sexp",
+        "input_sha256": "sha256:73ad76502e4ae787de5b964876fe7756b1dd1227882fb1a08da00f44f281b686",
+        "target_sha256": "sha256:629beb57fbe1ede4245b196a8702becc5b2a4475226821b667e248b16a9518cd"
+      }
+    },
+    {
+      "id": "sdql/mmm_sum_2nd-44rules",
+      "file": "sdql/mmm_sum_2nd-44rules.egg",
+      "file_sha256": "sha256:aba9773a2e72d9926d341a1a317501d00e0c729a49b17508ddbe9654277f00f2",
+      "reference": "sdql/mmm_sum_2nd-44rules.ref",
+      "reference_sha256": "sha256:1b2e94bb31884e757917fe038a5b5328f8ff01b40235d70e0c8a7cc815c6b0c1",
+      "family": "sdql",
+      "rounds": 30,
+      "run_budgets": [
+        30,
+        0
+      ],
+      "rules": 44,
+      "unsupported_nested": "",
+      "source": {
+        "artifact_input": "sdql/slotted/progs/mmm_sum_2nd.sexp",
+        "artifact_target": "sdql/baseline/progs/mmm_sum_2nd_esat.sexp",
+        "input": "benchmarks/reproduction/slotted/fixtures/sdql/mmm_sum_2nd.sexp",
+        "target": "benchmarks/reproduction/slotted/fixtures/sdql/mmm_sum_2nd_esat.sexp",
+        "input_sha256": "sha256:ed9cce0b48e002fe7e99bcc82985ddd97ceb4965be6b3cd6cf549bc63c46df9f",
+        "target_sha256": "sha256:1b134f4fb4573f3c6c0da740384902cd08b979f54aa8e00c2a1531745af2f7ed"
+      }
+    },
+    {
+      "id": "sdql/mttkrp_1st-44rules",
+      "file": "sdql/mttkrp_1st-44rules.egg",
+      "file_sha256": "sha256:8057f1c6b02c37672adcb86dcb884f53edb9a4972fd1e9cbfad71646c81ec486",
+      "reference": "sdql/mttkrp_1st-44rules.ref",
+      "reference_sha256": "sha256:1f1687137cdf82ebb1fcc71662dc6c44d7e1a7a0f9974e133270b14440c4b8ac",
+      "family": "sdql",
+      "rounds": 30,
+      "run_budgets": [
+        30,
+        0
+      ],
+      "rules": 44,
+      "unsupported_nested": "",
+      "source": {
+        "artifact_input": "sdql/slotted/progs/mttkrp_1st.sexp",
+        "artifact_target": "sdql/baseline/progs/mttkrp_1st_esat.sexp",
+        "input": "benchmarks/reproduction/slotted/fixtures/sdql/mttkrp_1st.sexp",
+        "target": "benchmarks/reproduction/slotted/fixtures/sdql/mttkrp_1st_esat.sexp",
+        "input_sha256": "sha256:94723b3276e40764be5df5ac7604a39b93f0202521b72ea05ad424cbaf858f0f",
+        "target_sha256": "sha256:2abf43cd0dd81c3b7266d4f5a1e2a37dc0d0df396e42fe404d11eccf812d2680"
+      }
+    },
+    {
+      "id": "sdql/mttkrp_2nd-44rules",
+      "file": "sdql/mttkrp_2nd-44rules.egg",
+      "file_sha256": "sha256:df1b8a346185b0e6367f00256493b1cb6d4d857d13f7549697a75960942e4ba7",
+      "reference": "sdql/mttkrp_2nd-44rules.ref",
+      "reference_sha256": "sha256:e32de7b5116692f8d4ff7630b0731ffa1486f8e0a59d4645ef4361328a68dabe",
+      "family": "sdql",
+      "rounds": 30,
+      "run_budgets": [
+        30,
+        0
+      ],
+      "rules": 44,
+      "unsupported_nested": "",
+      "source": {
+        "artifact_input": "sdql/slotted/progs/mttkrp_2nd.sexp",
+        "artifact_target": "sdql/baseline/progs/mttkrp_2nd_esat.sexp",
+        "input": "benchmarks/reproduction/slotted/fixtures/sdql/mttkrp_2nd.sexp",
+        "target": "benchmarks/reproduction/slotted/fixtures/sdql/mttkrp_2nd_esat.sexp",
+        "input_sha256": "sha256:2c07875ee2da1b5f9b459d370f65c9d61913133c169d5f10f9694658987f87a5",
+        "target_sha256": "sha256:6d8f865b61ea84272404da812a59b0a8224eb290d95e718948ff0ac3518ebb5a"
+      }
+    },
+    {
+      "id": "sdql/ttm_1st-44rules",
+      "file": "sdql/ttm_1st-44rules.egg",
+      "file_sha256": "sha256:f8d5cb7f440b78fa0d6201a09223b7f67a8e2753d6da7da5aeae36b1c0d1c4bc",
+      "reference": "sdql/ttm_1st-44rules.ref",
+      "reference_sha256": "sha256:5147539156939ae48b7d78115db620469daca251894ab175c069a8767ce08f64",
+      "family": "sdql",
+      "rounds": 30,
+      "run_budgets": [
+        30,
+        0
+      ],
+      "rules": 44,
+      "unsupported_nested": "",
+      "source": {
+        "artifact_input": "sdql/slotted/progs/ttm_1st.sexp",
+        "artifact_target": "sdql/baseline/progs/ttm_1st_esat.sexp",
+        "input": "benchmarks/reproduction/slotted/fixtures/sdql/ttm_1st.sexp",
+        "target": "benchmarks/reproduction/slotted/fixtures/sdql/ttm_1st_esat.sexp",
+        "input_sha256": "sha256:824315e6edb06a80486929f5c255d05ab4f3fba3e86e8e6b3093d86c4ffbfe8b",
+        "target_sha256": "sha256:31316d6f9aec0117782be492c9873e417113efe7c1feae1ef49a8a2477afb5c6"
+      }
+    },
+    {
+      "id": "sdql/ttm_2nd-44rules",
+      "file": "sdql/ttm_2nd-44rules.egg",
+      "file_sha256": "sha256:efec9b1f61619a9fce2a91bc1aac41d5919c973031d3f7ab9e6ab13ee0f86f11",
+      "reference": "sdql/ttm_2nd-44rules.ref",
+      "reference_sha256": "sha256:5f02a7f243fd0d8e9b4af58389ca454f02f17908201181f6a77585fce9dac995",
+      "family": "sdql",
+      "rounds": 30,
+      "run_budgets": [
+        30,
+        0
+      ],
+      "rules": 44,
+      "unsupported_nested": "",
+      "source": {
+        "artifact_input": "sdql/slotted/progs/ttm_2nd.sexp",
+        "artifact_target": "sdql/baseline/progs/ttm_2nd_esat.sexp",
+        "input": "benchmarks/reproduction/slotted/fixtures/sdql/ttm_2nd.sexp",
+        "target": "benchmarks/reproduction/slotted/fixtures/sdql/ttm_2nd_esat.sexp",
+        "input_sha256": "sha256:31c415413b4d1d233bc1a5b9dc2f02ed4a3c1f460964d5263f70987f76a22e3c",
+        "target_sha256": "sha256:7b6e37f659baa7a553a8f941edd5473c9485439b355742525ceca02102acce56"
+      }
+    }
+  ]
+}

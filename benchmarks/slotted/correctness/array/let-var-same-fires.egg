@@ -1,0 +1,13 @@
+; Frozen differential input; see generate_differential.py.
+(sort U)
+(constructor Lam (U U) U :binder 0)
+(constructor App (U U) U)
+(constructor Let (U U U) U :binder 0)
+(constructor Sym (String) U)
+(constructor Num (i64) U)
+(rewrite (Let $x $x e) e :name "let-var-same")
+(let _t0 (Let $0 $0 (Sym "aa")))
+(let _p0 (Let $0 $0 (Sym "aa")))
+(let _p1 (Sym "aa"))
+(let _p2 (Sym "bb"))
+(run 8)
