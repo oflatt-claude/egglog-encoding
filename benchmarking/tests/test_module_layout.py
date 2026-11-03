@@ -73,7 +73,12 @@ def test_package_initializers_are_docstring_only() -> None:
 
 
 def test_native_memory_policy_uses_only_stdlib() -> None:
+    defaults = imported_module_names(ROOT / "benchmarking/config.py")
+    assert {name.split(".")[0] for name in defaults} <= sys.stdlib_module_names
     imports = imported_module_names(ROOT / "benchmarking/native_memory.py")
+    imports = {
+        name for name in imports if name != "benchmarking.config" and not name.startswith("benchmarking.config.")
+    }
     assert {name.split(".")[0] for name in imports} <= sys.stdlib_module_names
 
 

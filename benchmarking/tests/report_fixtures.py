@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from benchmarking import models
-from benchmarking.engines import BINARIES, TREATMENT_SPECS
+from benchmarking.engines import TREATMENT_SPECS
 from benchmarking.native_memory import NATIVE_LIMIT_BYTES
 from benchmarking.reports.store import (
     REPORT_SCHEMA_VERSION,
@@ -28,7 +28,6 @@ def make_record(
     max_rss_bytes: int | None = None,
     binary_sha256: str = "sha256:bin",
     file_sha256: str = "sha256:file",
-    fact_directory_sha256: str = "",
     treatment: models.Treatment = "off",
     disequality_encoding: models.DisequalityEncoding = "nee",
     timeout_sec: int = 120,
@@ -38,7 +37,7 @@ def make_record(
 ) -> ReportRecord:
     if status == "success" and timing_summary is None:
         timing_summary = make_timing_summary()
-    if not BINARIES[TREATMENT_SPECS[treatment].binary_name].allocator_limit:
+    if not TREATMENT_SPECS[treatment].allocator_limit:
         memory_limit_bytes = None
     return {
         "report_schema_version": REPORT_SCHEMA_VERSION,
@@ -53,16 +52,12 @@ def make_record(
         "binary_sha256": binary_sha256,
         "file_path": "file.egg",
         "file_sha256": file_sha256,
-        "fact_directory_path": None,
-        "fact_directory_sha256": fact_directory_sha256,
         "treatment": treatment,
         "disequality_encoding": disequality_encoding,
         "timeout_sec": timeout_sec,
         "memory_limit_bytes": memory_limit_bytes,
         "wall_sec": None if status == "timed-out" else wall_sec,
         "max_rss_bytes": None if status == "timed-out" else max_rss_bytes,
-        "error_exit_code": None,
-        "error_signal": None,
         "error_message": "timed out" if status == "timed-out" else None,
         "timing_summary": timing_summary if status == "success" else None,
     }

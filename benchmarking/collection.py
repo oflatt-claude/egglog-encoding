@@ -32,7 +32,7 @@ from rich.progress import (
 from rich.table import Column
 from rich.text import Text
 
-from .engines import BINARIES, MATH_WORKLOAD_ARGUMENTS, TREATMENT_SPECS, BinaryName, validate_binary_workload
+from .engines import MATH_WORKLOAD_ARGUMENTS, TREATMENT_SPECS, validate_binary_workload
 from .models import (
     BenchmarkEndpoint,
     BuiltBinary,
@@ -46,7 +46,7 @@ from .models import (
     Treatment,
     validate_unique_file_identities,
 )
-from .native_memory import NATIVE_LIMIT_BYTES
+from .native_memory import NATIVE_ALLOCATOR_ENV, NATIVE_LIMIT_BYTES
 from .processes import TimingResult, run_command
 from .reports.grouped import grouped_report_path, write_grouped_report
 from .reports.store import (
@@ -141,8 +141,8 @@ def resolve_requests(
     if not requests or rounds < 1 or timeout_sec < 1:
         raise ValueError("collection requires requests and positive rounds and timeout")
     endpoints_by_target: dict[TargetRequest, list[EndpointRequest]] = {}
-    files_by_endpoint: dict[EndpointRequest, dict[tuple[str, str], FileSpec]] = {}
-    all_files: dict[tuple[str, str], FileSpec] = {}
+    files_by_endpoint: dict[EndpointRequest, dict[str, FileSpec]] = {}
+    all_files: dict[str, FileSpec] = {}
     for request in requests:
         for file in request.files:
             excluded = file.exclusion_for(
@@ -176,7 +176,7 @@ def resolve_requests(
             endpoints.append(request.endpoint)
         selected_files = files_by_endpoint.setdefault(request.endpoint, {})
         for file in request.files:
-            identity = (file.sha256, file.fact_directory_sha256)
+            identity = file.sha256
             selected_files.setdefault(identity, file)
             all_files.setdefault(identity, file)
     return resolve_targets(
@@ -249,10 +249,10 @@ def plan_collection(
 def current_label_bindings(
     requests: tuple[BenchmarkRequest, ...],
     resolved_targets: Mapping[TargetRequest, ResolvedTarget],
-) -> dict[tuple[str, BinaryName], str]:
+) -> dict[tuple[str, str], str]:
     """Bind only requested engines and reject ambiguous aliases before collection."""
 
-    label_bindings: dict[tuple[str, BinaryName], str] = {}
+    label_bindings: dict[tuple[str, str], str] = {}
     for request in requests:
         target = resolved_targets[request.endpoint.target]
         if target.row.label is None:
@@ -354,8 +354,7 @@ def resolve_targets(
         checkout_path
         for checkout_path, pending_targets in pending_by_checkout.items()
         if any(
-            TREATMENT_SPECS[endpoint.treatment].binary_name
-            in ("egglog-experimental", "egg-math-benchmark", "slotted-reference")
+            TREATMENT_SPECS[endpoint.treatment].target_directory is None
             for target in pending_targets
             for endpoint in target.endpoint_requests
         )
@@ -379,11 +378,7 @@ def resolve_targets(
         if len(git_shas) != 1:
             raise ValueError(f"target selectors resolved checkout {checkout_path} at different git commits")
         engines = tuple(
-            dict.fromkeys(
-                TREATMENT_SPECS[endpoint.treatment].binary_name
-                for target in pending_targets
-                for endpoint in target.endpoint_requests
-            )
+            dict.fromkeys(endpoint.treatment for target in pending_targets for endpoint in target.endpoint_requests)
         )
         representative = pending_targets[0]
         built = build_resolved_target(
@@ -510,14 +505,20 @@ def run_process(
     with tempfile.TemporaryDirectory(prefix="egglog-benchmark-") as directory:
         summary_path = Path(directory) / "timing-summary.json"
         workload = workload_command(binary_path, file_spec, treatment, disequality_encoding)
-        if not BINARIES[TREATMENT_SPECS[treatment].binary_name].allocator_limit:
+        controlled = TREATMENT_SPECS[treatment].allocator_limit
+        allocator_env = NATIVE_ALLOCATOR_ENV if controlled else {}
+        if not controlled:
             memory_limit_bytes = None
-        if not BINARIES[TREATMENT_SPECS[treatment].binary_name].timing_summary:
-            result = run_command(workload, checkout_path, timeout_sec, memory_limit_bytes=memory_limit_bytes)
+        if not TREATMENT_SPECS[treatment].timing_summary:
+            result = run_command(
+                workload, checkout_path, timeout_sec, env_overrides=allocator_env, memory_limit_bytes=memory_limit_bytes
+            )
             require_workload_unchanged(file_spec)
             return ProcessObservation(result=result, timing_summary=None)
         command = [workload[0], "--timing-summary", str(summary_path), *workload[1:]]
-        result = run_command(command, checkout_path, timeout_sec, memory_limit_bytes=memory_limit_bytes)
+        result = run_command(
+            command, checkout_path, timeout_sec, env_overrides=allocator_env, memory_limit_bytes=memory_limit_bytes
+        )
         require_workload_unchanged(file_spec)
         if result.status != "success":
             return ProcessObservation(result=result, timing_summary=None)
@@ -546,6 +547,7 @@ def run_preflight(
         [str(binary_path), "--help"],
         checkout_path,
         timeout_sec,
+        env_overrides=NATIVE_ALLOCATOR_ENV,
         required_output=required_outputs,
         memory_limit_bytes=memory_limit_bytes,
     )
@@ -569,7 +571,7 @@ def preflight_collection(plan: CollectionPlan, timeout_sec: int) -> None:
         if binary_name not in ("egglog-experimental", "egg-math-benchmark", "slotted-reference"):
             continue
         required_outputs = []
-        if any(BINARIES[TREATMENT_SPECS[run.treatment].binary_name].timing_summary for run in binary_runs):
+        if any(TREATMENT_SPECS[run.treatment].timing_summary for run in binary_runs):
             required_outputs.append("--timing-summary")
         bound = next((run.memory_limit_bytes for run in binary_runs if run.memory_limit_bytes is not None), None)
         if bound is not None:
@@ -619,9 +621,10 @@ def format_timing_result(result: TimingResult) -> str:
     if result.status == "timed-out":
         return result.error.message if result.error is not None else "timed out"
     elapsed = "" if result.timing.wall_sec is None else f" after {result.timing.wall_sec:.3f}s"
-    if result.status == "failure":
+    if result.status in ("failure", "memory-limited"):
         detail = "" if result.error is None else f": {' '.join(result.error.message.splitlines())}"
-        return f"failed{elapsed}{detail}"
+        outcome = "memory limit" if result.status == "memory-limited" else "failed"
+        return f"{outcome}{elapsed}{detail}"
     return f"succeeded{elapsed}"
 
 
@@ -633,6 +636,8 @@ def _status_counts_text(status_counts: Counter[Status]) -> str:
         parts.append(f"{status_counts['success']} successful")
     if status_counts["failure"]:
         parts.append(f"{status_counts['failure']} failed")
+    if status_counts["memory-limited"]:
+        parts.append(f"{status_counts['memory-limited']} memory limited")
     if status_counts["timed-out"]:
         parts.append(f"{status_counts['timed-out']} timed out")
     return ", ".join(parts)
@@ -646,7 +651,7 @@ def emit_collection_plan(console: Console, plan: CollectionPlan, *, timeout_sec:
     required = sum(run.required_rows for run in plan.runs)
     missing = plan.total_missing_observations
     cached_issues: Counter[Status] = Counter()
-    for status in ("failure", "timed-out"):
+    for status in ("failure", "timed-out", "memory-limited"):
         if cached_statuses[status]:
             cached_issues[status] = cached_statuses[status]
     cache_text = f"{cached}/{required} runs cached"
@@ -686,20 +691,14 @@ def flat_report_record(
         "binary_sha256": target.binary_sha256_for(run.treatment),
         "file_path": run.file.display_path,
         "file_sha256": run.file.sha256,
-        "fact_directory_path": (str(run.file.fact_directory) if run.file.fact_directory is not None else None),
-        "fact_directory_sha256": run.file.fact_directory_sha256,
         "treatment": run.treatment,
         "disequality_encoding": run.disequality_encoding,
         "timeout_sec": timeout_sec,
         "wall_sec": result.timing.wall_sec,
         "max_rss_bytes": result.timing.max_rss_bytes,
-        "error_exit_code": result.error.exit_code if result.error is not None else None,
-        "error_signal": result.error.signal if result.error is not None else None,
         "error_message": result.error.message if result.error is not None else None,
         "timing_summary": observation.timing_summary,
-        "memory_limit_bytes": run.memory_limit_bytes
-        if BINARIES[TREATMENT_SPECS[run.treatment].binary_name].allocator_limit
-        else None,
+        "memory_limit_bytes": run.memory_limit_bytes if TREATMENT_SPECS[run.treatment].allocator_limit else None,
     }
     return record
 
@@ -718,7 +717,7 @@ class CollectionETAColumn(ProgressColumn):
         super().__init__(table_column=Column(no_wrap=True))
         self.remaining: dict[CacheKey, int] = {}
         self.durations: dict[CacheKey, list[float]] = {}
-        self.hints: dict[tuple[str, str, Treatment, DisequalityEncoding], tuple[tuple[datetime, int], float]] = {}
+        self.hints: dict[tuple[str, Treatment, DisequalityEncoding], tuple[tuple[datetime, int], float]] = {}
         self.active: tuple[CacheKey, float] | None = None
         for row_index, record in enumerate(store.records):
             wall = record["wall_sec"]
@@ -726,7 +725,6 @@ class CollectionETAColumn(ProgressColumn):
                 continue
             identity = (
                 record["file_sha256"],
-                record["fact_directory_sha256"],
                 record["treatment"],
                 record["disequality_encoding"],
             )
@@ -761,9 +759,7 @@ class CollectionETAColumn(ProgressColumn):
         }
         for key, count in self.remaining.items():
             if count and key not in means:
-                hint = self.hints.get(
-                    (key.file_sha256, key.fact_directory_sha256, key.treatment, key.disequality_encoding)
-                )
+                hint = self.hints.get((key.file_sha256, key.treatment, key.disequality_encoding))
                 if hint is not None:
                     means[key] = hint[1]
         fallback = sum(means.values()) / len(means) if means else 1.0

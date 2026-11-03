@@ -12,10 +12,10 @@ const vega = await import(toolkit.resolve('vega'));
 const {compile} = await import(toolkit.resolve('vega-lite'));
 const {figures} = JSON.parse(await readFile(new URL('catalog.json', import.meta.url), 'utf8'));
 const input = (id, treatment, changes={}) => ({logical_id:id, label:id, family:'eggcc', file_sha256:id,
-  fact_directory_sha256:'', binary_sha256:'current', allocator_profile:'uncapped', memory_limit_bytes:null, treatment, exclusion:null, validation_failures:{}, ...changes});
+  binary_sha256:'current', memory_limit_bytes:null, treatment, exclusion:null, validation_failures:{}, ...changes});
 function group(id, treatment, values, changes={}) {
-  const key={binary_sha256:'current',file_sha256:id,fact_directory_sha256:'',treatment,
-    disequality_encoding:'nee', memory_limit_bytes:null, allocator_profile:'uncapped'};
+  const key={binary_sha256:'current',file_sha256:id,treatment,
+    disequality_encoding:'nee'};
   return {key,labels:['figures'],samples:values.map((value,index)=>({...key,row_index:index,
     started_at:new Date(Date.UTC(2026,9,1,0,0,index)).toISOString(),status:'success',timeout_sec:300,
     wall_sec:value,max_rss_bytes:value===null?null:value*1048576,...changes}))};
@@ -24,7 +24,7 @@ async function evaluate(name, inputs, groups, rounds=2) {
   const spec=JSON.parse(await readFile(new URL(figures[name].spec,import.meta.url),'utf8'));
   for(const p of spec.params) if(p.name==='selected_inputs')p.value=inputs.map(input=>({...input,
     selected_row_indices:input.selected_row_indices??groups.find(g=>g.labels.includes('figures')&&
-      g.key.file_sha256===input.file_sha256&&g.key.fact_directory_sha256===input.fact_directory_sha256&&
+      g.key.file_sha256===input.file_sha256&&
       g.key.treatment===input.treatment)?.samples.slice(-rounds).map(row=>row.row_index)??[]}));
     else if(p.name==='rounds')p.value=rounds;
     else if(p.name==='treatments')p.value=figures[name].treatments;
@@ -33,7 +33,7 @@ async function evaluate(name, inputs, groups, rounds=2) {
   const logger=vega.logger(vega.Warn,undefined,(...args)=>warnings.push(args));
   const runtime=compile(spec,{logger}).spec;
   const loader=vega.loader();
-  loader.load=async()=>JSON.stringify({grouped_schema_version:4,report_schema_version:7,groups});
+  loader.load=async()=>JSON.stringify({grouped_schema_version:5,report_schema_version:8,groups});
   const view=new vega.View(vega.parse(runtime),{renderer:'none',loader,logger});
   try {
     await view.runAsync();
@@ -246,7 +246,7 @@ test('a first-row timeout remains explicit when collection stopped before N',asy
 test('failed and missing Math endpoints retain proof-mode rows and both engine identities',async()=>{
   const treatments=['egg','egg-proof-testing','off','proof-testing'];
   const inputs=treatments.map(t=>input('a',t));
-  const groups=treatments.map((t,i)=>group('a',t,[i%2?null:2],i%2?{status:'failure',error_exit_code:86}:{}));
+  const groups=treatments.map((t,i)=>group('a',t,[i%2?null:2],i%2?{status:'memory-limited'}:{}));
   const result=await evaluate('math-runtime',inputs,groups,1);
   const labels=result.marks.filter(m=>m.mark.role==='axis-label').map(m=>m.text);
   for(const label of ['Proofs off','Checked proofs','Egg','Egglog'])
@@ -456,11 +456,11 @@ test('Slotted empty, selected failures, resource bounds and N1 remain explicit f
   assert.equal(find(one,'slotted_ratio_intervals').length,0);
   assert.match(one.svg,/n=1; CI unavailable/);
   const resource=await evaluate('slotted-runtime',inputs,[group('a',treatments[0],[null],{status:'timed-out',timeout_sec:500}),
-    group('a',treatments[1],[null],{status:'failure',error_exit_code:86,memory_limit_bytes:16*1024**3})],1);
+    group('a',treatments[1],[null],{status:'memory-limited',memory_limit_bytes:16*1024**3})],1);
   assert.equal(find(resource,'slotted_status').length,4);
   assert.match(resource.svg,/timeout \(500 s\)/);
-  assert.match(resource.svg,/allocation limit \(16 GiB\)/);
-  const rss=await evaluate('slotted-runtime',inputs,treatments.map(t=>group('a',t,[null],{status:'failure',error_message:'process-group RSS limit',memory_limit_bytes:10*1024**3})),1);
+  assert.match(resource.svg,/memory limit \(16 GiB\)/);
+  const rss=await evaluate('slotted-runtime',inputs,treatments.map(t=>group('a',t,[null],{status:'memory-limited',error_message:'allocation limit',memory_limit_bytes:10*1024**3})),1);
   assert.match(rss.svg,/memory limit \(10 GiB\)/);
   assert.doesNotMatch(rss.svg,/allocation limit/);
   const ten=await evaluate('slotted-runtime',inputs,treatments.map((t,i)=>group('a',t,Array(10).fill(i?4:2))),10);
@@ -653,15 +653,15 @@ test('CDF empty, zero, single-run and failed samples retain finite reference-con
 });
 
 
-test('bound cache settings select the correct group when capped and uncapped histories coexist',async()=>{
-  const old=group('a','slotted',[99,101]);
-  old.key.allocator_profile='capped';
-  old.samples.forEach(row=>row.memory_limit_bytes=10*1024**3);
-  const current=group('a','slotted',[1,3]);
-  current.samples.forEach((row,i)=>row.row_index=7+i);
+test('bound rows reuse completed capped and uncapped runs without changing identity',async()=>{
+  const completed=group('a','slotted',[99,101,1,3]);
+  completed.samples.forEach((row,i)=>{
+    row.row_index=5+i;
+    row.memory_limit_bytes=i<2?10*1024**3:null;
+  });
   const result=await evaluate('slotted-runtime',[
-    input('a','slotted',{selected_row_indices:[7,8]})
-  ],[old,current]);
+    input('a','slotted',{memory_limit_bytes:1024,selected_row_indices:[7,8]})
+  ],[completed]);
   assert.deepEqual(find(result,'slotted_absolute_means').filter(p=>p.datum.metric==='Runtime').map(p=>p.datum.mean),[2]);
 });
 

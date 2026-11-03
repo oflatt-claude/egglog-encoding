@@ -75,13 +75,13 @@ For a disposable three-round verification preview:
   --report /tmp/egglog-paper-preview.jsonl --output-dir /tmp/egglog-paper-preview
 ```
 
-Preview observations use the local allocator/address-space cap configured in
-`benchmarks/resources.json`; `--memory-limit-bytes N` overrides it.
-The cap bounds address space; peak RSS is measured separately. The comparison
-CLI defaults to the cap, while figures default to uncapped collection. Capped and uncapped runs use different
-allocator profiles, so a preview cannot populate uncapped paper measurements.
-Within the capped profile, successes can be reused at larger memory budgets;
-allocation failures and timeouts are retried when their respective budget increases. Cached reruns collect only missing observations.
+All entrypoints share the timeout and allocator/address-space guards from
+`benchmarking/config.py` (500 seconds and 10 GiB). `--timeout-sec N` and
+`--memory-limit-bytes N` override them; `--no-memory-limit` removes the cap.
+The Rust paper parent reads these defaults once; trials remain Rust tests.
+Peak RSS is measured separately. Completed cached observations remain reusable
+even after lowering a guard. Timeouts and allocation-limit outcomes retry only
+after their corresponding guard increases. Cached reruns collect missing work.
 
 [`benchmarks/ignore.json`](ignore.json) is the shared exclusion policy
 for Rust tests, comparisons, and figures. Each entry records a reason and
@@ -89,7 +89,8 @@ evidence; optional treatment/encoding selectors narrow it. A resource entry
 with `memory_limit_bytes` applies only when the selected cap is no larger than
 that recorded bound. It never excludes an uncapped run. Entries without a cap
 selector apply across profiles. Excluded conditions remain visible in reports and figure
-coverage, and are never observations or successful correctness checks.
+coverage, and are never observations or successful correctness checks. A
+cap-specific resource entry does not hide a complete cached set of successes.
 
 Known table-size bugs use `kind: "expected-failure"` with an issue and exact
 `expected_table_sizes` pairs in `[ordinary, candidate]` order. Rust still executes
@@ -105,8 +106,8 @@ The normal Rust paper suite uses the local cap. To run that same suite uncapped:
 PAPER_TEST_MEMORY_LIMIT_BYTES=none make check
 ```
 
-The final paper recipe is `./bench.py figures`: the catalog supplies ten
-observations, a 500-second timeout, and baseline-only cohort selection. The
+Use `./bench.py figures --no-memory-limit` for uncapped final collection.
+The catalog supplies ten observations and baseline-only cohort selection. The
 final collection uses a clean environment with allocator and thread overrides
 unset; retain its machine/environment description with the data. The
 three-round preview is implementation validation and does not replace paper

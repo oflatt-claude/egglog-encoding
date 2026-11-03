@@ -22,6 +22,7 @@ from rich.console import Console
 from benchmarks.reproduction.corpus import MANIFEST_RELATIVE_PATH, VALIDATION_POLICY, load_manifest
 from benchmarks.reproduction.native import NATIVE_ALLOCATION_FAILURE
 
+from .config import DEFAULT_MEMORY_LIMIT_BYTES, DEFAULT_TIMEOUT_SEC
 from .engines import TREATMENT_SPECS, TREATMENTS, Treatment
 from .models import BenchmarkEndpoint, EndpointRequest, FileSpec, ResolvedTarget, validate_unique_file_identities
 from .native_memory import add_memory_limit_options
@@ -50,7 +51,7 @@ class FigureConfig:
     rounds: int
     timeout_sec: int
     figures: tuple[Figure, ...]
-    memory_limit_bytes: int | None = None
+    memory_limit_bytes: int | None = DEFAULT_MEMORY_LIMIT_BYTES
 
 
 @dataclass(frozen=True)
@@ -64,7 +65,6 @@ class FigureWorkload(TypedDict):
     label: str
     family: str
     file_sha256: str
-    fact_directory_sha256: str
     validation_failures: dict[str, str]
 
 
@@ -85,18 +85,14 @@ def _figure_inventory(root: Path, selected: Sequence[FileSpec] | None = None) ->
     # Figure selection has already hashed its files. Do not inspect unrelated
     # prepared inputs when a custom configuration selects a small subset.
     manifest = load_manifest(root)
-    identities = None if published is None else {(file.sha256, file.fact_directory_sha256) for file in published}
-    registered = {
-        (directory / item["file"]).resolve(): (item["sha256"], item["facts_sha256"]) for item in manifest.workloads
-    }
-    if published is not None and any(
-        registered.get(file.absolute_path) != (file.sha256, file.fact_directory_sha256) for file in published
-    ):
+    identities = None if published is None else {file.sha256 for file in published}
+    registered = {(directory / item["file"]).resolve(): item["sha256"] for item in manifest.workloads}
+    if published is not None and any(registered.get(file.absolute_path) != file.sha256 for file in published):
         raise ValueError("selected published corpus input changed or is unregistered; review its manifest")
     cases = {case["id"]: case for case in manifest.cases}
-    workloads: dict[tuple[str, str], FigureWorkload] = {}
+    workloads: dict[str, FigureWorkload] = {}
     for source in manifest.workloads:
-        identity = (source["sha256"], source["facts_sha256"])
+        identity = source["sha256"]
         if identities is not None and identity not in identities:
             continue
         first = source["aliases"][0]
@@ -105,11 +101,10 @@ def _figure_inventory(root: Path, selected: Sequence[FileSpec] | None = None) ->
             "label": case["id"] + (f" / call {first['order'] + 1}" if len(case["workloads"]) > 1 else ""),
             "family": case["family"],
             "file_sha256": source["sha256"],
-            "fact_directory_sha256": source["facts_sha256"],
             "validation_failures": {},
         }
     for outcome in manifest.outcomes:
-        item = workloads.get((outcome["file_sha256"], outcome["fact_directory_sha256"]))
+        item = workloads.get(outcome["file_sha256"])
         if item is None or outcome["kind"] != "validation" or outcome["policy"] != VALIDATION_POLICY:
             continue
         key = f"{outcome['binary_sha256']}/{outcome['disequality_encoding']}"
@@ -140,8 +135,13 @@ def load_config(path: Path) -> FigureConfig:
     """Read the figure definitions without touching workloads."""
     path = path.expanduser().resolve()
     data = json.loads(path.read_text(), object_pairs_hook=_unique_object)
-    if not isinstance(data, dict) or set(data) != {"rounds", "timeout_sec", "figures"}:
-        raise ValueError("figure config requires exactly rounds, timeout_sec, and figures")
+    if (
+        not isinstance(data, dict)
+        or not {"rounds", "figures"} <= set(data)
+        or set(data) - {"rounds", "timeout_sec", "figures"}
+    ):
+        raise ValueError("figure config requires rounds and figures, with optional timeout_sec")
+    data.setdefault("timeout_sec", DEFAULT_TIMEOUT_SEC)
     for key in ("rounds", "timeout_sec"):
         if type(data[key]) is not int or data[key] < 1:
             raise ValueError(f"{key} must be a positive integer")
@@ -214,10 +214,11 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, FigureConfig]:
     parser.add_argument(
         "--output-dir", type=Path, help="common output directory (default: each specification directory)"
     )
-    add_memory_limit_options(parser, default=None)
+    parser.add_argument("--timeout-sec", type=int, default=config.timeout_sec, help="per-process resource guard")
+    add_memory_limit_options(parser, default=DEFAULT_MEMORY_LIMIT_BYTES)
     args = parser.parse_args(argv)
-    if args.rounds < 1:
-        parser.error("--rounds must be positive")
+    if args.rounds < 1 or args.timeout_sec < 1:
+        parser.error("--rounds and --timeout-sec must be positive")
     if str(args.report) == "-":
         parser.error("--report requires a file path; '-' streaming is not supported")
     if len(args.names) != len(set(args.names)):
@@ -225,7 +226,9 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, FigureConfig]:
     unknown = set(args.names) - {figure.name for figure in config.figures}
     if unknown:
         parser.error("unknown figure names: " + ", ".join(sorted(unknown)) + "; select a JSON catalog with --config")
-    return args, replace(config, rounds=args.rounds, memory_limit_bytes=args.memory_limit_bytes)
+    return args, replace(
+        config, rounds=args.rounds, timeout_sec=args.timeout_sec, memory_limit_bytes=args.memory_limit_bytes
+    )
 
 
 def resolve_figures(config: FigureConfig, names: Sequence[str], invocation_cwd: Path) -> tuple[ResolvedFigure, ...]:
@@ -253,7 +256,7 @@ def resolve_figures(config: FigureConfig, names: Sequence[str], invocation_cwd: 
                 if path not in inputs:
                     if not path.is_file():
                         raise ValueError(f"{figure.name}: not a workload file: {path}")
-                    inputs[path] = resolve_files([os.path.relpath(path, invocation_cwd)], invocation_cwd, None)[0]
+                    inputs[path] = resolve_files([os.path.relpath(path, invocation_cwd)], invocation_cwd)[0]
                 paths[path] = None
         files = tuple(inputs[path] for path in paths)
         validate_unique_file_identities(files)
@@ -274,7 +277,7 @@ def render_figures(
     """Bind shared sample selections and render Vega through temporary files."""
     from scipy import stats
 
-    metadata = {(item["file_sha256"], item["fact_directory_sha256"]): item for item in inventory["workloads"]}
+    metadata = {item["file_sha256"]: item for item in inventory["workloads"]}
     label = target.row.label
     if label is None:
         raise ValueError("figure target must have a label")
@@ -286,7 +289,7 @@ def render_figures(
         incomplete = 0
         excluded_conditions = 0
         for file in resolved.files:
-            info = metadata.get((file.sha256, file.fact_directory_sha256))
+            info = metadata.get(file.sha256)
             for treatment in figure.treatments:
                 physical = file.for_binary(TREATMENT_SPECS[treatment].binary_name)
                 endpoint = BenchmarkEndpoint(target, treatment, memory_limit_bytes=config.memory_limit_bytes)
@@ -299,14 +302,12 @@ def render_figures(
                     incomplete += len(rows) < config.rounds or any(row.record["status"] != "success" for row in rows)
                 selected_inputs.append(
                     {
-                        "logical_id": f"{file.sha256}/{file.fact_directory_sha256}",
+                        "logical_id": file.sha256,
                         "label": info["label"] if info else file.display_path,
                         "family": info["family"] if info else "",
                         "file_sha256": physical.sha256,
-                        "fact_directory_sha256": physical.fact_directory_sha256,
                         "treatment": treatment,
                         "binary_sha256": key.binary_sha256,
-                        "allocator_profile": key.allocator_profile,
                         "memory_limit_bytes": endpoint.memory_limit_bytes,
                         "selected_row_indices": [row.row_index for row in rows],
                         "validation_failures": info["validation_failures"] if info else {},

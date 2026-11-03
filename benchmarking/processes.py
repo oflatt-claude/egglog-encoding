@@ -41,7 +41,6 @@ class ErrorRow:
     message: str
     exit_code: int | None = None
     signal: int | None = None
-    memory_limit_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -102,7 +101,7 @@ def run_command(
             if cleanup_error is not None:
                 message += f"; process-group cleanup failed: {cleanup_error}"
             return TimingResult(
-                status="timed-out",
+                status="failure" if cleanup_error is not None else "timed-out",
                 timing=TimingRow(),
                 error=ErrorRow(message=message),
                 stop_collection=cleanup_error is not None,
@@ -138,20 +137,21 @@ def run_command(
             )
     if return_code == 0:
         return TimingResult(status="success", timing=timing, error=None)
-    message = stderr.strip() or stdout.strip() or "process exited with non-zero status"
+    message = stderr.strip() or stdout.strip() or f"process exited with status {return_code}"
     exit_code = return_code if return_code >= 0 else None
     signal_number = -return_code if return_code < 0 else None
     unexpected_kill = signal_number == signal.SIGKILL
     if unexpected_kill:
         message = f"unexpected SIGKILL (cause unknown): {message[-850:]}"
     return TimingResult(
-        status="failure",
+        status="memory-limited"
+        if memory_limit_bytes is not None and exit_code == NATIVE_ALLOCATION_EXIT
+        else "failure",
         timing=timing,
         error=ErrorRow(
             exit_code=exit_code,
             signal=signal_number,
             message=message[-1000:],
-            memory_limit_bytes=memory_limit_bytes if exit_code == NATIVE_ALLOCATION_EXIT else None,
         ),
         stop_collection=unexpected_kill or (memory_limit_bytes is not None and exit_code == NATIVE_SETUP_EXIT),
     )

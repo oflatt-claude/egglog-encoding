@@ -14,8 +14,10 @@ from pathlib import Path
 from rich.console import Console
 
 from benchmarking import collection, targets, workloads
+from benchmarking.config import DEFAULT_TIMEOUT_SEC
 from benchmarking.engines import Treatment
 from benchmarking.models import BenchmarkEndpoint, ComparisonSpec, EndpointRequest, FileSpec, ResolvedTarget
+from benchmarking.native_memory import NATIVE_LIMIT_BYTES, add_memory_limit_options
 from benchmarking.reports.grouped import grouped_report_path, write_grouped_report
 from benchmarking.reports.interactive import write_interactive_report
 from benchmarking.reports.presentation import build_report_catalog
@@ -56,16 +58,13 @@ def _render(
     """Render the collected snapshot without resolving targets or collecting rows."""
     target = resolved_targets["branch"]
     comparison = ComparisonSpec(
-        BenchmarkEndpoint(target, "off"),
-        BenchmarkEndpoint(target, "proof-testing"),
+        BenchmarkEndpoint(target, "off", memory_limit_bytes=args.memory_limit_bytes),
+        BenchmarkEndpoint(target, "proof-testing", memory_limit_bytes=args.memory_limit_bytes),
         files,
         args.rounds,
         args.timeout_sec,
     )
-    available = {
-        (row["binary_sha256"], row["treatment"], row["disequality_encoding"], row["memory_limit_bytes"] is not None)
-        for row in grouped.records
-    }
+    available = {(row["binary_sha256"], row["treatment"], row["disequality_encoding"]) for row in grouped.records}
     if comparison.baseline.cache_identity in available and comparison.candidate.cache_identity in available:
         write_interactive_report(grouped, comparison, args.output_dir / PAGE_NAME)
     else:
@@ -82,8 +81,10 @@ def _render(
             text = "Branch and main use the same executable; their checked observations are shared.\n"
         else:
             comparison = ComparisonSpec(
-                BenchmarkEndpoint(resolved_targets["main"], "proof-testing"),
-                BenchmarkEndpoint(target, "proof-testing"),
+                BenchmarkEndpoint(
+                    resolved_targets["main"], "proof-testing", memory_limit_bytes=args.memory_limit_bytes
+                ),
+                BenchmarkEndpoint(target, "proof-testing", memory_limit_bytes=args.memory_limit_bytes),
                 files,
                 args.rounds,
                 args.timeout_sec,
@@ -97,7 +98,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output_dir", nargs="?", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--rounds", type=_positive_int, default=1)
-    parser.add_argument("--timeout-sec", type=_positive_int, default=120)
+    parser.add_argument("--timeout-sec", type=_positive_int, default=DEFAULT_TIMEOUT_SEC)
+    add_memory_limit_options(parser, default=NATIVE_LIMIT_BYTES)
     args = parser.parse_args(list(argv) if argv is not None else None)
     args.output_dir = args.output_dir.expanduser().resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -124,13 +126,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     files: tuple[FileSpec, ...] = ()
     failed = False
     try:
-        files = workloads.resolve_files(WORKLOADS, REPO_ROOT, None)
+        files = workloads.resolve_files(WORKLOADS, REPO_ROOT)
         # Preserve branch observations before an older main can reject setup.
         for label, source in TARGETS:
             if label == "main":
                 targets.run_text(["git", "fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"], REPO_ROOT)
             request = targets.parse_target(f"{label}={source}")
-            requests = tuple(collection.BenchmarkRequest(EndpointRequest(request, mode), files) for mode in TREATMENTS)
+            requests = tuple(
+                collection.BenchmarkRequest(
+                    EndpointRequest(request, mode, memory_limit_bytes=args.memory_limit_bytes), files
+                )
+                for mode in TREATMENTS
+            )
             resolved = collection.resolve_requests(
                 requests, store, args.rounds, args.timeout_sec, False, REPO_ROOT, REPO_ROOT, console
             )

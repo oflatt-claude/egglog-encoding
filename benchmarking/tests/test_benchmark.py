@@ -142,14 +142,14 @@ def test_main_announces_each_preparation_phase_before_work_and_keeps_markdown_cl
         clock[0] += 3
         return ReportStore(report_path)
 
-    def inputs(files: list[str], _cwd: Path, facts: str | None) -> tuple[models.FileSpec, ...]:
+    def inputs(files: list[str], _cwd: Path) -> tuple[models.FileSpec, ...]:
         output = capsys.readouterr()
         assert output.out == ""
         assert output.err.endswith("Resolving inputs\n")
         messages.append(output.err)
         assert seen == ["repository", "cache"]
         seen.append("inputs")
-        assert files == ["file.egg"] and facts is None
+        assert files == ["file.egg"]
         clock[0] += 4
         return (FILE_SPEC,)
 
@@ -276,8 +276,8 @@ def test_comparison_permits_shared_binary_across_different_treatments() -> None:
 
     comparison = models.ComparisonSpec(baseline, candidate, (FILE_SPEC,), 2, 120)
 
-    assert baseline.cache_identity == ("sha256:shared", "off", "nee", True)
-    assert candidate.cache_identity == ("sha256:shared", "proofs", "nee", True)
+    assert baseline.cache_identity == ("sha256:shared", "off", "nee")
+    assert candidate.cache_identity == ("sha256:shared", "proofs", "nee")
     assert comparison.baseline.target is comparison.candidate.target
 
 

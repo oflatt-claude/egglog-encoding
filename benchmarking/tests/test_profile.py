@@ -110,16 +110,13 @@ def test_profile_main_reports_filesystem_errors(monkeypatch: pytest.MonkeyPatch,
     assert "error: [bold]read-only[/bold] artifact" in capsys.readouterr().err
 
 
-def test_benchmark_and_profile_cli_accept_windows_fact_paths() -> None:
+def test_benchmark_and_profile_cli_accept_windows_file_paths() -> None:
     file = r"C:\bench\file.egg"
-    facts = r"D:\facts"
-    benchmark_args = benchmark.parse_benchmark_args([file, "--fact-directory", facts])
-    profile_args = profile_runner.parse_profile_args([file, "--fact-directory", facts])
+    benchmark_args = benchmark.parse_benchmark_args([file])
+    profile_args = profile_runner.parse_profile_args([file])
 
     assert benchmark_args.files == [file]
-    assert benchmark_args.fact_directory == facts
     assert profile_args.file == file
-    assert profile_args.fact_directory == facts
 
 
 def test_parse_profile_args_accepts_presentation_options() -> None:
@@ -180,7 +177,12 @@ def test_profile_encodings_are_recorded_and_cached_separately(
     recorded: list[dict[str, Any]] = []
 
     def calibrate(
-        command: list[str], checkout_path: Path, timeout_sec: int, *, memory_limit_bytes: int | None = None
+        command: list[str],
+        checkout_path: Path,
+        timeout_sec: int,
+        *,
+        env_overrides: object = None,
+        memory_limit_bytes: int | None = None,
     ) -> processes.TimingResult:
         assert memory_limit_bytes == profile_runner.NATIVE_LIMIT_BYTES
         calibrated.append(command)
@@ -327,7 +329,7 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
     ) -> models.ResolvedTarget:
         assert target_request == request
         assert target_row == row
-        assert engines == ("egglog-experimental",)
+        assert engines == (("off",) if build_profile == "release" else ("proofs",))
         build_profiles.append(build_profile)
         return target
 
@@ -414,20 +416,9 @@ def test_profile_cache_path_uses_full_binary_and_file_hashes() -> None:
         profile_runner.ProfileMode(None, 10),
     )
 
-    base = Path(".profiles") / "v4" / ("a" * 64) / ("b" * 64) / "no-facts"
+    base = Path(".profiles") / "v5" / ("a" * 64) / ("b" * 64)
     assert explicit == base / "proofs-nee-i5.json.gz"
     assert automatic == base / "proofs-nee-auto10s.json.gz"
-
-    data_hash = "sha256:" + "c" * 64
-    with_facts = profile_runner.profile_cache_path(
-        Path(".profiles"),
-        binary_hash,
-        file_hash,
-        "proofs",
-        profile_runner.ProfileMode(5, None),
-        data_hash,
-    )
-    assert with_facts == base.parent / ("c" * 64) / "proofs-nee-i5.json.gz"
 
 
 def test_profile_display_path_is_relative_inside_invocation_directory(tmp_path: Path) -> None:

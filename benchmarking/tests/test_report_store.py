@@ -28,8 +28,8 @@ from .report_fixtures import make_record, make_ruleset_timing, make_timing_summa
         ("success", 121.0, 120, 120, True),
         ("success", None, 120, 300, True),
         ("success", 50.0, 300, 120, True),
-        ("success", 121.0, 300, 120, False),
-        ("success", None, 300, 120, False),
+        ("success", 121.0, 300, 120, True),
+        ("success", None, 300, 120, True),
         ("timed-out", None, 120, 120, True),
         ("timed-out", None, 120, 300, False),
         ("failure", 50.0, 120, 300, True),
@@ -53,50 +53,49 @@ def test_timeout_selection_preserves_success_and_failure_provenance(
 
 
 @pytest.mark.parametrize(
-    ("status", "old_cap", "cap", "exit_code", "expected"),
+    ("status", "old_cap", "cap", "expected"),
     [
-        ("success", None, None, None, True),
-        ("success", None, 10, None, False),
-        ("success", 8, None, None, False),
-        ("success", 8, 10, None, True),
-        ("success", 10, 8, None, False),
-        ("failure", 8, 8, 86, True),
-        ("failure", 8, 10, 86, False),
-        ("failure", 10, 8, 86, True),
-        ("failure", 8, 10, 1, True),
-        ("timed-out", 8, 10, None, True),
+        ("success", None, None, True),
+        ("success", None, 10, True),
+        ("success", 8, None, True),
+        ("success", 8, 10, True),
+        ("success", 10, 8, True),
+        ("memory-limited", 8, 8, True),
+        ("memory-limited", 8, 10, False),
+        ("memory-limited", 10, 8, True),
+        ("memory-limited", 8, None, False),
+        ("failure", 8, 10, True),
+        ("timed-out", 8, 10, True),
     ],
 )
-def test_memory_budgets_reuse_successes_and_retry_only_repaired_failures(
-    tmp_path: Path, status: Status, old_cap: int | None, cap: int | None, exit_code: int | None, expected: bool
+def test_memory_guards_reuse_successes_and_retry_only_memory_failures(
+    tmp_path: Path, status: Status, old_cap: int | None, cap: int | None, expected: bool
 ) -> None:
     record = make_record(0, started_at="2026-10-27T00:00:00Z", status=status, memory_limit_bytes=old_cap)
-    record["error_exit_code"] = exit_code
-    record["max_rss_bytes"] = 1  # RSS alone cannot establish that a tighter VM cap would pass.
     path = tmp_path / "report.jsonl"
     write_report(path, record)
+    before = path.read_bytes()
     store = ReportStore(path)
-    key = CacheKey("sha256:bin", "sha256:file", "off", allocator_profile="uncapped" if cap is None else "capped")
+    key = CacheKey("sha256:bin", "sha256:file", "off")
     selected = store.latest_records(key, 1, 120, cap)
     assert bool(selected) is expected
-    assert [r.row_index for r in store.grouped_report().latest_records(key, 1, 120, cap)] == [
-        r.row_index for r in selected
+    assert [row.row_index for row in store.grouped_report().latest_records(key, 1, 120, cap)] == [
+        row.row_index for row in selected
     ]
+    assert path.read_bytes() == before
 
 
 def test_runtime_contract_changes_require_a_report_schema_bump() -> None:
     import hashlib
-    from dataclasses import asdict
 
     from benchmarking import engines, native_memory
     from benchmarking.reports.store import REPORT_SCHEMA_VERSION
 
     contract = {
-        "binaries": {
-            name: [spec.input_suffix, spec.timing_summary, spec.allocator_limit]
-            for name, spec in engines.BINARIES.items()
+        "treatments": {
+            name: [spec.binary_name, spec.flags, spec.input_suffix, spec.timing_summary, spec.allocator_limit]
+            for name, spec in engines.TREATMENT_SPECS.items()
         },
-        "treatments": {name: asdict(spec) for name, spec in engines.TREATMENT_SPECS.items()},
         "egglog_flags": engines.EGGLOG_FLAGS,
         "process_environment": engines.PROCESS_ENV,
         "allocator_environment": native_memory.NATIVE_ALLOCATOR_ENV,
@@ -104,14 +103,14 @@ def test_runtime_contract_changes_require_a_report_schema_bump() -> None:
         "math_arguments": engines.MATH_WORKLOAD_ARGUMENTS,
     }
     digest = hashlib.sha256(json.dumps(contract, sort_keys=True).encode()).hexdigest()
-    assert (REPORT_SCHEMA_VERSION, digest) == (7, "0dd28bf623e112e841f2911fab7ef144b07b00ce3e535503cdf4616ec2ee816f"), (
+    assert (REPORT_SCHEMA_VERSION, digest) == (8, "55fb51fdcf87c331b11844821ce472d7ca0dfa2e46d9a5fee1cd5d58f0c23134"), (
         "Bump the report schema version and update this contract digest"
     )
 
 
 def test_raised_timeout_does_not_retry_control_failure(tmp_path: Path) -> None:
-    record = make_record(0, started_at="2026-10-27T00:00:00Z", status="timed-out")
-    record["error_message"] = "timed out; process-group cleanup failed: denied"
+    record = make_record(0, started_at="2026-10-27T00:00:00Z", status="failure")
+    record["error_message"] = "process-group cleanup failed: denied"
     store = ReportStore(tmp_path / "report.jsonl")
     store.append(record)
     assert len(store.latest_records(CacheKey("sha256:bin", "sha256:file", "off"), 1, 300, NATIVE_LIMIT_BYTES)) == 1
@@ -289,22 +288,47 @@ def test_bulk_status_selection_uses_all_cache_dimensions_and_jsonl_tie_order(tmp
         make_record(
             3,
             started_at="2026-07-15T12:00:02Z",
-            fact_directory_sha256="sha256:other-facts",
+            file_sha256="sha256:other",
         ),
     )
     exact = CacheKey("sha256:bin", "sha256:file", "off")
-    other_facts = CacheKey(
+    other_file = CacheKey(
         "sha256:bin",
-        "sha256:file",
+        "sha256:other",
         "off",
-        fact_directory_sha256="sha256:other-facts",
     )
 
     store = ReportStore(report)
     selected = {
         key: tuple(row.record["status"] for row in store.latest_records(key, 2, 120, NATIVE_LIMIT_BYTES))
-        for key in (exact, other_facts)
+        for key in (exact, other_file)
     }
 
     assert selected[exact] == ("timed-out", "success")
-    assert selected[other_facts] == ("success",)
+    assert selected[other_file] == ("success",)
+
+
+def test_completed_samples_are_reused_below_a_recorded_resource_exclusion(tmp_path: Path) -> None:
+    from benchmarking.models import Exclusion, FileSpec
+    from benchmarking.reports.store import select_observations
+
+    from .report_fixtures import make_endpoint
+
+    store = ReportStore(tmp_path / "report.jsonl")
+    store.append(
+        make_record(0, started_at="2026-10-27T00:00:00Z", memory_limit_bytes=None, timeout_sec=900, wall_sec=300)
+    )
+    from dataclasses import replace
+
+    endpoint = replace(make_endpoint(), memory_limit_bytes=1024)
+    file = FileSpec(
+        "file.egg",
+        tmp_path / "file.egg",
+        "sha256:file",
+        exclusions=(
+            Exclusion("resource", "recorded allocation limit", "probe", memory_limit_bytes=NATIVE_LIMIT_BYTES),
+        ),
+    )
+    selected = select_observations(store, endpoint, file, 1, 1)
+    assert selected.issue is None and selected.exclusion is None
+    assert [row.row_index for row in selected.rows] == [0]

@@ -383,7 +383,7 @@ def test_bindings_select_exact_binaries_physical_inputs_and_resource_bounds(
     )
     inputs = next(p["value"] for p in bound[0]["params"] if p["name"] == "selected_inputs")
     assert [item["file_sha256"] for item in inputs] == ["logical", "native", "logical"]
-    assert [item["selected_row_indices"] for item in inputs] == [[0, 1], [2, 3], []]
+    assert [item["selected_row_indices"] for item in inputs] == [[1, 5], [2, 3], []]
     if exclude_term:
         assert "1/3 explicitly excluded conditions" in stream.getvalue()
         assert "incomplete or unsuccessful" not in stream.getvalue()
@@ -449,7 +449,7 @@ def test_bound_ids_share_resource_selection_without_rewriting_rows(
         make_record(5, memory_limit_bytes=None, started_at="2026-10-01T00:00:05Z", status="failure"),
     ]
     for row, cap in zip(rows[-2:], (8, 16), strict=True):
-        row["error_exit_code"] = 86
+        row["status"] = "memory-limited"
         row["memory_limit_bytes"] = cap * 1024**3
     for row in rows:
         row["target_label"] = "figures"
@@ -457,7 +457,7 @@ def test_bound_ids_share_resource_selection_without_rewriting_rows(
     original = report.read_bytes()
     grouped = ReportStore(report).grouped_report()
     write_grouped_report(grouped, grouped_report_path(report))
-    assert len(grouped.data["groups"]) == 2
+    assert len(grouped.data["groups"]) == 1
     assert sum(len(g["samples"]) for g in grouped.data["groups"]) == 6
 
     bindings = []
@@ -467,7 +467,7 @@ def test_bound_ids_share_resource_selection_without_rewriting_rows(
         Path(command[command.index("--base") - 1]).write_bytes(b"rendered")
 
     monkeypatch.setattr(figures.subprocess, "run", render)
-    for requested_cap, expected in ((None, [0, 1]), (16 * 1024**3, [5]), (32 * 1024**3, [])):
+    for requested_cap, expected in ((None, [1, 2]), (16 * 1024**3, [2, 5]), (32 * 1024**3, [1, 2])):
         config = figures.replace(config, memory_limit_bytes=requested_cap)
         bindings.clear()
         figures.render_figures(

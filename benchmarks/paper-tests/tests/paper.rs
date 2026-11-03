@@ -23,6 +23,8 @@ mod table_comparison;
 
 #[global_allocator]
 static ALLOCATOR: benchmark_memory::LimitedAllocator = benchmark_memory::LimitedAllocator;
+// Correctness adds extraction clones, proof checks, and native reference oracles.
+const CORRECTNESS_TIMEOUT_FACTOR: u32 = 3;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Ignore {
@@ -479,10 +481,9 @@ fn run_child(
     let mut stdout = tempfile::tempfile()?;
     let mut stderr = tempfile::tempfile()?;
     let mut command = Process::new(std::env::current_exe()?);
+    command.envs(benchmark_memory::ALLOCATOR_ENV);
     if let Some(limit) = memory_limit_bytes {
-        command
-            .arg(format!("--memory-limit-bytes={limit}"))
-            .envs(benchmark_memory::ALLOCATOR_ENV);
+        command.arg(format!("--memory-limit-bytes={limit}"));
     }
     command
         .args([
@@ -710,13 +711,28 @@ fn main() {
             .collect();
         assert!(!rule.matched.is_empty(), "stale ignore pattern");
     }
+    // Read the Python defaults once in the parent; all trials and workers stay Rust.
+    let defaults = Process::new("python3")
+        .args(["-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); from benchmarking.config import DEFAULT_TIMEOUT_SEC, DEFAULT_MEMORY_LIMIT_BYTES; print(DEFAULT_TIMEOUT_SEC, DEFAULT_MEMORY_LIMIT_BYTES)"])
+        .arg(&root)
+        .output()
+        .expect("paper-tests needs python3 to read benchmarking/config.py");
+    assert!(
+        defaults.status.success(),
+        "cannot read resource defaults: {}",
+        String::from_utf8_lossy(&defaults.stderr)
+    );
+    let defaults: Vec<u64> = String::from_utf8(defaults.stdout)
+        .unwrap()
+        .split_whitespace()
+        .map(|value| value.parse().unwrap())
+        .collect();
+    let [timeout_sec, default_memory] = defaults[..] else {
+        panic!("invalid benchmarking/config.py resource defaults")
+    };
+    assert!(timeout_sec > 0 && default_memory > 0);
     let memory_limit_bytes = match std::env::var("PAPER_TEST_MEMORY_LIMIT_BYTES").as_deref() {
-        Err(_) => Some(
-            serde_json::from_str::<serde_json::Value>(include_str!("../../resources.json"))
-                .unwrap()["memory_limit_bytes"]
-                .as_u64()
-                .unwrap(),
-        ),
+        Err(_) => Some(default_memory),
         Ok("none") => None,
         Ok(value) => Some(
             value
@@ -731,7 +747,7 @@ fn main() {
     let mut enabled = 0;
     let mut expected_failures = 0;
     let mut applied_expected_failures = BTreeSet::new();
-    let deadline = Duration::from_secs(catalog["timeout_sec"].as_u64().unwrap() * 3);
+    let deadline = Duration::from_secs(timeout_sec).saturating_mul(CORRECTNESS_TIMEOUT_FACTOR);
     for (file, mut modes) in cells {
         let name = format!("paper/{}", file.strip_prefix(&root).unwrap().display());
         assert!(

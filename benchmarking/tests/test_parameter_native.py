@@ -4,13 +4,12 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
 
 import pytest
 from rich.console import Console
 
 from benchmarking import benchmark, collection, models, processes, targets, workloads
-from benchmarking.engines import BinaryName, Treatment
+from benchmarking.engines import Treatment
 from benchmarking.reports.analysis import analyze_pair
 from benchmarking.reports.presentation import build_report_catalog
 from benchmarking.reports.render import render_markdown_report_document
@@ -25,7 +24,7 @@ METHODS: tuple[Treatment, ...] = ("egg-de", "egg-ee", "egg-nee", "egg-oee")
 def test_native_command_uses_the_physical_input(treatment: Treatment, tmp_path: Path) -> None:
     native = models.FileSpec("fixture.in", tmp_path / "fixture.in", "sha256:native")
     logical = models.FileSpec(
-        "fixture.egg", tmp_path / "fixture.egg", "sha256:egglog", binary_inputs=((cast(BinaryName, treatment), native),)
+        "fixture.egg", tmp_path / "fixture.egg", "sha256:egglog", binary_inputs=((treatment, native),)
     )
     binary = tmp_path / treatment
     expected = [str(binary), str(native.absolute_path), "100000", "10000"]
@@ -33,8 +32,6 @@ def test_native_command_uses_the_physical_input(treatment: Treatment, tmp_path: 
     assert targets.workload_command(binary, logical, treatment) == expected
     with pytest.raises(ValueError, match="native .in"):
         targets.workload_command(binary, replace(logical, binary_inputs=()), treatment)
-    with pytest.raises(ValueError, match="fact-directory"):
-        targets.workload_command(binary, replace(native, fact_directory=tmp_path), treatment)
     with pytest.raises(ValueError, match="only supported by egglog"):
         targets.workload_command(binary, native, treatment, "ee")
     with pytest.raises(ValueError, match="only supported by egglog"):
@@ -52,7 +49,7 @@ def test_registered_workload_binds_native_file_with_its_own_hash(tmp_path: Path)
     assert logical.sha256 == targets.sha256_file(egglog)
     assert logical.for_binary("egglog-experimental") == logical
     for method in METHODS:
-        physical = logical.for_binary(cast(BinaryName, method))
+        physical = logical.for_binary(method)
         assert physical.absolute_path == native
         assert physical.display_path == native.name
         assert physical.sha256 == targets.sha256_file(native)
@@ -107,7 +104,7 @@ def test_logical_request_rejects_a_native_input_changed_during_execution(
         egglog.name,
         egglog,
         targets.sha256_file(egglog),
-        binary_inputs=((cast(BinaryName, "slotted-reference" if suffix == ".ref" else treatment), physical),),
+        binary_inputs=(("slotted-reference" if suffix == ".ref" else treatment, physical),),
     )
 
     def mutate(*_args: object, **_kwargs: object) -> processes.TimingResult:
@@ -122,14 +119,14 @@ def test_logical_request_rejects_a_native_input_changed_during_execution(
 def test_native_cache_and_plan_use_physical_input_identity(tmp_path: Path) -> None:
     target = replace(
         make_target(),
-        binaries=tuple(models.BuiltBinary(cast(BinaryName, method), "sha256:bin", None) for method in METHODS),
+        binaries=tuple(models.BuiltBinary(method, "sha256:bin", None) for method in METHODS),
     )
     native = models.FileSpec("fixture.in", tmp_path / "fixture.in", "sha256:native")
     logical = models.FileSpec(
         "fixture.egg",
         tmp_path / "fixture.egg",
         "sha256:egglog",
-        binary_inputs=tuple((cast(BinaryName, method), native) for method in METHODS),
+        binary_inputs=tuple((method, native) for method in METHODS),
     )
     endpoints = tuple(models.BenchmarkEndpoint(target, method) for method in METHODS)
     requests = tuple(
@@ -176,7 +173,7 @@ def test_native_build_uses_the_isolated_manifest_and_selected_profile(
 
     monkeypatch.setattr(targets.subprocess, "run", run)
     row = models.TargetRow(".", str(tmp_path), "HEAD", "abc", False)
-    actual, digest = targets.build_target(row, Console(quiet=True), profile, cast(BinaryName, treatment))
+    actual, digest = targets.build_target(row, Console(quiet=True), profile, treatment)
     assert actual == binary
     assert digest == targets.sha256_file(binary)
     assert calls == [

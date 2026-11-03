@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 
-type BinaryName = Literal[
-    "egglog-experimental", "egg-math-benchmark", "egg-de", "egg-ee", "egg-nee", "egg-oee", "slotted-reference"
-]
 type Treatment = Literal[
     "off",
     "term",
@@ -40,86 +37,66 @@ class WorkloadFile(Protocol):
     @property
     def absolute_path(self) -> Path: ...
 
-    @property
-    def fact_directory(self) -> Path | None: ...
-
-
-PARAMETER_BINARIES: tuple[BinaryName, ...] = ("egg-de", "egg-ee", "egg-nee", "egg-oee")
-
 
 @dataclass(frozen=True)
-class BinarySpec:
-    """One buildable executable and the protocol it implements."""
+class TreatmentSpec:
+    """One treatment's executable, build recipe, input protocol and mode flags."""
 
-    input_suffix: str
+    binary_name: str
     build_args: tuple[str, ...]
+    flags: tuple[str, ...] = ()
+    input_suffix: str = ".egg"
     timing_summary: bool = True
     allocator_limit: bool = True
     target_directory: str | None = None
 
 
-BINARIES: dict[BinaryName, BinarySpec] = {
-    "egglog-experimental": BinarySpec(
-        ".egg",
-        (
-            "--locked",
-            "-p",
-            "egglog-experimental",
-            "--no-default-features",
-            "--features",
-            "bin",
-            "--bin",
-            "egglog-experimental",
-        ),
+_EGGLOG = TreatmentSpec(
+    "egglog-experimental",
+    (
+        "--locked",
+        "-p",
+        "egglog-experimental",
+        "--no-default-features",
+        "--features",
+        "bin",
+        "--bin",
+        "egglog-experimental",
     ),
-    "egg-math-benchmark": BinarySpec(".egg", ("-p", "egg-math-benchmark")),
-    "slotted-reference": BinarySpec(
-        ".ref",
-        ("--locked", "-p", "slotted-reference", "--no-default-features", "--bin", "slotted-reference"),
-        timing_summary=False,
-    ),
+)
+_MATH = TreatmentSpec("egg-math-benchmark", ("-p", "egg-math-benchmark"))
+_SLOTTED = TreatmentSpec(
+    "slotted-reference",
+    ("--locked", "-p", "slotted-reference", "--no-default-features", "--bin", "slotted-reference"),
+    input_suffix=".ref",
+    timing_summary=False,
+)
+TREATMENT_SPECS: dict[Treatment, TreatmentSpec] = {
+    "off": _EGGLOG,
+    "term": replace(_EGGLOG, flags=("--term-encoding",)),
+    "proofs": replace(_EGGLOG, flags=("--proofs",)),
+    "proof-extraction": replace(_EGGLOG, flags=("--proof-extraction",)),
+    "proof-testing": replace(_EGGLOG, flags=("--proof-testing",)),
+    "egg": replace(_MATH, flags=("--proof-mode", "off")),
+    "egg-proofs": replace(_MATH, flags=("--proof-mode", "enabled")),
+    "egg-proof-extraction": replace(_MATH, flags=("--proof-mode", "extract")),
+    "egg-proof-testing": replace(_MATH, flags=("--proof-mode", "check")),
     **{
-        name: BinarySpec(
-            ".in",
+        name: TreatmentSpec(
+            name,
             ("--locked", "--manifest-path", "benchmarks/disequality/native/Cargo.toml", "--bin", name),
+            input_suffix=".in",
             timing_summary=False,
             allocator_limit=False,
             target_directory="benchmarks/local/parameter-native/target",
         )
-        for name in PARAMETER_BINARIES
+        for name in cast(tuple[Treatment, ...], ("egg-de", "egg-ee", "egg-nee", "egg-oee"))
     },
-}
-
-
-@dataclass(frozen=True)
-class TreatmentSpec:
-    """A public experiment name: one executable plus its mode flags."""
-
-    binary_name: BinaryName
-    flags: tuple[str, ...]
-
-
-TREATMENT_SPECS: dict[Treatment, TreatmentSpec] = {
-    "off": TreatmentSpec("egglog-experimental", ()),
-    "term": TreatmentSpec("egglog-experimental", ("--term-encoding",)),
-    "proofs": TreatmentSpec("egglog-experimental", ("--proofs",)),
-    "proof-extraction": TreatmentSpec("egglog-experimental", ("--proof-extraction",)),
-    "proof-testing": TreatmentSpec("egglog-experimental", ("--proof-testing",)),
-    "egg": TreatmentSpec("egg-math-benchmark", ("--proof-mode", "off")),
-    "egg-proofs": TreatmentSpec("egg-math-benchmark", ("--proof-mode", "enabled")),
-    "egg-proof-extraction": TreatmentSpec("egg-math-benchmark", ("--proof-mode", "extract")),
-    "egg-proof-testing": TreatmentSpec("egg-math-benchmark", ("--proof-mode", "check")),
-    "egg-de": TreatmentSpec("egg-de", ()),
-    "egg-ee": TreatmentSpec("egg-ee", ()),
-    "egg-nee": TreatmentSpec("egg-nee", ()),
-    "egg-oee": TreatmentSpec("egg-oee", ()),
-    "slotted": TreatmentSpec("egglog-experimental", ("--slotted",)),
-    "slotted-no-aliasing": TreatmentSpec("egglog-experimental", ("--slotted", "--slotted-no-aliasing")),
-    "slotted-ref-multi": TreatmentSpec("slotted-reference", ("--matcher", "multi", "--substitution", "snapshot")),
-    "slotted-ref-nested": TreatmentSpec("slotted-reference", ("--matcher", "nested", "--substitution", "syntactic")),
-    "slotted-ref-nested-snapshot": TreatmentSpec(
-        "slotted-reference", ("--matcher", "nested", "--substitution", "snapshot")
-    ),
+    "slotted": replace(_EGGLOG, flags=("--slotted",)),
+    "slotted-no-aliasing": replace(_EGGLOG, flags=("--slotted", "--slotted-no-aliasing")),
+    "slotted-ref-multi": replace(_SLOTTED, flags=("--matcher", "multi", "--substitution", "snapshot")),
+    "slotted-ref-nested": replace(_SLOTTED, flags=("--matcher", "nested", "--substitution", "syntactic")),
+    "slotted-ref-nested-snapshot": replace(_SLOTTED, flags=("--matcher", "nested", "--substitution", "snapshot")),
 }
 TREATMENTS = tuple(TREATMENT_SPECS)
 EGGLOG_FLAGS = ("--mode", "no-messages", "-j", "1")
@@ -163,8 +140,6 @@ def validate_binary_workload(file_spec: WorkloadFile, treatment: Treatment) -> N
                 if frozen["nested"] is None:
                     raise ValueError(frozen["unsupported_reason"])
         return
-    if file_spec.fact_directory is not None:
-        raise ValueError(f"treatment {treatment} does not support --fact-directory")
     if binary_name == "slotted-reference":
         if file_spec.absolute_path.suffix != ".ref":
             raise ValueError(f"treatment {treatment} requires a frozen slotted .ref workload")

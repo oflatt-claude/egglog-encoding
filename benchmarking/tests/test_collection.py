@@ -164,7 +164,7 @@ def test_same_checkout_target_aliases_build_once(
         Console(stderr=True),
     )
 
-    assert builds == [(baseline_request, ("egglog-experimental",))]
+    assert builds == [(baseline_request, ("off", "proofs"))]
     assert resolved[baseline_request].request == baseline_request
     assert resolved[candidate_request].request == candidate_request
     assert resolved[baseline_request].row.source == "."
@@ -239,7 +239,7 @@ def test_isolated_native_checkouts_allow_a_shared_cargo_target_dir(
         row: models.TargetRow,
         _console: Console,
         _profile: targets.BuildProfile,
-        _engines: tuple[models.BinaryName, ...],
+        _engines: tuple[str, ...],
     ) -> models.ResolvedTarget:
         builds.append(request)
         return models.ResolvedTarget(request, row, f"sha256:{row.git_sha}", Path(row.path) / "binary")
@@ -302,7 +302,7 @@ def test_same_target_builds_each_engine_required_by_its_treatments(
         Console(stderr=True),
     )
 
-    assert observed_engines == [("egglog-experimental", "egg-math-benchmark")]
+    assert observed_engines == [("off", "egg")]
 
 
 def test_batch_target_resolution_reuses_complete_cache_label_before_building_pending_target(
@@ -360,7 +360,7 @@ def test_batch_target_resolution_reuses_complete_cache_label_before_building_pen
     )
 
     assert materialized == [fresh_request]
-    assert builds == [(fresh_request, ("egglog-experimental",))]
+    assert builds == [(fresh_request, ("proofs",))]
     assert resolved[cached_request].binary_sha256 == "sha256:cached"
     assert resolved[cached_request].binary_path is None
     assert resolved[fresh_request].binary_sha256 == "sha256:fresh"
@@ -647,12 +647,11 @@ def test_fresh_failure_stops_only_its_condition(
     assert [row["status"] for row in store.records].count(status) == 1
 
 
-@pytest.mark.parametrize("known_cap", [None, 8 * 1024**3])
+@pytest.mark.parametrize("known_cap", [4 * 1024**3, 8 * 1024**3])
 def test_raised_memory_limit_retries_only_missing_rows_and_records_new_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, known_cap: int | None
 ) -> None:
-    old = make_record(1, started_at="2026-07-04T12:00:01Z", status="failure", memory_limit_bytes=known_cap)
-    old["error_exit_code"] = 86
+    old = make_record(1, started_at="2026-07-04T12:00:01Z", status="memory-limited", memory_limit_bytes=known_cap)
     report = tmp_path / "report.jsonl"
     write_report(report, make_record(0, started_at="2026-07-04T12:00:00Z"), old)
     store = ReportStore(report)
@@ -667,9 +666,9 @@ def test_raised_memory_limit_retries_only_missing_rows_and_records_new_bound(
         calls.append(args)
         return collection.ProcessObservation(
             processes.TimingResult(
-                "failure",
+                "memory-limited",
                 processes.TimingRow(wall_sec=1),
-                processes.ErrorRow("allocation failed", exit_code=86, memory_limit_bytes=collection.NATIVE_LIMIT_BYTES),
+                processes.ErrorRow("allocation failed", exit_code=86),
             ),
             None,
         )
@@ -915,6 +914,7 @@ def test_collect_rows_rejects_unsupported_timing_summary_before_append(
         _checkout_path: Path,
         _timeout_sec: int,
         *,
+        env_overrides: object = None,
         memory_limit_bytes: int | None,
     ) -> processes.TimingResult:
         assert memory_limit_bytes == collection.NATIVE_LIMIT_BYTES
@@ -948,7 +948,12 @@ def test_run_process_passes_treatment_flags(
     file_spec = stable_file_spec(tmp_path)
 
     def fake_run_command(
-        command: list[str], checkout_path: Path, timeout_sec: int, *, memory_limit_bytes: int | None
+        command: list[str],
+        checkout_path: Path,
+        timeout_sec: int,
+        *,
+        env_overrides: object = None,
+        memory_limit_bytes: int | None,
     ) -> processes.TimingResult:
         assert memory_limit_bytes == collection.NATIVE_LIMIT_BYTES
         commands.append(command)
@@ -1036,24 +1041,16 @@ def test_run_process_does_not_require_summary_after_failure(
     assert observation.timing_summary is None
 
 
-@pytest.mark.parametrize("mutated_input", ("file", "facts"))
 def test_collect_rows_rejects_mutated_workload_before_append(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    mutated_input: str,
 ) -> None:
     benchmark_file = tmp_path / "file.egg"
     benchmark_file.write_text("(check (= 1 1))\n", encoding="utf-8")
-    facts = tmp_path / "facts"
-    facts.mkdir()
-    fact_file = facts / "input.tsv"
-    fact_file.write_text("before\n", encoding="utf-8")
     file_spec = models.FileSpec(
         benchmark_file.name,
         benchmark_file,
         targets.sha256_file(benchmark_file),
-        facts,
-        targets.sha256_directory(facts),
     )
     target = make_target(binary_path=ROOT / "egglog-experimental")
     requests = (collection.BenchmarkRequest(models.EndpointRequest(target.request, "off"), (file_spec,)),)
@@ -1063,15 +1060,13 @@ def test_collect_rows_rejects_mutated_workload_before_append(
         _checkout_path: Path,
         _timeout_sec: int,
         *,
+        env_overrides: object = None,
         memory_limit_bytes: int | None,
     ) -> processes.TimingResult:
         assert memory_limit_bytes == collection.NATIVE_LIMIT_BYTES
         summary_path = Path(command[command.index("--timing-summary") + 1])
         summary_path.write_text(json.dumps(make_timing_summary()), encoding="utf-8")
-        if mutated_input == "file":
-            benchmark_file.write_text("(check (= 2 2))\n", encoding="utf-8")
-        else:
-            fact_file.write_text("after\n", encoding="utf-8")
+        benchmark_file.write_text("(check (= 2 2))\n", encoding="utf-8")
         return processes.TimingResult("success", processes.TimingRow(wall_sec=1.0), None)
 
     monkeypatch.setattr(collection, "run_command", mutate_workload)
@@ -1241,7 +1236,6 @@ def test_collection_eta_uses_cached_durations_without_cached_elapsed(
             1,
             started_at="2026-10-01T00:00:01Z",
             file_sha256=second.file.sha256,
-            fact_directory_sha256="other facts",
             wall_sec=1000,
         ),
     )
@@ -1251,13 +1245,13 @@ def test_collection_eta_uses_cached_durations_without_cached_elapsed(
     task = progress.tasks[0]
     estimate = collection.CollectionETAColumn(ReportStore(report), ((target, first), (target, second)), 120)
     assert task.elapsed == 0
-    assert str(estimate.render(task)) == "ETA ~0:00:50"
+    assert str(estimate.render(task)) == "ETA ~0:50:20"
     key = CacheKey.for_endpoint(endpoint(target), first.file)
     estimate.active = (key, 0)
     clock[0] += 4
-    assert str(estimate.render(task)) == "ETA ~0:00:46"
+    assert str(estimate.render(task)) == "ETA ~0:50:16"
     estimate.complete(key, processes.TimingResult("success", processes.TimingRow(wall_sec=6), None))
-    assert str(estimate.render(task)) == "ETA ~0:00:32"
+    assert str(estimate.render(task)) == "ETA ~0:50:08"
     second_key = CacheKey.for_endpoint(endpoint(target), second.file)
     estimate.complete(second_key, processes.TimingResult("failure", processes.TimingRow(), None))
     assert str(estimate.render(task)) == "ETA ~0:00:08"
@@ -1323,7 +1317,6 @@ def test_eta_uses_workload_history_without_reusing_old_binary_results(tmp_path: 
     "changes",
     [
         {"file_sha256": "other"},
-        {"fact_directory_sha256": "other"},
         {"treatment": "proofs"},
         {"disequality_encoding": "ee"},
         {"status": "failure"},

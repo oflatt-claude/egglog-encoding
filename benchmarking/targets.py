@@ -20,11 +20,9 @@ from rich.console import Console
 from rich.text import Text
 
 from .engines import (
-    BINARIES,
     EGGLOG_FLAGS,
     NATIVE_PARAMETER_ARGUMENTS,
     TREATMENT_SPECS,
-    BinaryName,
     Treatment,
     math_workload_arguments,
     validate_binary_workload,
@@ -60,20 +58,6 @@ def sha256_file(path: Path) -> str:
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def sha256_directory(path: Path) -> str:
-    digest = hashlib.sha256()
-    files = sorted(candidate for candidate in path.rglob("*") if candidate.is_file())
-    for file in files:
-        relative = file.relative_to(path).as_posix().encode()
-        digest.update(relative)
-        digest.update(b"\0")
-        with file.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        digest.update(b"\0")
     return f"sha256:{digest.hexdigest()}"
 
 
@@ -217,10 +201,11 @@ def build_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile = "release",
-    binary_name: BinaryName = "egglog-experimental",
+    treatment: Treatment = "off",
 ) -> tuple[Path, str]:
     checkout_path = Path(row.path)
-    specification = BINARIES[binary_name]
+    specification = TREATMENT_SPECS[treatment]
+    binary_name = specification.binary_name
     binary_label = "" if binary_name == "egglog-experimental" else f" · {binary_name}"
     console.print(Text.assemble(("Building", "bold"), " ", _display_target(row), binary_label))
     target_dir = Path(specification.target_directory or os.environ.get("CARGO_TARGET_DIR", "target"))
@@ -247,15 +232,15 @@ def build_resolved_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile,
-    engines: Sequence[BinaryName] = ("egglog-experimental",),
+    treatments: Sequence[Treatment] = ("off",),
 ) -> ResolvedTarget:
-    required_binaries = tuple(dict.fromkeys(engines))
+    required_binaries = {TREATMENT_SPECS[mode].binary_name: mode for mode in treatments}
     if not required_binaries:
         raise ValueError("target build requires at least one engine")
     binaries = tuple(
         BuiltBinary(binary_name, binary_sha256, binary_path)
-        for binary_name in required_binaries
-        for binary_path, binary_sha256 in (build_target(row, console, build_profile, binary_name),)
+        for binary_name, treatment in required_binaries.items()
+        for binary_path, binary_sha256 in (build_target(row, console, build_profile, treatment),)
     )
     primary = binaries[0]
     row = replace(row, is_dirty=git_dirty(Path(row.path)))
@@ -284,7 +269,7 @@ def resolve_profile_target(
         row,
         console,
         "profiling",
-        (TREATMENT_SPECS[treatment].binary_name,),
+        (treatment,),
     )
 
 
@@ -319,7 +304,6 @@ def workload_command(
         str(binary_path),
         *EGGLOG_FLAGS,
         *(["--disequality-encoding", disequality_encoding] if disequality_encoding != "nee" else []),
-        *(["--fact-directory", str(file_spec.fact_directory)] if file_spec.fact_directory is not None else []),
         *specification.flags,
         str(file_spec.absolute_path),
     ]

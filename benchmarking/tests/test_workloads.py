@@ -1,4 +1,4 @@
-"""Test workload identity, commands, fact directories, defaults, and prove screening."""
+"""Test workload identity, commands, defaults, and prove screening."""
 
 from __future__ import annotations
 
@@ -16,20 +16,11 @@ from .report_fixtures import ROOT
 def test_validate_workloads_rejects_duplicate_cache_identities(tmp_path: Path) -> None:
     benchmark_file = tmp_path / "file.egg"
     benchmark_file.write_text("(check (= 1 1))\n", encoding="utf-8")
-    first = models.FileSpec("first.egg", benchmark_file, "sha256:same", fact_directory_sha256="sha256:facts")
-    second = models.FileSpec("second.egg", benchmark_file, "sha256:same", fact_directory_sha256="sha256:facts")
+    first = models.FileSpec("first.egg", benchmark_file, "sha256:same")
+    second = models.FileSpec("second.egg", benchmark_file, "sha256:same")
 
-    with pytest.raises(ValueError, match=r"first\.egg.*second\.egg.*identical file and fact-directory hashes"):
+    with pytest.raises(ValueError, match=r"first\.egg.*second\.egg.*identical file hashes"):
         workloads.validate_workloads((first, second))
-
-
-def test_same_file_with_different_fact_contents_is_a_distinct_workload(tmp_path: Path) -> None:
-    benchmark_file = tmp_path / "file.egg"
-    benchmark_file.write_text("(check (= 1 1))\n", encoding="utf-8")
-    first = models.FileSpec("first.egg", benchmark_file, "sha256:same", fact_directory_sha256="sha256:facts-a")
-    second = models.FileSpec("second.egg", benchmark_file, "sha256:same", fact_directory_sha256="sha256:facts-b")
-
-    workloads.validate_workloads((first, second))
 
 
 @pytest.mark.parametrize("command", ("prove", "prove-extract"))
@@ -80,12 +71,11 @@ def test_prove_scan_ignores_comments_strings_and_longer_atoms(tmp_path: Path) ->
     assert workloads.resolve_files([str(check_file)], tmp_path)[0].sha256 == targets.sha256_file(check_file)
 
 
-def test_default_workloads_are_the_eleven_research_cases() -> None:
+def test_default_workloads_are_the_ten_self_contained_research_cases() -> None:
     files = workloads.resolve_files([], ROOT)
     assert tuple(file.display_path for file in files) == (
         "egglog-experimental/tests/math-microbenchmark-rational.egg",
         "egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg",
-        "egglog/tests/pointer-analysis-initdb.egg",
         "egglog/tests/hardboiled_conv1d_32.egg",
         "egglog/tests/luminal-llama.egg",
         "egglog/tests/web-demo/herbie.egg",
@@ -95,38 +85,6 @@ def test_default_workloads_are_the_eleven_research_cases() -> None:
         "egglog/tests/papers/speq-preserved-reference-suite.egg",
         "benchmarks/disequality/parameter-analysis.egg",
     )
-    pointer = next(file for file in files if file.display_path == "egglog/tests/pointer-analysis-initdb.egg")
-    assert pointer.fact_directory == (ROOT / "egglog/tests/pointer-analysis-initdb").resolve()
-    assert pointer.fact_directory_sha256.startswith("sha256:")
-
-
-def test_pointer_initdb_facts_are_the_complete_consumed_artifact_relations() -> None:
-    fact_directory = ROOT / "egglog/tests/pointer-analysis-initdb"
-    files = tuple(sorted(fact_directory.glob("*.csv")))
-
-    assert len(files) == 23
-    assert sum(len(path.read_text(encoding="utf-8").splitlines()) for path in files) == 73_864
-    assert targets.sha256_directory(fact_directory) == (
-        "sha256:28354d7f25d8c198d923be014bbb1ee2292501e12cdde29ea90e666bc86b6929"
-    )
-
-
-def test_explicit_fact_directory_is_resolved_and_hashed(tmp_path: Path) -> None:
-    benchmark_file = tmp_path / "input.egg"
-    benchmark_file.write_text('(input Edge "edge.tsv")\n', encoding="utf-8")
-    facts = tmp_path / "facts"
-    facts.mkdir()
-    (facts / "edge.tsv").write_text("a\tb\n", encoding="utf-8")
-
-    (file_spec,) = workloads.resolve_files(["input.egg"], tmp_path, "facts")
-
-    assert file_spec.fact_directory == facts.resolve()
-    assert file_spec.fact_directory_sha256 == targets.sha256_directory(facts)
-
-
-def test_fact_directory_requires_explicit_benchmark_file(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="requires at least one explicit benchmark file"):
-        workloads.resolve_files([], tmp_path, "facts")
 
 
 def test_workload_command_matches_benchmark_behavior() -> None:
@@ -168,17 +126,6 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         str(file_spec.absolute_path),
     ]
 
-    facts = ROOT / "facts"
-    file_with_facts = models.FileSpec(
-        "file.egg",
-        ROOT / "file.egg",
-        "sha256:file",
-        facts,
-        "sha256:facts",
-    )
-    command = targets.workload_command(ROOT / "egglog-experimental", file_with_facts, "proofs")
-    assert command[5:7] == ["--fact-directory", str(facts)]
-
 
 def test_egg_workload_command_uses_the_fixed_math_driver_contract() -> None:
     (math,) = workloads.resolve_files(["egglog-experimental/tests/math-microbenchmark-rational.egg"], ROOT)
@@ -190,40 +137,12 @@ def test_egg_workload_command_uses_the_fixed_math_driver_contract() -> None:
     ]
 
 
-def test_egg_treatments_reject_other_workloads_and_fact_directories(tmp_path: Path) -> None:
+def test_egg_treatments_reject_unregistered_workloads(tmp_path: Path) -> None:
     other_path = tmp_path / "other.egg"
     other_path.write_text("(check (= 1 1))")
     other = models.FileSpec("other.egg", other_path, targets.sha256_file(other_path))
     with pytest.raises(ValueError, match="only supports registered Math workloads"):
         validate_binary_workload(other, "egg")
-
-    math = models.FileSpec(
-        "egglog-experimental/tests/math-microbenchmark-rational.egg",
-        ROOT / "egglog-experimental/tests/math-microbenchmark-rational.egg",
-        "sha256:math",
-        ROOT / "facts",
-    )
-    with pytest.raises(ValueError, match="does not support --fact-directory"):
-        validate_binary_workload(math, "egg-proofs")
-
-
-@pytest.mark.parametrize("prefix", ("", '; input include prove "\n', '(let message "text; not a comment")\n'))
-def test_self_contained_input_hashes_file_and_fact_directory(tmp_path: Path, prefix: str) -> None:
-    path = tmp_path / "main.egg"
-    facts = tmp_path / "facts"
-    facts.mkdir()
-    csv = facts / "rows.csv"
-    csv.write_text("1\n")
-    path.write_text(prefix + '(input F "rows.csv")\n')
-    first = workloads.resolve_files([str(path)], tmp_path, str(facts))[0]
-    assert first.sha256 == targets.sha256_file(path)
-    assert first.fact_directory_sha256 == targets.sha256_directory(facts)
-    csv.write_text("2\n")
-    changed = workloads.resolve_files([str(path)], tmp_path, str(facts))[0]
-    assert changed.sha256 == first.sha256
-    assert changed.fact_directory_sha256 != first.fact_directory_sha256
-    with pytest.raises(ValueError, match="workload changed"):
-        workloads.require_workload_unchanged(first)
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
@@ -252,26 +171,13 @@ def test_benchmark_inputs_reject_includes(tmp_path: Path, source: str) -> None:
         workloads.resolve_files([str(path)], tmp_path)
 
 
-@pytest.mark.parametrize("name", ("../outside.csv", "absolute", "symlink.csv"))
-@pytest.mark.parametrize("options", ("", " :internal-proof-base 1"))
-def test_input_paths_cannot_escape_the_hashed_fact_directory(tmp_path: Path, name: str, options: str) -> None:
-    facts = tmp_path / "facts"
-    facts.mkdir()
-    outside = tmp_path / "outside.csv"
-    outside.write_text("1\n")
-    (facts / "symlink.csv").symlink_to(outside)
-    if name == "absolute":
-        name = str(outside)
+@pytest.mark.parametrize(
+    "source", ('(input F "rows.csv")', '(fail (input F "rows.csv"))', '(let note "(") (input F "rows.csv")')
+)
+def test_external_input_commands_are_rejected(tmp_path: Path, source: str) -> None:
     path = tmp_path / "main.egg"
-    path.write_text(f"(input F {json.dumps(name)}{options})")
-    with pytest.raises(ValueError, match="inside --fact-directory"):
-        workloads.resolve_files([str(path)], tmp_path, str(facts))
-
-
-def test_csv_input_requires_an_explicit_hashed_directory(tmp_path: Path) -> None:
-    path = tmp_path / "main.egg"
-    path.write_text('(input F "rows.csv")')
-    with pytest.raises(ValueError, match="require --fact-directory"):
+    path.write_text(source)
+    with pytest.raises(ValueError, match="self-contained"):
         workloads.resolve_files([str(path)], tmp_path)
 
 
@@ -385,15 +291,3 @@ def test_overlapping_exclusions_reject_ambiguous_execution_policy(tmp_path: Path
         file.exclusion_for("term", memory_limit_bytes=10 * 1024**3)
     assert file.exclusion_for("term", memory_limit_bytes=None) == expected
     assert file.exclusion_for("off", memory_limit_bytes=10 * 1024**3) is None
-
-
-def test_input_containment_resolves_a_symlinked_fact_directory(tmp_path: Path) -> None:
-    facts = tmp_path / "facts"
-    facts.mkdir()
-    (facts / "rows.csv").write_text("1\n")
-    alias = tmp_path / "alias"
-    alias.symlink_to(facts, target_is_directory=True)
-    path = tmp_path / "main.egg"
-    path.write_text('(input F "rows.csv")')
-    file = models.FileSpec("main.egg", path, targets.sha256_file(path), fact_directory=alias)
-    workloads.validate_workloads((file,))

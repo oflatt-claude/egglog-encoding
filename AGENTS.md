@@ -45,7 +45,7 @@ The local Make invocation defaults to two paper workers; ordinary Rust tests
 keep their usual parallelism. Its allocator limit is per child; set
 `RUST_TEST_THREADS=1` for a serial paper run.
 The paper target
-uses the allocator/address-space cap from `benchmarks/resources.json` by default;
+uses the allocator/address-space cap from `benchmarking/config.py` by default;
 `PAPER_TEST_MEMORY_LIMIT_BYTES=none` runs it uncapped. Apply the shared ignore
 policy against that selected profile, and print excluded configuration counts.
 
@@ -75,7 +75,7 @@ small Math and disequality fixtures and pytest's temporary report directory.
 It requires the Git checkout and Rust toolchain used by the normal workflow.
 
 For benchmark-report UI changes, inspect both a focused one-file report and the
-default eleven-file report in Rich and Markdown form. Exercise terminal widths 80,
+default ten-file report in Rich and Markdown form. Exercise terminal widths 80,
 119, 120, 160, and 200 using copies of the report cache under `/tmp`; do not read
 from or append to the repository cache during UI validation. Confirm that the
 cumulative `--detail` levels add files, phases, and top rulesets in that order,
@@ -136,30 +136,37 @@ or modify the JSONL.
   in proof tests.
 - Benchmark files are resolved relative to the command invocation directory,
   not relative to comparison targets. Require self-contained files without
-  `(include ...)`; `(input ...)` must stay inside a supplied `--fact-directory`.
-- Cache identity includes binary SHA-256, physical file and fact-directory
-  SHA-256, treatment, disequality encoding, and capped/uncapped allocator profile.
-  Within a profile, reuse successes at larger caps and retry allocation failures
-  only after raising the cap. Raising a timeout retires timeout failures;
-  successful rows can cross timeouts when their observed wall time fits.
-  Historical observations remain append-only; runtime-contract/schema changes
-  require a new cache.
+  `(include ...)` or `(input ...)`; expand external inputs before benchmarking.
+- Cache identity includes binary SHA-256, physical file SHA-256, treatment and
+  disequality encoding. Reuse completed successes independently of time/memory
+  guards. `select_records` centrally retries timeouts only after raising the
+  timeout, and memory-limited outcomes only after raising/removing the memory
+  guard. Ordinary failures require force-run. Classify outcomes once at launch;
+  readers use status rather than exit codes or diagnostic parsing.
+  Historical rows remain append-only; runtime-contract/schema changes require
+  a new cache. Controlled launches keep one allocator environment in both modes.
 - Shared exclusions live only in `benchmarks/ignore.json`, with reason/evidence.
   A cap-specific resource exclusion applies only to a set cap no larger than the
   recorded bound, never to uncapped runs. Unsupported entries apply across profiles.
   Preserve exclusions in grouped/interactive snapshots and figure coverage.
+  Complete successful samples bypass cap-specific resource deferrals; known
+  correctness bugs and unsupported configurations remain excluded.
 - The baseline and candidate must have different endpoint cache identities
-  (binary SHA-256, treatment, disequality encoding, and allocator profile). They may use the same
+  (binary SHA-256, treatment, and disequality encoding). They may use the same
   binary when treatment or encoding differs.
-- A request must not contain duplicate file/fact-directory hash pairs; those
+- A request must not contain duplicate file hashes; those
   selectors would address the same cached workload observations twice.
 
 ## Paper figures
 
 - `./bench.py figures` collects and renders the five paper PDFs through the shared
   benchmark phases. `--config` selects a flat JSON catalog with global `rounds`
-  and `timeout_sec`, and direct per-figure `spec`, `files`, `treatments`, and optional correctness-only `checks`.
-- The production catalog requests ten uncapped executions and a 500-second timeout.
+  and optional `timeout_sec` override, and direct per-figure `spec`, `files`, `treatments`, and optional correctness-only `checks`.
+- Resource defaults for all entrypoints come from `benchmarking/config.py`.
+  The Rust paper parent reads them once through stdlib-only `python3`; execution
+  and worker scheduling stay in Rust. The catalog requests ten observations.
+  Correctness watchdogs retain a 3x allowance per mode for their additional
+  extraction, proof, and native-reference work.
   Use `--rounds 3 --memory-limit` with temporary reports/previews for verification;
   ordinary benchmark defaults are unchanged. There is no cached-only mode.
 - Reuse compatible observations automatically, merge repeated runtime/memory
@@ -183,8 +190,9 @@ or modify the JSONL.
 - The shared runner owns whole-process wall time and peak RSS for every engine.
   Native slotted is a workload driver with no self-timing or phase-summary path.
 - Local allocation protection uses the existing allocator/address-space cap only.
-  Do not add host-reserve, host-pressure, or RSS-ceiling supervisors. Final figure
-  collection is uncapped and continues to measure peak RSS independently.
+  Do not add host-reserve, host-pressure, or RSS-ceiling supervisors. Use
+  `--no-memory-limit` explicitly for uncapped final collection; peak RSS is
+  measured independently.
 - Resource failures require explicit evidence and review before an ignore entry;
   known table-size bugs instead require an issue and an explicitly reviewed
   `expected-failure` with exact `[ordinary, candidate]` counts. Rust must execute

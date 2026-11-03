@@ -8,13 +8,10 @@ mimalloc can reserve memory before main, too early for CLI parsing or option set
 from __future__ import annotations
 
 import argparse
-import json
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 
-NATIVE_LIMIT_BYTES: int = json.loads((Path(__file__).resolve().parents[1] / "benchmarks/resources.json").read_text())[
-    "memory_limit_bytes"
-]
+from .config import DEFAULT_MEMORY_LIMIT_BYTES as NATIVE_LIMIT_BYTES
+
 NATIVE_ALLOCATION_EXIT = 86
 NATIVE_SETUP_EXIT = 87
 NATIVE_ALLOCATOR_ENV = {
@@ -59,11 +56,10 @@ def native_memory_command(
     """Pass explicit protection and the fixed startup policy before native exec.
 
     Controlled engines accept this option; unchanged author drivers do not.
-    No cap or allocator-startup overrides are imposed when the limit is absent.
+    Allocator startup is fixed in capped and uncapped runs; the bound is only a guard.
     Peak-memory measurement is owned by the caller and remains independent.
     """
     args = list(command)
     if limit_bytes is not None:
         args.insert(1, f"--memory-limit-bytes={limit_bytes}")
-        return args, {**env, **NATIVE_ALLOCATOR_ENV}
-    return args, dict(env)
+    return args, {**env, **NATIVE_ALLOCATOR_ENV}

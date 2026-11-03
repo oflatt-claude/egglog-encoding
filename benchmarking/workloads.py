@@ -1,7 +1,7 @@
 """Resolve and validate benchmark workload files shared by run and profile modes.
 
-This module owns the default workload suite, invocation-relative file and fact
-directory resolution, content identities, and the rule that measured inputs do
+This module owns the default workload suite, invocation-relative file
+resolution, content identities, and the rule that measured inputs do
 not execute ``(prove ...)``. CLI parsing and endpoint selection belong in their
 respective command modules.
 """
@@ -12,38 +12,25 @@ import glob
 import json
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
-from .engines import BINARIES, TREATMENTS
+from .engines import TREATMENT_SPECS, TREATMENTS
 from .models import Exclusion, FileSpec, validate_unique_file_identities
 from .reports.store import GroupedExclusion
-from .targets import sha256_directory, sha256_file
-
-
-@dataclass(frozen=True)
-class WorkloadConfig:
-    """One repository-default workload and its optional fact directory."""
-
-    file: str
-    fact_directory: str | None = None
-
+from .targets import sha256_file
 
 DEFAULT_WORKLOADS = (
-    WorkloadConfig("egglog-experimental/tests/math-microbenchmark-rational.egg"),
-    WorkloadConfig("egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg"),
-    WorkloadConfig(
-        "egglog/tests/pointer-analysis-initdb.egg",
-        "egglog/tests/pointer-analysis-initdb",
-    ),
-    WorkloadConfig("egglog/tests/hardboiled_conv1d_32.egg"),
-    WorkloadConfig("egglog/tests/luminal-llama.egg"),
-    WorkloadConfig("egglog/tests/web-demo/herbie.egg"),
-    WorkloadConfig("egglog/tests/papers/misaal-hvx-dot-product.egg"),
-    WorkloadConfig("egglog/tests/papers/churchroad-wide-multiply.egg"),
-    WorkloadConfig("egglog-experimental/tests/papers/dialegg-nmm40.egg"),
-    WorkloadConfig("egglog/tests/papers/speq-preserved-reference-suite.egg"),
-    WorkloadConfig("benchmarks/disequality/parameter-analysis.egg"),
+    "egglog-experimental/tests/math-microbenchmark-rational.egg",
+    "egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg",
+    "egglog/tests/hardboiled_conv1d_32.egg",
+    "egglog/tests/luminal-llama.egg",
+    "egglog/tests/web-demo/herbie.egg",
+    "egglog/tests/papers/misaal-hvx-dot-product.egg",
+    "egglog/tests/papers/churchroad-wide-multiply.egg",
+    "egglog-experimental/tests/papers/dialegg-nmm40.egg",
+    "egglog/tests/papers/speq-preserved-reference-suite.egg",
+    "benchmarks/disequality/parameter-analysis.egg",
 )
 IGNORE_FILE = Path(__file__).resolve().parents[1] / "benchmarks/ignore.json"
 
@@ -51,18 +38,12 @@ IGNORE_FILE = Path(__file__).resolve().parents[1] / "benchmarks/ignore.json"
 def resolve_files(
     raw_files: Sequence[str],
     invocation_cwd: Path,
-    fact_directory: str | None = None,
     *,
     ignore_file: Path = IGNORE_FILE,
 ) -> tuple[FileSpec, ...]:
     """Resolve selected or default workloads relative to the invocation directory."""
 
-    if raw_files:
-        chosen = tuple(WorkloadConfig(file, fact_directory) for file in raw_files)
-    else:
-        if fact_directory is not None:
-            raise ValueError("--fact-directory requires at least one explicit benchmark file")
-        chosen = DEFAULT_WORKLOADS
+    chosen = raw_files or DEFAULT_WORKLOADS
     rules = json.loads(ignore_file.read_text())
     if not isinstance(rules, list):
         raise ValueError("benchmark ignore file must contain a list")
@@ -127,8 +108,7 @@ def resolve_files(
         if not matched_paths[rule["file"]]:
             raise ValueError(f"exclusion pattern matched nothing: {rule['file']}")
     files: list[FileSpec] = []
-    for workload in chosen:
-        display_path = workload.file
+    for display_path in chosen:
         absolute_path = Path(display_path).expanduser()
         if not absolute_path.is_absolute():
             absolute_path = invocation_cwd / absolute_path
@@ -136,16 +116,6 @@ def resolve_files(
         if not absolute_path.is_file():
             raise FileNotFoundError(f"benchmark file does not exist: {display_path}")
 
-        resolved_fact_directory: Path | None = None
-        fact_directory_sha256 = ""
-        if workload.fact_directory is not None:
-            resolved_fact_directory = Path(workload.fact_directory).expanduser()
-            if not resolved_fact_directory.is_absolute():
-                resolved_fact_directory = invocation_cwd / resolved_fact_directory
-            resolved_fact_directory = resolved_fact_directory.resolve()
-            if not resolved_fact_directory.is_dir():
-                raise FileNotFoundError(f"benchmark fact directory does not exist: {workload.fact_directory}")
-            fact_directory_sha256 = sha256_directory(resolved_fact_directory)
         logical_path = absolute_path.with_suffix(".egg")
         if absolute_path.suffix not in (".ref", ".in") or not logical_path.is_file():
             logical_path = absolute_path
@@ -166,13 +136,11 @@ def resolve_files(
                     for rule in rules
                     if logical_path in matched_paths[rule["file"]]
                 ),
-                fact_directory=resolved_fact_directory,
-                fact_directory_sha256=fact_directory_sha256,
             )
         )
     for index, file in enumerate(files):
         representations = []
-        for binary_name, specification in BINARIES.items():
+        for binary_name, specification in {spec.binary_name: spec for spec in TREATMENT_SPECS.values()}.items():
             suffix = specification.input_suffix
             if suffix == file.absolute_path.suffix:
                 continue
@@ -206,7 +174,7 @@ def exclusion_bindings(files: Sequence[FileSpec]) -> list[GroupedExclusion]:
         for physical in (logical, *(file for _, file in logical.binary_inputs))
         for rule in logical.exclusions
     ]
-    suffixes = {specification.input_suffix for specification in BINARIES.values()}
+    suffixes = {specification.input_suffix for specification in TREATMENT_SPECS.values()}
     for rule in json.loads(IGNORE_FILE.read_text()):
         exclusion = Exclusion(
             rule["kind"],
@@ -275,20 +243,14 @@ def require_workload_unchanged(file_spec: FileSpec) -> None:
 
     try:
         file_sha256 = sha256_file(file_spec.absolute_path) if file_spec.absolute_path.is_file() else None
-        if file_spec.fact_directory is None:
-            fact_directory_sha256 = ""
-        elif file_spec.fact_directory.is_dir():
-            fact_directory_sha256 = sha256_directory(file_spec.fact_directory)
-        else:
-            fact_directory_sha256 = None
     except OSError as error:
         raise ValueError(f"workload changed during execution: {file_spec.display_path}") from error
-    if file_sha256 != file_spec.sha256 or fact_directory_sha256 != file_spec.fact_directory_sha256:
+    if file_sha256 != file_spec.sha256:
         raise ValueError(f"workload changed during execution: {file_spec.display_path}")
 
 
 def validate_workloads(files: Sequence[FileSpec]) -> None:
-    """Require self-contained programs, with any CSV inputs inside the hashed fact directory."""
+    """Require self-contained programs without external input or include commands."""
 
     validate_unique_file_identities(files)
     for file in files:
@@ -308,21 +270,10 @@ def validate_workloads(files: Sequence[FileSpec]) -> None:
                 form = forms.pop()
                 if not form:
                     continue
-                if form[0] == "include":
+                if form[0] in ("include", "input"):
                     raise ValueError(
-                        f"{file.display_path}: benchmark inputs must be self-contained; expand include commands first"
+                        f"{file.display_path}: benchmark inputs must be self-contained; expand {form[0]} commands first"
                     )
-                if form[0] == "input":
-                    if file.fact_directory is None:
-                        raise ValueError(f"{file.display_path}: input commands require --fact-directory")
-                    try:
-                        name = json.loads(form[2])
-                    except (IndexError, ValueError) as error:
-                        raise ValueError(f"{file.display_path}: input requires a quoted filename") from error
-                    if not isinstance(name, str) or not (file.fact_directory / name).resolve().is_relative_to(
-                        file.fact_directory.resolve()
-                    ):
-                        raise ValueError(f"{file.display_path}: input path must stay inside --fact-directory")
                 if not forms and form[0] in ("prove", "prove-extract"):
                     raise ValueError(
                         f"{file.display_path} contains an explicit prove command; "

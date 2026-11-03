@@ -36,7 +36,7 @@ class EvalLiveModule(Protocol):
 
 
 _RUNTIME_FILES = (
-    "benchmarks/resources.json",
+    "benchmarking/config.py",
     "benchmarking/native_memory.py",
     "benchmarking/__init__.py",
     "benchmarking/engines.py",

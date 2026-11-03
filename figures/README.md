@@ -42,7 +42,6 @@ and a `figures` object. Each figure declares `spec`, `files` and
 ```json
 {
   "rounds": 10,
-  "timeout_sec": 500,
   "figures": {
     "example": {
       "spec": "example.vl.json",
@@ -66,10 +65,9 @@ Runtime and memory views therefore share launches. It reuses compatible cached
 observations and collects only missing observations; there is no separate
 cached/render-only mode. Ordinary errors remain cached. Memory-limit failures
 are retried after raising the cap; timeouts are retried after raising the deadline.
-Successes under lower caps can fill larger capped budgets. Allocator profiles have separate
-identities for both successes and failures: capped runs never supply uncapped
-measurements. After lowering the timeout, a successful run's recorded timeout or
-completed wall time must fit the new deadline.
+Completed successes remain reusable after either guard changes, including a lower
+limit or removing the memory limit. Guards affect fresh work and retries rather
+than the identity of completed observations.
 Repeating an unchanged completed invocation launches no
 additional measurements and renders the requested images again.
 
@@ -81,15 +79,13 @@ catalog requests ten runs per condition. `--rounds N` overrides that count for
 collection, sample selection and intervals without changing the catalog.
 Use `--rounds 1` and a temporary report for CLI smoke checks.
 
-Final collection defaults to ten uncapped observations per endpoint. Use a clean
-environment with allocator and thread overrides unset, and retain the machine
-and environment description with the observations. Local
-verification can use three rounds and `--memory-limit`, which applies the existing
-address-space/allocator cap from `benchmarks/resources.json` where supported
-(`--memory-limit-bytes N` selects another bound). Peak RSS is measured separately
-in either profile. The original native disequality executables do not support this
-cap and are identified as uncapped. Keep verification outputs under `/tmp`;
-they do not replace final paper measurements or images.
+Figures share the resource defaults in `benchmarking/config.py` with comparisons,
+nightly, profiling, and paper tests: 500 seconds and a 10 GiB allocator/address-space
+cap where supported. `--timeout-sec N` and `--memory-limit-bytes N` override them.
+Use `--no-memory-limit` for uncapped final collection. Peak RSS is measured
+independently; the original native disequality drivers do not implement a cap.
+Use three rounds and temporary report/output paths for verification. Retain the
+machine and environment description with the final ten-observation results.
 
 [`../benchmarks/ignore.json`](../benchmarks/ignore.json) is shared with the normal
 Rust paper tests. Each resource or unsupported exclusion records a reason and
@@ -127,9 +123,9 @@ recorded observations. Source targets are checked and rebound on each figure
 invocation. An ordinary comparison that assigns the same label/engine to two
 different binaries is rejected before launch. The raw
 `.reports.jsonl` remains append-only. The shared selector matches the current
-executable, physical input file and fact-directory hashes, treatment, encoding and
-capped/uncapped allocator profile, then selects
-rows applicable to the requested resource bounds. It binds their original row
+executable, physical input file hash, treatment, and encoding. Resource failures
+are selected under the shared retry rule; successes remain reusable when guards
+change. It binds their original row
 indices into the Vega-Lite specifications. They never borrow missing measurements
 from an older executable.
 Native disequality `.in` and logical Egglog `.egg` inputs remain distinct.

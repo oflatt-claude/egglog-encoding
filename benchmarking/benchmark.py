@@ -25,6 +25,7 @@ from .collection import (
     plan_collection,
     resolve_requests,
 )
+from .config import DEFAULT_TIMEOUT_SEC
 from .engines import TREATMENTS, Treatment
 from .models import (
     BenchmarkEndpoint,
@@ -42,7 +43,6 @@ from .workloads import resolve_files
 
 DEFAULT_REPORT = ".reports.jsonl"
 DEFAULT_ROUNDS = 6
-DEFAULT_TIMEOUT_SEC = 1800
 
 
 def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -52,11 +52,6 @@ def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--disequality-encoding", choices=("nee", "ee"), default="nee")
     parser.add_argument("--compare-disequality-encoding", choices=("nee", "ee"), default="nee")
     parser.add_argument("files", nargs="*", help="workload files to benchmark")
-    parser.add_argument(
-        "--fact-directory",
-        default=None,
-        help="fact directory used by explicitly selected benchmark files",
-    )
     parser.add_argument(
         "--target",
         default=".",
@@ -193,7 +188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             console.print(f"  loaded {store.row_count} observations in {perf_counter() - started:.1f}s")
         console.print("Resolving inputs")
         started = perf_counter()
-        files = resolve_files(args.files, invocation_cwd, args.fact_directory)
+        files = resolve_files(args.files, invocation_cwd)
         if args.verbose:
             console.print(f"  resolved {len(files)} workload files in {perf_counter() - started:.1f}s")
         requests = tuple(BenchmarkRequest(endpoint, files) for endpoint in (baseline_request, candidate_request))

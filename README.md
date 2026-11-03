@@ -247,28 +247,21 @@ input and fixed encoding; `--disequality-encoding` applies only to Egglog.
 
 ### Files
 
-Positional paths select benchmark files. Use `--fact-directory` for explicitly
-selected workloads containing `(input ...)` commands:
+Positional paths select self-contained benchmark files:
 
 ```bash
 ./bench.py egglog/tests/foo.egg egglog/tests/bar.egg
-./bench.py egglog/tests/pointer-analysis-initdb.egg \
-  --fact-directory egglog/tests/pointer-analysis-initdb
 ```
 
-Paths are resolved relative to the command invocation directory, not relative
-to either target, including comparisons against Git or PR targets. Benchmark
-files must be self-contained: expand `(include ...)` commands first. Any
-`(input ...)` paths must stay inside the supplied `--fact-directory`. Both
-endpoints run the same file and fact-directory contents, whose SHA-256 hashes
-form the workload cache identity.
+Paths resolve relative to the invocation directory, including comparisons against
+Git or PR targets. Expand `(include ...)` and `(input ...)` commands into the
+file before benchmarking. Both endpoints run the same bytes; the file's SHA-256
+is its workload identity.
 
 With no positional files, the representative suite is:
 
 - `egglog-experimental/tests/math-microbenchmark-rational.egg`
 - `egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg`
-- `egglog/tests/pointer-analysis-initdb.egg`, with
-  `egglog/tests/pointer-analysis-initdb`
 - `egglog/tests/hardboiled_conv1d_32.egg`
 - `egglog/tests/luminal-llama.egg`
 - `egglog/tests/web-demo/herbie.egg`
@@ -412,8 +405,11 @@ The remaining collection options are:
   A filesystem path is required; `-` is not a streaming destination.
 - `--rounds N`: selected observations required for every endpoint/file;
   default `6`.
-- `--timeout-sec N`: per-process timeout; default `1800` to accommodate the
-  full-size disequality proof workload. Smaller workloads may use a lower limit.
+- `--timeout-sec N`: per-process guard; the shared default is 500 seconds.
+- `--memory-limit-bytes N`: allocator/address-space guard; the shared default
+  is 10 GiB. `--no-memory-limit` removes it. Both defaults live in
+  `benchmarking/config.py` and are shared by comparisons, figures, nightly,
+  profiling, and paper tests.
 - `--force-run`: append `N` fresh rows for both endpoints before selecting the
   newest rows.
 - `--format rich|markdown`: final human report format.
@@ -490,8 +486,8 @@ make nightly
 uv run --locked python -m benchmarking.nightly /path/to/output --rounds 1 --timeout-sec 120
 ```
 
-The initial request is one observation per endpoint/file, with a 120-second
-workload timeout. Compatible observations are shared by executable identity.
+The initial request is one observation per endpoint/file, with the shared
+resource defaults. Compatible observations are shared by executable identity.
 The default page shows checked/off overhead of the branch; `branch-vs-main.md`
 compares the two checked endpoints from the same snapshot. Identical executables
 share observations rather than appearing as distinct measurements.
@@ -522,7 +518,7 @@ separate Samply command when a particular endpoint needs call-stack diagnosis:
 ```
 
 Profiling selects one target, treatment, and file. Artifacts are cached under
-`.profiles/` by binary, file, fact-directory, treatment, and
+`.profiles/` by binary, file, treatment, and
 iteration policy. `--open` loads the artifact in Samply; `--force-run` replaces
 the cached profile. Profiling is deliberately separate from the repeated-run
 benchmark statistics and pair report.
@@ -551,41 +547,32 @@ The snapshot is refreshed even when all requested observations are cached.
 Unchanged output keeps its modification time. For another report path, `.jsonl`
 becomes `-grouped.json`; other names gain `-grouped.json`.
 
-Cache reuse is keyed by:
+Cache reuse is keyed by binary SHA-256, physical input file SHA-256, treatment,
+and disequality encoding. Target source, path, revision, dirty state, labels,
+and display paths are provenance. Time and memory guards are per-attempt limits,
+not cache identities. Allocator startup settings stay fixed with or without a cap.
 
-- binary SHA-256;
-- physical input file SHA-256;
-- fact-directory SHA-256;
-- treatment and disequality encoding;
-- allocator profile (capped or uncapped).
+The shared `select_records` function in `benchmarking/reports/store.py` selects
+the newest applicable `--rounds` rows, ordered by `started_at` then JSONL order:
 
-Target source, path, git revision, dirty state, labels, and display paths are
-provenance rather than cache-key dimensions. Capped and uncapped startup settings
-partition every observation, including successes. Numeric memory and timeout
-budgets are evaluated during selection. The runner selects the newest applicable `--rounds`
-rows for each exact endpoint/file, ordering first by `started_at` and
-then by physical JSONL order. Without `--force-run`, it appends only missing
-rows. With `--force-run`, it appends a full fresh set and then selects the
-newest rows.
+| Saved status | Cache/retry behavior |
+| --- | --- |
+| `success` | Reuse even when either guard decreases or is removed |
+| `timed-out` | Retry only when the requested timeout increases |
+| `memory-limited` | Retry only when the requested memory bound increases or is removed |
+| `failure` | Retain until an explicit `--force-run` |
 
-A failed or timed-out attempt ends the remaining repetitions of that exact
-workload and endpoint; independent conditions continue. A compatible selected
-cached ordinary error also prevents automatic retries. A timeout can be retried
-when its deadline increases; an allocation failure can be retried when its cap
-increases. Within the capped profile, a success under a lower or equal cap is
-reusable at a higher cap. A success remains
-reusable at the same or a higher timeout. After lowering the timeout, its
-recorded deadline or completed wall time must fit. Use `--force-run` to explicitly
-retry failed conditions; earlier observations remain in the append-only cache.
+A failed attempt ends the remaining repetitions of that condition; independent
+conditions continue. `--force-run` appends a complete fresh set. Earlier rows
+remain append-only. Each row retains the guards used for that attempt, wall time,
+peak RSS, status, and an error message when available. A null memory bound means
+uncapped; the original author drivers always record null because they do not
+implement this guard. Peak RSS is measured independently of the address-space bound.
 
-Every row records its requested `memory_limit_bytes`, including successful runs.
-A null limit means uncapped. Original author drivers do not implement this cap,
-so their benchmark rows truthfully record null even during a locally capped
-comparison of other engines. The allocator's address-space bound is distinct from
-independently measured peak RSS. Profile-specific exclusions are snapshot metadata;
-they never create rows, overwrite failures, or erase historical observations.
-Runtime flags and environment are pinned to the cache schema by a contract test;
-changing them requires a schema bump rather than another per-row hash.
+Reviewed correctness/unsupported exclusions remain explicit snapshot policy.
+A cap-specific resource entry can block fresh work without hiding a complete set
+of cached successes. Runtime flags and allocator environment are pinned by a
+schema contract test; changing them requires a schema bump.
 
 Before any measured row is appended, all targets needing collection are built.
 Fresh collection is serial; one untimed `<binary> --help` capability preflight

@@ -16,7 +16,7 @@ from typing import Literal, NamedTuple, cast
 
 from scipy import stats
 
-from ..engines import BINARIES, TREATMENT_SPECS
+from ..engines import TREATMENT_SPECS
 from ..models import ComparisonSpec, DetailLevel
 from .store import GroupedReport, IndexedRecord, select_observations
 
@@ -352,7 +352,7 @@ def _timing_breakdowns(
     metric_estimates: dict[_MetricKey, _MetricEstimate],
 ) -> tuple[FileTimingBreakdown, ...]:
     if any(
-        not BINARIES[TREATMENT_SPECS[endpoint.treatment].binary_name].timing_summary
+        not TREATMENT_SPECS[endpoint.treatment].timing_summary
         for endpoint in (comparison.baseline, comparison.candidate)
     ):
         return ()

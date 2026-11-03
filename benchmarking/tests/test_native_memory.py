@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from benchmarking import benchmark, collection, figures, native_memory, processes
+from benchmarking import benchmark, collection, config, figures, native_memory, processes, profile
 from benchmarking.reports.store import ReportStore
 
 from .report_fixtures import make_target
@@ -38,9 +38,20 @@ def test_native_command_uses_explicit_limit_and_fixed_startup_policy() -> None:
     assert command == ["engine", "--memory-limit-bytes=10737418240", "--help"]
     assert env == {"RUST_LOG": "error", **native_memory.NATIVE_ALLOCATOR_ENV}
     assert native_memory.native_memory_command(["engine"], {}, 123)[0] == ["engine", "--memory-limit-bytes=123"]
+    assert native_memory.native_memory_command(["engine"], {}, None) == (["engine"], native_memory.NATIVE_ALLOCATOR_ENV)
 
 
-@pytest.mark.parametrize(("code", "controlled", "stop"), [(86, True, False), (87, True, True), (87, False, False)])
+def test_entrypoints_share_resource_defaults() -> None:
+    comparison = benchmark.parse_benchmark_args([])
+    figure, _ = figures.parse_args([])
+    profiling = profile.parse_profile_args(["example.egg"])
+    assert {args.timeout_sec for args in (comparison, figure, profiling)} == {config.DEFAULT_TIMEOUT_SEC}
+    assert {args.memory_limit_bytes for args in (comparison, figure, profiling)} == {config.DEFAULT_MEMORY_LIMIT_BYTES}
+
+
+@pytest.mark.parametrize(
+    ("code", "controlled", "stop"), [(86, True, False), (86, False, False), (87, True, True), (87, False, False)]
+)
 def test_native_exit_protocol_does_not_depend_on_diagnostic_text(
     tmp_path: Path, code: int, controlled: bool, stop: bool
 ) -> None:
@@ -52,11 +63,10 @@ def test_native_exit_protocol_does_not_depend_on_diagnostic_text(
     result = processes.run_command(
         [str(binary_name)], tmp_path, 5, memory_limit_bytes=native_memory.NATIVE_LIMIT_BYTES if controlled else None
     )
-    assert result.status == "failure"
+    assert result.status == ("memory-limited" if controlled and code == 86 else "failure")
     assert result.stop_collection is stop
     assert result.error is not None and result.error.exit_code == code
     assert result.error.message == "arbitrary diagnostic"
-    assert result.error.memory_limit_bytes == (native_memory.NATIVE_LIMIT_BYTES if controlled and code == 86 else None)
     assert result.timing.wall_sec is not None and result.timing.max_rss_bytes is not None
 
 
@@ -74,12 +84,11 @@ def test_native_outcome_is_retained_before_local_skip_or_invocation_stop(
         calls += 1
         return collection.ProcessObservation(
             processes.TimingResult(
-                "failure",
+                "memory-limited" if code == 86 else "failure",
                 processes.TimingRow(),
                 processes.ErrorRow(
                     "native failure",
                     exit_code=code,
-                    memory_limit_bytes=native_memory.NATIVE_LIMIT_BYTES if code == 86 else None,
                 ),
                 stop_collection=code == 87,
             ),
@@ -95,7 +104,7 @@ def test_native_outcome_is_retained_before_local_skip_or_invocation_stop(
     else:
         collection.collect_rows(store, plan, 120, Console(file=io.StringIO()))
         assert calls == store.row_count == 2
-    assert store.records[0]["error_exit_code"] == code
+    assert store.records[0]["status"] == ("memory-limited" if code == 86 else "failure")
     assert store.records[0]["memory_limit_bytes"] == native_memory.NATIVE_LIMIT_BYTES
 
 
@@ -152,9 +161,8 @@ def test_cleanup_failure_retains_attempt_before_stopping(
         collection.collect_rows(store, plan, 120, Console(file=io.StringIO()))
     assert calls == store.row_count == 1
     record = store.records[0]
-    assert record["error_exit_code"] == exit_code
     if exit_code is None:
-        assert record["status"] == "timed-out"
+        assert record["status"] == "failure"
         assert record["wall_sec"] is None and record["max_rss_bytes"] is None
     else:
         assert record["status"] == "failure"

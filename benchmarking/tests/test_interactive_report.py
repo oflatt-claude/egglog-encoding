@@ -34,8 +34,7 @@ def test_interactive_snapshot_reuses_cross_timeout_rows_and_freezes_memory_bound
             make_record(0, started_at="2026-10-27T00:00:00Z", treatment=treatment, timeout_sec=600, wall_sec=10),
             make_record(1, started_at="2026-10-27T00:00:01Z", treatment=treatment, timeout_sec=900, wall_sec=20),
         )
-    failure = make_record(2, started_at="2026-10-27T00:00:02Z", treatment="proofs", status="failure")
-    failure["error_exit_code"] = 86
+    failure = make_record(2, started_at="2026-10-27T00:00:02Z", treatment="proofs", status="memory-limited")
     write_report(path, failure)
     before = path.read_bytes()
     store = ReportStore(path).grouped_report()
@@ -61,10 +60,10 @@ def test_runtime_discovers_entire_cache_and_retargets_all_sections(tmp_path: Pat
     files = cast(list[dict[str, JsonValue]], selectors["files"])
 
     assert {endpoint["label"] for endpoint in endpoints} == {
-        "alternative · abc123 · proofs/nee · 10 GiB cap",
-        "baseline · abc123 · off/nee · 10 GiB cap",
-        "candidate · abc123 · proofs/nee · 10 GiB cap",
-        "historical · abc123 · term/nee · 10 GiB cap",
+        "alternative · abc123 · proofs/nee",
+        "baseline · abc123 · off/nee",
+        "candidate · abc123 · proofs/nee",
+        "historical · abc123 · term/nee",
     }
     assert {file["label"] for file in files} == {"one.egg", "two.egg", "three.egg"}
     assert selectors["timeouts_sec"] == [60, 120]
@@ -266,7 +265,7 @@ def test_html_embeds_exact_grouped_snapshot_initial_catalog_runtime_and_safe_dat
     )
     assert cast(str, envelope["pyodide_base_url"]) == interactive.PYODIDE_BASE_URL
     assert set(cast(dict[str, str], envelope["python_modules"])) == {
-        "benchmarks/resources.json",
+        "benchmarking/config.py",
         "benchmarking/native_memory.py",
         "benchmarking/__init__.py",
         "benchmarking/engines.py",
@@ -336,7 +335,7 @@ def test_initial_html_uses_native_provenance_file_order_and_selector_labels(tmp_
     assert endpoints[:2] == [
         {
             "id": initial_scope["baseline_endpoint_id"],
-            "label": "feedface0001 dirty · off/nee · 10 GiB cap",
+            "label": "feedface0001 dirty · off/nee",
             "target": "feedface0001",
             "git_sha": "feedface0001",
             "dirty": True,
@@ -344,7 +343,7 @@ def test_initial_html_uses_native_provenance_file_order_and_selector_labels(tmp_
         },
         {
             "id": initial_scope["candidate_endpoint_id"],
-            "label": "working-candidate · feedface0002 · proofs/nee · 10 GiB cap",
+            "label": "working-candidate · feedface0002 · proofs/nee",
             "target": "working-candidate",
             "git_sha": "feedface0002",
             "dirty": False,
@@ -546,12 +545,18 @@ def _local_module_path(root: Path, module: str) -> str | None:
     return package_path if (root / package_path).is_file() else None
 
 
-def test_cap_scoped_exclusion_survives_snapshot_and_uncapped_retarget(tmp_path: Path) -> None:
+def test_cap_scoped_exclusion_guards_fresh_work_in_each_report(tmp_path: Path) -> None:
     path = tmp_path / "profiles.jsonl"
     store = ReportStore(path)
-    for cap in (None, 10 * 1024**3):
-        for mode in ("off", "proof-testing"):
-            store.append(make_record(0, started_at="2026-10-31T00:00:00Z", treatment=mode, memory_limit_bytes=cap))
+    for mode in ("off", "proof-testing"):
+        store.append(
+            make_record(
+                0,
+                started_at="2026-10-31T00:00:00Z",
+                treatment=mode,
+                status="success" if mode == "off" else "memory-limited",
+            )
+        )
     before = path.read_bytes()
     snapshot = store.grouped_report(
         exclusions=[
@@ -576,7 +581,9 @@ def test_cap_scoped_exclusion_survives_snapshot_and_uncapped_retarget(tmp_path: 
         baseline=replace(baseline, memory_limit_bytes=None),
         candidate=replace(candidate, memory_limit_bytes=None),
     )
-    assert "excluded" not in json.dumps(runtime.apply(scope_for_comparison(uncapped))["sections"])
+    assert "excluded" not in json.dumps(
+        InteractiveRuntime(snapshot, scope_for_comparison(uncapped)).payload()["sections"]
+    )
     assert path.read_bytes() == before
 
 

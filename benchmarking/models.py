@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from .engines import BINARIES, TREATMENT_SPECS, BinaryName, Treatment
+from .engines import TREATMENT_SPECS, Treatment
 from .native_memory import NATIVE_LIMIT_BYTES
 
-Status = Literal["success", "timed-out", "failure"]
+Status = Literal["success", "timed-out", "memory-limited", "failure"]
 DisequalityEncoding = Literal["nee", "ee"]
 DetailLevel = Literal["summary", "files", "phases", "rulesets"]
 ExclusionKind = Literal["resource", "unsupported", "expected-failure"]
@@ -48,9 +48,7 @@ class FileSpec:
     display_path: str
     absolute_path: Path
     sha256: str
-    fact_directory: Path | None = None
-    fact_directory_sha256: str = ""
-    binary_inputs: tuple[tuple[BinaryName, FileSpec], ...] = ()
+    binary_inputs: tuple[tuple[str, FileSpec], ...] = ()
     exclusions: tuple[Exclusion, ...] = ()
 
     def exclusion_for(
@@ -76,7 +74,7 @@ class FileSpec:
             matched = rule
         return matched
 
-    def for_binary(self, binary_name: BinaryName) -> FileSpec:
+    def for_binary(self, binary_name: str) -> FileSpec:
         """Resolve an engine's physical representation of this logical workload."""
 
         for input_engine, file in self.binary_inputs:
@@ -88,14 +86,14 @@ class FileSpec:
 def validate_unique_file_identities(files: Sequence[FileSpec]) -> None:
     """Reject workloads that would select the same cached observations."""
 
-    by_identity: dict[tuple[str, str], FileSpec] = {}
+    by_identity: dict[str, FileSpec] = {}
     for file in files:
-        identity = (file.sha256, file.fact_directory_sha256)
+        identity = file.sha256
         previous = by_identity.get(identity)
         if previous is not None:
             raise ValueError(
                 f"benchmark files {previous.display_path!r} and {file.display_path!r} have identical "
-                "file and fact-directory hashes; select each workload only once"
+                "file hashes; select each workload only once"
             )
         by_identity[identity] = file
 
@@ -113,7 +111,7 @@ class TargetRequest:
 
 @dataclass(frozen=True)
 class BuiltBinary:
-    binary_name: BinaryName
+    binary_name: str
     sha256: str
     path: Path | None
 
@@ -125,7 +123,7 @@ class ResolvedTarget:
     binary_sha256: str
     binary_path: Path | None
     binaries: tuple[BuiltBinary, ...] = ()
-    primary_binary: BinaryName | None = None
+    primary_binary: str | None = None
 
     def binary_sha256_for(self, treatment: Treatment) -> str:
         binary_name = TREATMENT_SPECS[treatment].binary_name
@@ -168,7 +166,7 @@ class EndpointRequest:
     def __post_init__(self) -> None:
         if TREATMENT_SPECS[self.treatment].binary_name != "egglog-experimental" and self.disequality_encoding != "nee":
             raise ValueError("disequality encoding selection is only supported by egglog treatments")
-        if not BINARIES[TREATMENT_SPECS[self.treatment].binary_name].allocator_limit:
+        if not TREATMENT_SPECS[self.treatment].allocator_limit:
             object.__setattr__(self, "memory_limit_bytes", None)
         if self.memory_limit_bytes is not None and self.memory_limit_bytes < 1:
             raise ValueError("allocator memory limit must be positive")
@@ -184,18 +182,17 @@ class BenchmarkEndpoint:
     memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
 
     def __post_init__(self) -> None:
-        if not BINARIES[TREATMENT_SPECS[self.treatment].binary_name].allocator_limit:
+        if not TREATMENT_SPECS[self.treatment].allocator_limit:
             object.__setattr__(self, "memory_limit_bytes", None)
 
     @property
-    def cache_identity(self) -> tuple[str, Treatment, DisequalityEncoding, bool]:
+    def cache_identity(self) -> tuple[str, Treatment, DisequalityEncoding]:
         """Return the endpoint coordinates shared by all of its file keys."""
 
         return (
             self.target.binary_sha256_for(self.treatment),
             self.treatment,
             self.disequality_encoding,
-            self.memory_limit_bytes is not None,
         )
 
 

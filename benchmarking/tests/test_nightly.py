@@ -86,12 +86,12 @@ def test_collects_checked_and_off_once_and_renders_cached_reports(
         (label, treatment) for label in ("branch", "main") for treatment in ("off", "proof-testing")
     ]
     store = ReportStore(output / "index.jsonl")
-    assert store.row_count == 4 and {row["timeout_sec"] for row in store.records} == {120}
+    assert store.row_count == 4 and {row["timeout_sec"] for row in store.records} == {nightly.DEFAULT_TIMEOUT_SEC}
     before = store.path.read_bytes()
     monkeypatch.setattr(collection, "resolve_requests", lambda *a, **k: pytest.fail("render must not resolve/build"))
     monkeypatch.setattr(collection, "collect_rows", lambda *a, **k: pytest.fail("render must not collect"))
     nightly._render(
-        argparse.Namespace(output_dir=output, rounds=1, timeout_sec=120),
+        argparse.Namespace(output_dir=output, rounds=1, timeout_sec=120, memory_limit_bytes=10 * 1024**3),
         store.grouped_report(),
         nightly_case["targets"],
         (nightly_case["file"],),
@@ -180,7 +180,7 @@ def test_native_control_failure_is_retained_before_stopping_all_collection(
     assert nightly_case["builds"] == ["branch"]
     assert nightly_case["runs"] == [("branch", "off")]
     rows = ReportStore(output / "index.jsonl").records
-    assert len(rows) == 1 and rows[0]["error_exit_code"] == 87
+    assert len(rows) == 1 and rows[0]["status"] == "failure"
     assert "failed observation was retained" in (output / "status.txt").read_text()
     assert (output / "index.html").is_file()
 

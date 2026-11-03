@@ -107,7 +107,6 @@ def test_strict_metadata_is_identity_bound_and_can_be_cleared(tmp_path: Path) ->
     item = corpus["workloads"][0]
     outcome = {
         "file_sha256": item["sha256"],
-        "fact_directory_sha256": "",
         "binary_sha256": "sha256:engine",
         "timeout_sec": 300,
         "disequality_encoding": "nee",
@@ -145,7 +144,6 @@ def test_legacy_resource_outcomes_do_not_veto_checked_results(tmp_path: Path, re
     item = corpus_fixture(tmp_path)["workloads"][0]
     outcome = {
         "file_sha256": item["sha256"],
-        "fact_directory_sha256": "",
         "binary_sha256": "sha256:engine",
         "timeout_sec": 300,
         "disequality_encoding": "nee",

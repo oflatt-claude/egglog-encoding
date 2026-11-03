@@ -1,9 +1,6 @@
 # Syrupy's Amber serializer indents blank snapshot lines by design.
 benchmarking/tests/__snapshots__/*.ambr -whitespace
 
-# Imported PLDI artifact facts are data inputs, not hand-reviewed source.
-benchmarks/data/pointer-analysis-initdb/*.csv linguist-generated=true
-
 # Prepared compiler inputs are data; source adaptations retain upstream whitespace.
 benchmarks/corpus/**/*.egg linguist-generated=true -whitespace
 # Frozen Slotted programs/specs are generated; review their source and manifests.

@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
-from ..engines import TREATMENT_SPECS, BinaryName
+from ..engines import TREATMENT_SPECS
 from ..models import (
     BenchmarkEndpoint,
     BuiltBinary,
@@ -78,12 +78,10 @@ class _FileSnapshot(TypedDict):
     display_path: str
     absolute_path: str
     sha256: str
-    fact_directory: str | None
-    fact_directory_sha256: str
 
 
 class _BinaryInput(_FileSnapshot):
-    binary_name: BinaryName
+    binary_name: str
 
 
 class _ExclusionSnapshot(TypedDict):
@@ -129,6 +127,7 @@ class InteractiveRuntime:
         store: GroupedReport,
         initial_scope: InitialScope,
     ) -> None:
+        self._memory_limit_bytes = initial_scope.get("memory_limit_bytes", NATIVE_LIMIT_BYTES)
         self._store = store
         (
             self._endpoint_choices,
@@ -136,17 +135,6 @@ class InteractiveRuntime:
             self._timeouts,
             self._max_rounds,
         ) = _cache_universe(store.records)
-        memory_budget = initial_scope.get("memory_limit_bytes") or NATIVE_LIMIT_BYTES
-        self._endpoint_choices = tuple(
-            replace(
-                choice,
-                endpoint=replace(
-                    choice.endpoint,
-                    memory_limit_bytes=memory_budget if choice.endpoint.memory_limit_bytes is not None else None,
-                ),
-            )
-            for choice in self._endpoint_choices
-        )
         # Fully excluded endpoints have no observation row. Retain the invocation's
         # metadata for them, while existing identities keep latest cached provenance.
         endpoint_choices = {choice.endpoint_id: choice for choice in self._endpoint_choices}
@@ -170,8 +158,6 @@ class InteractiveRuntime:
                 logical["display_path"],
                 Path(logical["absolute_path"]),
                 logical["sha256"],
-                None if logical["fact_directory"] is None else Path(logical["fact_directory"]),
-                logical["fact_directory_sha256"],
             )
             file_id = _file_id(file)
             if file_id in choices:
@@ -183,8 +169,6 @@ class InteractiveRuntime:
                         item["display_path"],
                         Path(item["absolute_path"]),
                         item["sha256"],
-                        None if item["fact_directory"] is None else Path(item["fact_directory"]),
-                        item["fact_directory_sha256"],
                     ),
                 )
                 for item in logical["binary_inputs"]
@@ -284,8 +268,8 @@ class InteractiveRuntime:
     def _comparison(self, scope: InteractiveScope) -> ComparisonSpec:
         files = tuple(self._file_by_id[file_id] for file_id in scope.file_ids)
         return ComparisonSpec(
-            self._endpoint_by_id[scope.baseline_endpoint_id],
-            self._endpoint_by_id[scope.candidate_endpoint_id],
+            replace(self._endpoint_by_id[scope.baseline_endpoint_id], memory_limit_bytes=self._memory_limit_bytes),
+            replace(self._endpoint_by_id[scope.candidate_endpoint_id], memory_limit_bytes=self._memory_limit_bytes),
             files,
             scope.rounds,
             scope.timeout_sec,
@@ -410,8 +394,6 @@ def scope_for_comparison(comparison: ComparisonSpec) -> InitialScope:
                 "display_path": file.display_path,
                 "absolute_path": str(file.absolute_path),
                 "sha256": file.sha256,
-                "fact_directory": None if file.fact_directory is None else str(file.fact_directory),
-                "fact_directory_sha256": file.fact_directory_sha256,
                 "exclusions": [
                     {
                         "memory_limit_bytes": rule.memory_limit_bytes,
@@ -429,8 +411,6 @@ def scope_for_comparison(comparison: ComparisonSpec) -> InitialScope:
                         "display_path": physical.display_path,
                         "absolute_path": str(physical.absolute_path),
                         "sha256": physical.sha256,
-                        "fact_directory": None if physical.fact_directory is None else str(physical.fact_directory),
-                        "fact_directory_sha256": physical.fact_directory_sha256,
                     }
                     for binary_name, physical in file.binary_inputs
                 ],
@@ -520,9 +500,7 @@ def _cache_universe(
             (_FileChoice(file_id, _file_from_record(record)) for file_id, (_order, record) in file_rows.items()),
             key=lambda choice: (
                 choice.file.display_path,
-                str(choice.file.fact_directory or ""),
                 choice.file.sha256,
-                choice.file.fact_directory_sha256,
             ),
         )
     )
@@ -551,13 +529,10 @@ def _endpoint_from_record(record: ReportRecord | _EndpointSource) -> BenchmarkEn
 
 
 def _file_from_record(record: ReportRecord) -> FileSpec:
-    fact_path = record["fact_directory_path"]
     return FileSpec(
         record["file_path"],
         Path(record["file_path"]),
         record["file_sha256"],
-        None if fact_path is None else Path(fact_path),
-        record["fact_directory_sha256"],
     )
 
 
@@ -571,7 +546,6 @@ def _record_endpoint_id(record: ReportRecord) -> str:
         record["binary_sha256"],
         record["treatment"],
         record["disequality_encoding"],
-        record["memory_limit_bytes"] is not None,
     )
 
 
@@ -586,18 +560,15 @@ def _endpoint_label(endpoint: BenchmarkEndpoint) -> str:
         if TREATMENT_SPECS[endpoint.treatment].binary_name == "egglog-experimental"
         else ""
     )
-    profile = (
-        "uncapped" if endpoint.memory_limit_bytes is None else f"{endpoint.memory_limit_bytes / 1024**3:g} GiB cap"
-    )
-    return f"{target_and_git} · {endpoint.treatment}{encoding} · {profile}"
+    return f"{target_and_git} · {endpoint.treatment}{encoding}"
 
 
 def _file_id(file: FileSpec) -> str:
-    return report_id("file", file.sha256, file.fact_directory_sha256)
+    return report_id("file", file.sha256)
 
 
 def _record_file_id(record: ReportRecord) -> str:
-    return report_id("file", record["file_sha256"], record["fact_directory_sha256"])
+    return report_id("file", record["file_sha256"])
 
 
 def _cell_payload(cell: ReportCell) -> JsonValue:

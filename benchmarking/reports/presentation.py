@@ -188,7 +188,7 @@ def _comparison_caption(
     comparison: ComparisonSpec,
     file_labels: dict[FileSpec, str],
 ) -> str:
-    selected_files = ", ".join(_file_with_facts(file, file_labels[file]) for file in comparison.files)
+    selected_files = ", ".join(file_labels[file] for file in comparison.files)
     profiles = [
         "uncapped" if endpoint.memory_limit_bytes is None else f"{endpoint.memory_limit_bytes / 1024**3:g} GiB cap"
         for endpoint in (comparison.baseline, comparison.candidate)
@@ -198,12 +198,6 @@ def _comparison_caption(
         f"{len(comparison.files)} file(s): {selected_files} · {comparison.rounds} round(s) per endpoint/file · "
         f"{comparison.timeout_sec} s timeout per run · Allocator: {allocator} · Report: {report_path}"
     )
-
-
-def _file_with_facts(file: FileSpec, label: str) -> str:
-    if file.fact_directory is None:
-        return label
-    return f"{label} (facts: {file.fact_directory})"
 
 
 def _summary_section(
@@ -326,7 +320,6 @@ def _files_section(
                             "files",
                             metric,
                             comparison.files[row.file_order].sha256,
-                            comparison.files[row.file_order].fact_directory_sha256,
                         ),
                         file_labels[comparison.files[row.file_order]],
                         _estimate_cell(row.baseline, rss=metric == "max_rss_bytes"),
@@ -367,7 +360,7 @@ def _phases_section(
             label = f"Suite total ({file_count} {'file' if file_count == 1 else 'files'})"
         else:
             file = comparison.files[row.file_order]
-            row_id = report_id("row", "phases", file.sha256, file.fact_directory_sha256)
+            row_id = report_id("row", "phases", file.sha256)
             label = file_labels[file]
         deltas = row.mechanism_deltas
         wall_delta = row.wall_delta_ns
@@ -478,7 +471,7 @@ def _rulesets_section(
             status = f"Status: {breakdown.issue}" if breakdown is not None else "Timing unavailable."
             blocks.append(
                 ReportMessage(
-                    report_id("message", "rulesets", file.sha256, file.fact_directory_sha256),
+                    report_id("message", "rulesets", file.sha256),
                     title,
                     status,
                 )
@@ -584,7 +577,7 @@ def _rulesets_section(
             )
         blocks.append(
             _table(
-                report_id("table", "rulesets", file.sha256, file.fact_directory_sha256),
+                report_id("table", "rulesets", file.sha256),
                 title,
                 ("driver", "delta", "share", "important_phases"),
                 ("Driver", "Δ", "Wall share", "Important phase changes"),
@@ -621,7 +614,6 @@ def _ruleset_report_row(
             "row",
             "rulesets",
             file.sha256,
-            file.fact_directory_sha256,
             kind,
             mechanism,
             name,
@@ -653,7 +645,7 @@ def _important_phase_changes(phases: PhaseValues) -> str:
 
 
 def report_file_labels(files: Sequence[FileSpec]) -> dict[FileSpec, str]:
-    """Return shortest unambiguous labels, including fact directories."""
+    """Distinguish paths and historical contents with concise labels."""
 
     labels = {file: Path(file.display_path).name for file in files}
     by_basename: dict[str, list[FileSpec]] = {}
@@ -680,15 +672,8 @@ def report_file_labels(files: Sequence[FileSpec]) -> dict[FileSpec, str]:
     for label, group in by_label.items():
         if len(group) == 1:
             continue
-        fact_labels = {
-            file: file.fact_directory.name if file.fact_directory is not None else "no-facts" for file in group
-        }
-        if len(set(fact_labels.values())) != len(group):
-            fact_labels = {
-                file: str(file.fact_directory) if file.fact_directory is not None else "no-facts" for file in group
-            }
         for file in group:
-            labels[file] = f"{label}:{fact_labels[file]}"
+            labels[file] = f"{label}:{file.sha256.removeprefix('sha256:')[:8]}"
     return labels
 
 
