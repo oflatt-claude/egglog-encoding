@@ -12,10 +12,10 @@ const vega = await import(toolkit.resolve('vega'));
 const {compile} = await import(toolkit.resolve('vega-lite'));
 const {figures} = JSON.parse(await readFile(new URL('catalog.json', import.meta.url), 'utf8'));
 const input = (id, treatment, changes={}) => ({logical_id:id, label:id, family:'eggcc', file_sha256:id,
-  fact_directory_sha256:'', binary_sha256:'current', execution_settings_sha256:'settings', memory_limit_bytes:null, treatment, exclusion:null, validation_failures:{}, ...changes});
+  fact_directory_sha256:'', binary_sha256:'current', allocator_profile:'uncapped', memory_limit_bytes:null, treatment, exclusion:null, validation_failures:{}, ...changes});
 function group(id, treatment, values, changes={}) {
   const key={binary_sha256:'current',file_sha256:id,fact_directory_sha256:'',treatment,
-    disequality_encoding:'nee', memory_limit_bytes:null, execution_settings_sha256:'settings'};
+    disequality_encoding:'nee', memory_limit_bytes:null, allocator_profile:'uncapped'};
   return {key,labels:['figures'],samples:values.map((value,index)=>({...key,row_index:index,
     started_at:new Date(Date.UTC(2026,9,1,0,0,index)).toISOString(),status:'success',timeout_sec:300,
     wall_sec:value,max_rss_bytes:value===null?null:value*1048576,...changes}))};
@@ -33,7 +33,7 @@ async function evaluate(name, inputs, groups, rounds=2) {
   const logger=vega.logger(vega.Warn,undefined,(...args)=>warnings.push(args));
   const runtime=compile(spec,{logger}).spec;
   const loader=vega.loader();
-  loader.load=async()=>JSON.stringify({grouped_schema_version:3,report_schema_version:6,groups});
+  loader.load=async()=>JSON.stringify({grouped_schema_version:4,report_schema_version:7,groups});
   const view=new vega.View(vega.parse(runtime),{renderer:'none',loader,logger});
   try {
     await view.runAsync();
@@ -655,8 +655,8 @@ test('CDF empty, zero, single-run and failed samples retain finite reference-con
 
 test('bound cache settings select the correct group when capped and uncapped histories coexist',async()=>{
   const old=group('a','slotted',[99,101]);
-  old.key.execution_settings_sha256='old-capped';
-  old.key.memory_limit_bytes=10*1024**3;
+  old.key.allocator_profile='capped';
+  old.samples.forEach(row=>row.memory_limit_bytes=10*1024**3);
   const current=group('a','slotted',[1,3]);
   current.samples.forEach((row,i)=>row.row_index=7+i);
   const result=await evaluate('slotted-runtime',[

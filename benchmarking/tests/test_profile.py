@@ -262,11 +262,11 @@ def test_profile_egg_treatment_uses_egg_binary_for_execution_identity_and_summar
         row=models.TargetRow(".", str(ROOT), "HEAD", "abc123", False),
         binary_sha256="sha256:" + "a" * 64,
         binary_path=egglog_binary,
-        engine_binaries=(
-            models.EngineBinary("egglog", "sha256:" + "a" * 64, egglog_binary),
-            models.EngineBinary("egg", egg_hash, egg_binary),
+        binaries=(
+            models.BuiltBinary("egglog-experimental", "sha256:" + "a" * 64, egglog_binary),
+            models.BuiltBinary("egg-math-benchmark", egg_hash, egg_binary),
         ),
-        primary_engine="egglog",
+        primary_binary="egglog-experimental",
     )
     recorded: dict[str, Any] = {}
     summarized: list[Path] = []
@@ -327,7 +327,7 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
     ) -> models.ResolvedTarget:
         assert target_request == request
         assert target_row == row
-        assert engines == ("egglog",)
+        assert engines == ("egglog-experimental",)
         build_profiles.append(build_profile)
         return target
 
@@ -384,8 +384,6 @@ def test_build_target_uses_profiling_profile(monkeypatch: pytest.MonkeyPatch, tm
             "cargo",
             "build",
             "--locked",
-            "--profile",
-            "profiling",
             "-p",
             "egglog-experimental",
             "--no-default-features",
@@ -393,6 +391,8 @@ def test_build_target_uses_profiling_profile(monkeypatch: pytest.MonkeyPatch, tm
             "bin",
             "--bin",
             "egglog-experimental",
+            "--profile",
+            "profiling",
         ]
     ]
     assert binary_path == binary

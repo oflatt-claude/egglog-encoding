@@ -18,12 +18,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
-from ..engines import TREATMENT_SPECS, Engine
+from ..engines import TREATMENT_SPECS, BinaryName
 from ..models import (
     BenchmarkEndpoint,
+    BuiltBinary,
     ComparisonSpec,
     DisequalityEncoding,
-    EngineBinary,
     Exclusion,
     ExclusionKind,
     FileSpec,
@@ -32,6 +32,7 @@ from ..models import (
     TargetRow,
     Treatment,
 )
+from ..native_memory import NATIVE_LIMIT_BYTES
 from .catalog import CellTone, ReportCatalog, ReportCell, ReportMessage, report_id
 from .presentation import build_report_catalog, report_file_labels
 from .store import GroupedReport, ReportRecord, parse_grouped_report
@@ -81,8 +82,8 @@ class _FileSnapshot(TypedDict):
     fact_directory_sha256: str
 
 
-class _EngineInput(_FileSnapshot):
-    engine: Engine
+class _BinaryInput(_FileSnapshot):
+    binary_name: BinaryName
 
 
 class _ExclusionSnapshot(TypedDict):
@@ -95,7 +96,7 @@ class _ExclusionSnapshot(TypedDict):
 
 
 class _InitialFile(_FileSnapshot):
-    engine_inputs: list[_EngineInput]
+    binary_inputs: list[_BinaryInput]
     exclusions: list[_ExclusionSnapshot]
 
 
@@ -116,6 +117,7 @@ class InitialScope(_ScopeRequest):
     """Generated initial selection, including logical-to-physical input bindings."""
 
     files: list[_InitialFile]
+    memory_limit_bytes: NotRequired[int | None]
     endpoints: NotRequired[list[_EndpointSource]]
 
 
@@ -134,6 +136,17 @@ class InteractiveRuntime:
             self._timeouts,
             self._max_rounds,
         ) = _cache_universe(store.records)
+        memory_budget = initial_scope.get("memory_limit_bytes") or NATIVE_LIMIT_BYTES
+        self._endpoint_choices = tuple(
+            replace(
+                choice,
+                endpoint=replace(
+                    choice.endpoint,
+                    memory_limit_bytes=memory_budget if choice.endpoint.memory_limit_bytes is not None else None,
+                ),
+            )
+            for choice in self._endpoint_choices
+        )
         # Fully excluded endpoints have no observation row. Retain the invocation's
         # metadata for them, while existing identities keep latest cached provenance.
         endpoint_choices = {choice.endpoint_id: choice for choice in self._endpoint_choices}
@@ -165,7 +178,7 @@ class InteractiveRuntime:
                 file = choices[file_id].file
             inputs = tuple(
                 (
-                    item["engine"],
+                    item["binary_name"],
                     FileSpec(
                         item["display_path"],
                         Path(item["absolute_path"]),
@@ -174,13 +187,13 @@ class InteractiveRuntime:
                         item["fact_directory_sha256"],
                     ),
                 )
-                for item in logical["engine_inputs"]
+                for item in logical["binary_inputs"]
             )
             choices[file_id] = _FileChoice(
                 file_id,
                 replace(
                     file,
-                    engine_inputs=inputs,
+                    binary_inputs=inputs,
                     exclusions=tuple(
                         Exclusion(
                             rule["kind"],
@@ -363,7 +376,15 @@ class InteractiveRuntime:
 def scope_for_comparison(comparison: ComparisonSpec) -> InitialScope:
     """Serialize one native comparison as the browser runtime's initial scope."""
 
+    caps = {
+        endpoint.memory_limit_bytes
+        for endpoint in (comparison.baseline, comparison.candidate)
+        if endpoint.memory_limit_bytes is not None
+    }
+    if len(caps) > 1:
+        raise ValueError("interactive reports require one shared capped memory budget")
     return {
+        "memory_limit_bytes": next(iter(caps), None),
         "baseline_endpoint_id": _endpoint_id(comparison.baseline),
         "candidate_endpoint_id": _endpoint_id(comparison.candidate),
         "file_ids": [_file_id(file) for file in comparison.files],
@@ -402,16 +423,16 @@ def scope_for_comparison(comparison: ComparisonSpec) -> InitialScope:
                     }
                     for rule in file.exclusions
                 ],
-                "engine_inputs": [
+                "binary_inputs": [
                     {
-                        "engine": engine,
+                        "binary_name": binary_name,
                         "display_path": physical.display_path,
                         "absolute_path": str(physical.absolute_path),
                         "sha256": physical.sha256,
                         "fact_directory": None if physical.fact_directory is None else str(physical.fact_directory),
                         "fact_directory_sha256": physical.fact_directory_sha256,
                     }
-                    for engine, physical in file.engine_inputs
+                    for binary_name, physical in file.binary_inputs
                 ],
             }
             for file in comparison.files
@@ -517,14 +538,14 @@ def _endpoint_from_record(record: ReportRecord | _EndpointSource) -> BenchmarkEn
         record["target_is_dirty"],
         record["target_label"],
     )
-    engine = TREATMENT_SPECS[record["treatment"]].engine
+    binary_name = TREATMENT_SPECS[record["treatment"]].binary_name
     target = ResolvedTarget(
         TargetRequest(row.label or row.source, row.source, row.label),
         row,
         record["binary_sha256"],
         None,
-        engine_binaries=(EngineBinary(engine, record["binary_sha256"], None),),
-        primary_engine=engine,
+        binaries=(BuiltBinary(binary_name, record["binary_sha256"], None),),
+        primary_binary=binary_name,
     )
     return BenchmarkEndpoint(target, record["treatment"], record["disequality_encoding"], record["memory_limit_bytes"])
 
@@ -550,7 +571,7 @@ def _record_endpoint_id(record: ReportRecord) -> str:
         record["binary_sha256"],
         record["treatment"],
         record["disequality_encoding"],
-        record["memory_limit_bytes"],
+        record["memory_limit_bytes"] is not None,
     )
 
 
@@ -560,7 +581,11 @@ def _endpoint_label(endpoint: BenchmarkEndpoint) -> str:
     target = endpoint.target.display_label
     git = f"{short_git_sha}{dirty}"
     target_and_git = git if target == short_git_sha else f"{target} · {git}"
-    encoding = f"/{endpoint.disequality_encoding}" if TREATMENT_SPECS[endpoint.treatment].engine == "egglog" else ""
+    encoding = (
+        f"/{endpoint.disequality_encoding}"
+        if TREATMENT_SPECS[endpoint.treatment].binary_name == "egglog-experimental"
+        else ""
+    )
     profile = (
         "uncapped" if endpoint.memory_limit_bytes is None else f"{endpoint.memory_limit_bytes / 1024**3:g} GiB cap"
     )

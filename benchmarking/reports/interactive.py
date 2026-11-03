@@ -35,7 +35,8 @@ class EvalLiveModule(Protocol):
     def js(self) -> str: ...
 
 
-_PYTHON_MODULES = (
+_RUNTIME_FILES = (
+    "benchmarks/resources.json",
     "benchmarking/native_memory.py",
     "benchmarking/__init__.py",
     "benchmarking/engines.py",
@@ -158,7 +159,7 @@ def _interactive_page(
 
 def _python_module_sources() -> dict[str, str]:
     root = Path(__file__).resolve().parents[2]
-    return {name: (root / name).read_text(encoding="utf-8") for name in _PYTHON_MODULES}
+    return {name: (root / name).read_text(encoding="utf-8") for name in _RUNTIME_FILES}
 
 
 def _asset_path(name: str) -> Path:

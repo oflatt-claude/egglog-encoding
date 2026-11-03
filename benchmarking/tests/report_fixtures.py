@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from benchmarking import models
-from benchmarking.engines import TREATMENT_SPECS, execution_settings_sha256
+from benchmarking.engines import BINARIES, TREATMENT_SPECS
 from benchmarking.native_memory import NATIVE_LIMIT_BYTES
 from benchmarking.reports.store import (
     REPORT_SCHEMA_VERSION,
@@ -38,7 +38,7 @@ def make_record(
 ) -> ReportRecord:
     if status == "success" and timing_summary is None:
         timing_summary = make_timing_summary()
-    if not TREATMENT_SPECS[treatment].allocator_limit:
+    if not BINARIES[TREATMENT_SPECS[treatment].binary_name].allocator_limit:
         memory_limit_bytes = None
     return {
         "report_schema_version": REPORT_SCHEMA_VERSION,
@@ -59,9 +59,6 @@ def make_record(
         "disequality_encoding": disequality_encoding,
         "timeout_sec": timeout_sec,
         "memory_limit_bytes": memory_limit_bytes,
-        "execution_settings_sha256": execution_settings_sha256(
-            treatment, file_sha256, disequality_encoding, memory_limit_bytes
-        ),
         "wall_sec": None if status == "timed-out" else wall_sec,
         "max_rss_bytes": None if status == "timed-out" else max_rss_bytes,
         "error_exit_code": None,

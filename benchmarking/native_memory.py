@@ -7,9 +7,14 @@ mimalloc can reserve memory before main, too early for CLI parsing or option set
 
 from __future__ import annotations
 
+import argparse
+import json
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
-NATIVE_LIMIT_BYTES = 10 * 1024**3
+NATIVE_LIMIT_BYTES: int = json.loads((Path(__file__).resolve().parents[1] / "benchmarks/resources.json").read_text())[
+    "memory_limit_bytes"
+]
 NATIVE_ALLOCATION_EXIT = 86
 NATIVE_SETUP_EXIT = 87
 NATIVE_ALLOCATOR_ENV = {
@@ -18,6 +23,34 @@ NATIVE_ALLOCATOR_ENV = {
     "MIMALLOC_RESERVE_OS_MEMORY": "0",
     "MIMALLOC_RESERVE_HUGE_OS_PAGES": "0",
 }
+
+
+def add_memory_limit_options(parser: argparse.ArgumentParser, *, default: int | None) -> None:
+    """Keep explicit bounds and the capped/uncapped choice consistent across CLIs."""
+
+    def positive_bytes(value: str) -> int:
+        limit = int(value)
+        if limit < 1:
+            raise argparse.ArgumentTypeError("memory limit must be positive")
+        return limit
+
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--memory-limit",
+        action="store_const",
+        const=NATIVE_LIMIT_BYTES,
+        dest="memory_limit_bytes",
+        help=f"apply the configured local allocator cap ({NATIVE_LIMIT_BYTES} bytes)",
+    )
+    group.add_argument(
+        "--memory-limit-bytes",
+        type=positive_bytes,
+        dest="memory_limit_bytes",
+        metavar="BYTES",
+        help="apply a custom local allocator cap",
+    )
+    group.add_argument("--no-memory-limit", action="store_const", const=None, dest="memory_limit_bytes")
+    parser.set_defaults(memory_limit_bytes=default)
 
 
 def native_memory_command(

@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 
 from benchmarking.models import Status
+from benchmarking.native_memory import NATIVE_LIMIT_BYTES
 from benchmarking.reports.store import (
     CacheKey,
     ReportRecord,
@@ -43,43 +44,69 @@ def test_timeout_selection_preserves_success_and_failure_provenance(
     before = path.read_bytes()
     store = ReportStore(path)
     key = CacheKey("sha256:bin", "sha256:file", "off")
-    selected = store.latest_records(key, 1, timeout)
+    selected = store.latest_records(key, 1, timeout, NATIVE_LIMIT_BYTES)
     assert bool(selected) is expected
-    assert [r.row_index for r in store.grouped_report().latest_records(key, 1, timeout)] == [
+    assert [r.row_index for r in store.grouped_report().latest_records(key, 1, timeout, NATIVE_LIMIT_BYTES)] == [
         r.row_index for r in selected
     ]
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize("status", ["success", "failure", "timed-out"])
-def test_allocator_profiles_never_share_observations(tmp_path: Path, status: Status) -> None:
-    path = tmp_path / "report.jsonl"
-    for i, cap in enumerate((None, 8 * 1024**3, 10 * 1024**3)):
-        record = make_record(i, started_at=f"2026-10-27T00:00:0{i}Z", status=status, memory_limit_bytes=cap)
-        if status == "failure":
-            record["error_exit_code"] = 86
-        ReportStore(path).append(record)
-    store = ReportStore(path)
-    for i, cap in enumerate((None, 8 * 1024**3, 10 * 1024**3)):
-        key = CacheKey("sha256:bin", "sha256:file", "off", memory_limit_bytes=cap)
-        assert [row.row_index for row in store.latest_records(key, 3, 120)] == [i]
-        assert [r.row_index for r in store.grouped_report().latest_records(key, 3, 120)] == [i]
-
-
-@pytest.mark.parametrize("setting", ["flags", "environment"])
-def test_changed_execution_settings_invalidate_old_observations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str
+@pytest.mark.parametrize(
+    ("status", "old_cap", "cap", "exit_code", "expected"),
+    [
+        ("success", None, None, None, True),
+        ("success", None, 10, None, False),
+        ("success", 8, None, None, False),
+        ("success", 8, 10, None, True),
+        ("success", 10, 8, None, False),
+        ("failure", 8, 8, 86, True),
+        ("failure", 8, 10, 86, False),
+        ("failure", 10, 8, 86, True),
+        ("failure", 8, 10, 1, True),
+        ("timed-out", 8, 10, None, True),
+    ],
+)
+def test_memory_budgets_reuse_successes_and_retry_only_repaired_failures(
+    tmp_path: Path, status: Status, old_cap: int | None, cap: int | None, exit_code: int | None, expected: bool
 ) -> None:
-    from benchmarking.engines import PROCESS_ENV, TREATMENT_SPECS, TreatmentSpec
-
+    record = make_record(0, started_at="2026-10-27T00:00:00Z", status=status, memory_limit_bytes=old_cap)
+    record["error_exit_code"] = exit_code
+    record["max_rss_bytes"] = 1  # RSS alone cannot establish that a tighter VM cap would pass.
     path = tmp_path / "report.jsonl"
-    write_report(path, make_record(0, started_at="2026-10-27T00:00:00Z"))
-    if setting == "flags":
-        monkeypatch.setitem(TREATMENT_SPECS, "off", TreatmentSpec("egglog", ("--changed-flag",)))
-    else:
-        monkeypatch.setitem(PROCESS_ENV, "RUST_LOG", "info")
-    key = CacheKey("sha256:bin", "sha256:file", "off")
-    assert not ReportStore(path).latest_records(key, 1, 120)
+    write_report(path, record)
+    store = ReportStore(path)
+    key = CacheKey("sha256:bin", "sha256:file", "off", allocator_profile="uncapped" if cap is None else "capped")
+    selected = store.latest_records(key, 1, 120, cap)
+    assert bool(selected) is expected
+    assert [r.row_index for r in store.grouped_report().latest_records(key, 1, 120, cap)] == [
+        r.row_index for r in selected
+    ]
+
+
+def test_runtime_contract_changes_require_a_report_schema_bump() -> None:
+    import hashlib
+    from dataclasses import asdict
+
+    from benchmarking import engines, native_memory
+    from benchmarking.reports.store import REPORT_SCHEMA_VERSION
+
+    contract = {
+        "binaries": {
+            name: [spec.input_suffix, spec.timing_summary, spec.allocator_limit]
+            for name, spec in engines.BINARIES.items()
+        },
+        "treatments": {name: asdict(spec) for name, spec in engines.TREATMENT_SPECS.items()},
+        "egglog_flags": engines.EGGLOG_FLAGS,
+        "process_environment": engines.PROCESS_ENV,
+        "allocator_environment": native_memory.NATIVE_ALLOCATOR_ENV,
+        "parameter_arguments": engines.NATIVE_PARAMETER_ARGUMENTS,
+        "math_arguments": engines.MATH_WORKLOAD_ARGUMENTS,
+    }
+    digest = hashlib.sha256(json.dumps(contract, sort_keys=True).encode()).hexdigest()
+    assert (REPORT_SCHEMA_VERSION, digest) == (7, "0dd28bf623e112e841f2911fab7ef144b07b00ce3e535503cdf4616ec2ee816f"), (
+        "Bump the report schema version and update this contract digest"
+    )
 
 
 def test_raised_timeout_does_not_retry_control_failure(tmp_path: Path) -> None:
@@ -87,7 +114,7 @@ def test_raised_timeout_does_not_retry_control_failure(tmp_path: Path) -> None:
     record["error_message"] = "timed out; process-group cleanup failed: denied"
     store = ReportStore(tmp_path / "report.jsonl")
     store.append(record)
-    assert len(store.latest_records(CacheKey("sha256:bin", "sha256:file", "off"), 1, 300)) == 1
+    assert len(store.latest_records(CacheKey("sha256:bin", "sha256:file", "off"), 1, 300, NATIVE_LIMIT_BYTES)) == 1
 
 
 def test_missing_report_is_an_empty_store_without_creating_files(tmp_path: Path) -> None:
@@ -133,8 +160,8 @@ def test_label_pointers_select_the_latest_binary_for_each_engine(tmp_path: Path)
         ),
     )
     store = ReportStore(report)
-    egglog = store.find_label_pointer("current", "egglog")
-    egg = store.find_label_pointer("current", "egg")
+    egglog = store.find_label_pointer("current", "egglog-experimental")
+    egg = store.find_label_pointer("current", "egg-math-benchmark")
     latest = store.find_label_pointer("current")
 
     assert egglog is not None and egglog.binary_sha256 == "sha256:egglog"
@@ -150,10 +177,10 @@ def test_append_indexes_the_exact_record_it_persists(tmp_path: Path) -> None:
 
     store.append(record)
     persisted = parse_report_record(report.read_bytes())
-    current = store.latest_records(key, 1, 120)[0].record
+    current = store.latest_records(key, 1, 120, NATIVE_LIMIT_BYTES)[0].record
     reopened = ReportStore(report)
 
-    assert current == persisted == reopened.latest_records(key, 1, 120)[0].record
+    assert current == persisted == reopened.latest_records(key, 1, 120, NATIVE_LIMIT_BYTES)[0].record
     assert store.records == reopened.records == (persisted,)
     assert current["wall_sec"] == 2.5
 
@@ -273,7 +300,11 @@ def test_bulk_status_selection_uses_all_cache_dimensions_and_jsonl_tie_order(tmp
         fact_directory_sha256="sha256:other-facts",
     )
 
-    selected = ReportStore(report).selected_statuses_for_keys((exact, other_facts), 2, 120)
+    store = ReportStore(report)
+    selected = {
+        key: tuple(row.record["status"] for row in store.latest_records(key, 2, 120, NATIVE_LIMIT_BYTES))
+        for key in (exact, other_facts)
+    }
 
     assert selected[exact] == ("timed-out", "success")
     assert selected[other_facts] == ("success",)

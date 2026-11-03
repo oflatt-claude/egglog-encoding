@@ -15,7 +15,7 @@ from rich.console import Console
 
 import bench
 from benchmarking import figures
-from benchmarking.models import EngineBinary, Exclusion, FileSpec
+from benchmarking.models import BuiltBinary, Exclusion, FileSpec
 from benchmarking.reports.grouped import grouped_report_path, write_grouped_report
 from benchmarking.reports.store import ReportStore
 
@@ -313,14 +313,14 @@ def test_bindings_select_exact_binaries_physical_inputs_and_resource_bounds(
         "example.egg",
         tmp_path / "example.egg",
         "logical",
-        engine_inputs=(("egg-de", native),),
+        binary_inputs=(("egg-de", native),),
         exclusions=(
             # This original driver is always uncapped, even in a capped figure.
             Exclusion("resource", "cap-only native limit", "probe", ("egg-de",), memory_limit_bytes=10737418240),
             *((Exclusion("resource", "recorded limit", "probe", ("term",)),) if exclude_term else ()),
         ),
     )
-    target = replace(make_target(target_label="figures"), engine_binaries=(EngineBinary("egg-de", "native-bin", None),))
+    target = replace(make_target(target_label="figures"), binaries=(BuiltBinary("egg-de", "native-bin", None),))
     report = tmp_path / "report.jsonl"
     records = [
         make_record(i, memory_limit_bytes=requested_cap, started_at=f"2026-10-01T00:00:0{i}Z", file_sha256="logical")
@@ -451,16 +451,13 @@ def test_bound_ids_share_resource_selection_without_rewriting_rows(
     for row, cap in zip(rows[-2:], (8, 16), strict=True):
         row["error_exit_code"] = 86
         row["memory_limit_bytes"] = cap * 1024**3
-        row["execution_settings_sha256"] = figures.CacheKey(
-            row["binary_sha256"], row["file_sha256"], row["treatment"], memory_limit_bytes=cap * 1024**3
-        ).execution_settings_sha256
     for row in rows:
         row["target_label"] = "figures"
     write_report(report, *rows)
     original = report.read_bytes()
     grouped = ReportStore(report).grouped_report()
     write_grouped_report(grouped, grouped_report_path(report))
-    assert len(grouped.data["groups"]) == 3
+    assert len(grouped.data["groups"]) == 2
     assert sum(len(g["samples"]) for g in grouped.data["groups"]) == 6
 
     bindings = []

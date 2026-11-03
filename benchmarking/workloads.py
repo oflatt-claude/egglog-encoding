@@ -9,15 +9,13 @@ respective command modules.
 from __future__ import annotations
 
 import glob
-import hashlib
 import json
-import os
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from .engines import ENGINE_INPUT_SUFFIXES, TREATMENTS
+from .engines import BINARIES, TREATMENTS
 from .models import Exclusion, FileSpec, validate_unique_file_identities
 from .reports.store import GroupedExclusion
 from .targets import sha256_directory, sha256_file
@@ -155,8 +153,7 @@ def resolve_files(
             FileSpec(
                 display_path=display_path,
                 absolute_path=absolute_path,
-                sha256=complete_input_sha256(absolute_path, invocation_cwd, resolved_fact_directory),
-                working_directory=invocation_cwd.resolve(),
+                sha256=sha256_file(absolute_path),
                 exclusions=tuple(
                     Exclusion(
                         rule["kind"],
@@ -175,7 +172,8 @@ def resolve_files(
         )
     for index, file in enumerate(files):
         representations = []
-        for engine, suffix in ENGINE_INPUT_SUFFIXES.items():
+        for binary_name, specification in BINARIES.items():
+            suffix = specification.input_suffix
             if suffix == file.absolute_path.suffix:
                 continue
             native_path = file.absolute_path.with_suffix(suffix)
@@ -185,10 +183,10 @@ def resolve_files(
                 file,
                 display_path=str(Path(file.display_path).with_suffix(suffix)),
                 absolute_path=native_path,
-                sha256=complete_input_sha256(native_path, invocation_cwd, file.fact_directory),
+                sha256=sha256_file(native_path),
             )
-            representations.append((engine, native))
-        files[index] = replace(file, engine_inputs=tuple(representations))
+            representations.append((binary_name, native))
+        files[index] = replace(file, binary_inputs=tuple(representations))
     resolved = tuple(files)
     validate_workloads(resolved)
     return resolved
@@ -200,45 +198,43 @@ def exclusion_bindings(files: Sequence[FileSpec]) -> list[GroupedExclusion]:
     Exclusions belong to the invocation's grouped snapshot, never synthetic raw
     observations. Hash only the small explicit ignore list beyond selected files.
     """
-    rules = json.loads(IGNORE_FILE.read_text())
-    paths = dict.fromkeys(
-        path for rule in rules for path in glob.glob(str(IGNORE_FILE.parent / rule["file"]), recursive=True)
-    )
-    excluded_files = [*files]
-    resolved_paths = {
-        physical.absolute_path
+    # A browser can retarget to any cached input, including one outside the
+    # current invocation, so embed all current hash-to-rule bindings.
+    entries = [
+        (physical.sha256, rule)
         for logical in files
-        for physical in (logical, *(file for _, file in logical.engine_inputs))
-    }
-    for path in paths:
-        if Path(path).resolve() in resolved_paths:
-            continue
-        excluded_files.extend(resolve_files([path], IGNORE_FILE.parent.parent))
-    bindings = []
-    seen = set()
-    for logical in excluded_files:
-        for physical in (logical, *(file for _, file in logical.engine_inputs)):
-            for rule in logical.exclusions:
-                identity = (physical.sha256, rule)
-                if identity in seen:
-                    continue
-                seen.add(identity)
-                bindings.append(
-                    GroupedExclusion(
-                        file_sha256=physical.sha256,
-                        treatments=list(rule.treatments),
-                        disequality_encoding=rule.disequality_encoding,
-                        memory_limit_bytes=rule.memory_limit_bytes,
-                        kind=rule.kind,
-                        reason=rule.reason,
-                        evidence=rule.evidence,
-                    )
-                )
-    return bindings
+        for physical in (logical, *(file for _, file in logical.binary_inputs))
+        for rule in logical.exclusions
+    ]
+    suffixes = {specification.input_suffix for specification in BINARIES.values()}
+    for rule in json.loads(IGNORE_FILE.read_text()):
+        exclusion = Exclusion(
+            rule["kind"],
+            rule["reason"],
+            rule["evidence"],
+            tuple(rule.get("treatments", [])),
+            rule.get("disequality_encoding"),
+            rule.get("memory_limit_bytes"),
+        )
+        paths = glob.glob(str(IGNORE_FILE.parent / rule["file"]), recursive=True)
+        physical = {Path(path).with_suffix(suffix) for path in paths for suffix in suffixes}
+        entries.extend((sha256_file(path), exclusion) for path in sorted(physical) if path.is_file())
+    return [
+        GroupedExclusion(
+            file_sha256=identity,
+            treatments=list(rule.treatments),
+            disequality_encoding=rule.disequality_encoding,
+            memory_limit_bytes=rule.memory_limit_bytes,
+            kind=rule.kind,
+            reason=rule.reason,
+            evidence=rule.evidence,
+        )
+        for identity, rule in dict.fromkeys(entries)
+    ]
 
 
-def _egglog_tokens(source: str, *, strings: bool = False) -> Iterator[str | None]:
-    """Yield parentheses and atoms while hiding comments and string contents."""
+def _egglog_tokens(source: str) -> Iterator[str]:
+    """Yield raw parentheses, atoms and quoted strings, skipping comments."""
 
     index = 0
     while index < len(source):
@@ -261,7 +257,7 @@ def _egglog_tokens(source: str, *, strings: bool = False) -> Iterator[str | None
                     break
                 else:
                     index += 1
-            yield json.loads(source[start:index]) if strings else None
+            yield source[start:index]
             continue
         if character in "()":
             yield character
@@ -274,97 +270,11 @@ def _egglog_tokens(source: str, *, strings: bool = False) -> Iterator[str | None
         index = end
 
 
-def file_contains_executable_prove_command(path: Path) -> bool:
-    """Return whether a workload contains a top-level proof extraction command."""
-
-    depth = 0
-    expecting_command = False
-    for token in _egglog_tokens(path.read_text(encoding="utf-8")):
-        if token == "(":
-            if depth == 0:
-                expecting_command = True
-            elif expecting_command:
-                expecting_command = False
-            depth += 1
-        elif token == ")":
-            if depth == 1:
-                expecting_command = False
-            depth = max(0, depth - 1)
-        elif depth == 1 and expecting_command:
-            if token in ("prove", "prove-extract"):
-                return True
-            expecting_command = False
-    return False
-
-
-def complete_input_sha256(path: Path, cwd: Path, fact_directory: Path | None = None) -> str:
-    """Hash the invocation-relative include/input closure, rejecting hidden proof work.
-
-    Egglog resolves includes against its process directory, including nested
-    includes. Use that same directory for hashing and execution, independent of
-    the selected executable's checkout. Standalone fixtures retain their raw SHA.
-    """
-    dependencies: dict[str, str] = {}
-    active: set[Path] = set()
-
-    def visit(current: Path) -> None:
-        if current in active:
-            raise ValueError(f"cyclic workload include: {current}")
-        active.add(current)
-        source = current.read_text(encoding="utf-8")
-        # Without quotes, every semicolon starts a comment. Otherwise retain
-        # full tokenization, including string validation and escaped quotes.
-        if '"' not in source:
-            uncommented = re.sub(r";[^\n]*", "", source)
-            if not any(word in uncommented for word in ("include", "input", "prove")):
-                active.remove(current)
-                return
-        if file_contains_executable_prove_command(current):
-            raise ValueError(f"{current} contains an explicit prove command")
-        depth = 0
-        command: list[str | None] = []
-        for token in _egglog_tokens(source, strings=True):
-            if token == "(":
-                depth += 1
-            elif token == ")":
-                depth -= 1
-                if depth == 0 and command and command[0] in ("include", "input"):
-                    name = command[-1]
-                    if not isinstance(name, str):
-                        raise ValueError(f"invalid {command[0]} path in {current}")
-                    base = fact_directory if command[0] == "input" and fact_directory is not None else cwd
-                    dependency = (base / name).resolve()
-                    identity = os.path.relpath(dependency, cwd)
-                    if identity not in dependencies:
-                        dependencies[identity] = sha256_file(dependency)
-                        if command[0] == "include":
-                            visit(dependency)
-                if depth == 0:
-                    command = []
-            elif depth == 1:
-                command.append(token)
-        active.remove(current)
-
-    if path.suffix == ".egg":
-        visit(path)
-    digest = sha256_file(path)
-    if not dependencies:
-        return digest
-    closure = [digest, sorted(dependencies.items())]
-    return "sha256:" + hashlib.sha256(json.dumps(closure, separators=(",", ":")).encode()).hexdigest()
-
-
 def require_workload_unchanged(file_spec: FileSpec) -> None:
     """Reject an observation if its mutable inputs no longer match their cache identity."""
 
     try:
-        file_sha256 = (
-            complete_input_sha256(
-                file_spec.absolute_path, file_spec.working_directory or Path.cwd(), file_spec.fact_directory
-            )
-            if file_spec.absolute_path.is_file()
-            else None
-        )
+        file_sha256 = sha256_file(file_spec.absolute_path) if file_spec.absolute_path.is_file() else None
         if file_spec.fact_directory is None:
             fact_directory_sha256 = ""
         elif file_spec.fact_directory.is_dir():
@@ -378,12 +288,46 @@ def require_workload_unchanged(file_spec: FileSpec) -> None:
 
 
 def validate_workloads(files: Sequence[FileSpec]) -> None:
-    """Validate cache identity and timing-boundary invariants for workloads."""
+    """Require self-contained programs, with any CSV inputs inside the hashed fact directory."""
 
     validate_unique_file_identities(files)
-    for file_spec in files:
-        if file_spec.working_directory is None and file_contains_executable_prove_command(file_spec.absolute_path):
-            raise ValueError(
-                f"{file_spec.display_path} contains an explicit prove command; "
-                "benchmark files should use check or extract so the selected treatment controls proof extraction"
-            )
+    for file in files:
+        if file.absolute_path.suffix != ".egg":
+            continue
+        source = file.absolute_path.read_text(encoding="utf-8")
+        # Includes and CSV inputs require strings; the large generated inputs have none.
+        if '"' not in source:
+            uncommented = re.sub(r";[^\n]*", "", source)
+            if not any(word in uncommented for word in ("include", "input", "prove")):
+                continue
+        forms: list[list[str]] = []
+        for token in _egglog_tokens(source):
+            if token == "(":
+                forms.append([])
+            elif token == ")" and forms:
+                form = forms.pop()
+                if not form:
+                    continue
+                if form[0] == "include":
+                    raise ValueError(
+                        f"{file.display_path}: benchmark inputs must be self-contained; expand include commands first"
+                    )
+                if form[0] == "input":
+                    if file.fact_directory is None:
+                        raise ValueError(f"{file.display_path}: input commands require --fact-directory")
+                    try:
+                        name = json.loads(form[2])
+                    except (IndexError, ValueError) as error:
+                        raise ValueError(f"{file.display_path}: input requires a quoted filename") from error
+                    if not isinstance(name, str) or not (file.fact_directory / name).resolve().is_relative_to(
+                        file.fact_directory.resolve()
+                    ):
+                        raise ValueError(f"{file.display_path}: input path must stay inside --fact-directory")
+                if not forms and form[0] in ("prove", "prove-extract"):
+                    raise ValueError(
+                        f"{file.display_path} contains an explicit prove command; "
+                        "benchmark files should use check or extract so the selected treatment "
+                        "controls proof extraction"
+                    )
+            elif forms:
+                forms[-1].append(token)

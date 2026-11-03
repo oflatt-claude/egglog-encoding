@@ -276,8 +276,8 @@ def test_comparison_permits_shared_binary_across_different_treatments() -> None:
 
     comparison = models.ComparisonSpec(baseline, candidate, (FILE_SPEC,), 2, 120)
 
-    assert baseline.cache_identity == ("sha256:shared", "off", "nee", 10 * 1024**3)
-    assert candidate.cache_identity == ("sha256:shared", "proofs", "nee", 10 * 1024**3)
+    assert baseline.cache_identity == ("sha256:shared", "off", "nee", True)
+    assert candidate.cache_identity == ("sha256:shared", "proofs", "nee", True)
     assert comparison.baseline.target is comparison.candidate.target
 
 
@@ -511,7 +511,7 @@ def test_duplicate_physical_inputs_fail_before_building(tmp_path: Path, monkeypa
         "parameter.egg",
         tmp_path / "parameter.egg",
         "sha256:egglog",
-        engine_inputs=(("egg-ee", native), ("egg-de", native)),
+        binary_inputs=(("egg-ee", native), ("egg-de", native)),
     )
     monkeypatch.setattr(benchmark, "resolve_files", lambda *args: (logical, native))
     monkeypatch.setattr(

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from .engines import TREATMENT_SPECS, Engine, Treatment
+from .engines import BINARIES, TREATMENT_SPECS, BinaryName, Treatment
 from .native_memory import NATIVE_LIMIT_BYTES
 
 Status = Literal["success", "timed-out", "failure"]
@@ -50,8 +50,7 @@ class FileSpec:
     sha256: str
     fact_directory: Path | None = None
     fact_directory_sha256: str = ""
-    engine_inputs: tuple[tuple[Engine, FileSpec], ...] = ()
-    working_directory: Path | None = None
+    binary_inputs: tuple[tuple[BinaryName, FileSpec], ...] = ()
     exclusions: tuple[Exclusion, ...] = ()
 
     def exclusion_for(
@@ -77,11 +76,11 @@ class FileSpec:
             matched = rule
         return matched
 
-    def for_engine(self, engine: Engine) -> FileSpec:
+    def for_binary(self, binary_name: BinaryName) -> FileSpec:
         """Resolve an engine's physical representation of this logical workload."""
 
-        for input_engine, file in self.engine_inputs:
-            if input_engine == engine:
+        for input_engine, file in self.binary_inputs:
+            if input_engine == binary_name:
                 return file
         return self
 
@@ -113,8 +112,8 @@ class TargetRequest:
 
 
 @dataclass(frozen=True)
-class EngineBinary:
-    engine: Engine
+class BuiltBinary:
+    binary_name: BinaryName
     sha256: str
     path: Path | None
 
@@ -125,26 +124,26 @@ class ResolvedTarget:
     row: TargetRow
     binary_sha256: str
     binary_path: Path | None
-    engine_binaries: tuple[EngineBinary, ...] = ()
-    primary_engine: Engine | None = None
+    binaries: tuple[BuiltBinary, ...] = ()
+    primary_binary: BinaryName | None = None
 
     def binary_sha256_for(self, treatment: Treatment) -> str:
-        engine = TREATMENT_SPECS[treatment].engine
-        for binary in self.engine_binaries:
-            if binary.engine == engine:
+        binary_name = TREATMENT_SPECS[treatment].binary_name
+        for binary in self.binaries:
+            if binary.binary_name == binary_name:
                 return binary.sha256
-        if engine == "egglog" and self.primary_engine in (None, "egglog"):
+        if binary_name == "egglog-experimental" and self.primary_binary in (None, "egglog-experimental"):
             return self.binary_sha256
-        raise ValueError(f"target {self.display_label} has no {engine} binary")
+        raise ValueError(f"target {self.display_label} has no {binary_name} binary")
 
     def binary_path_for(self, treatment: Treatment) -> Path | None:
-        engine = TREATMENT_SPECS[treatment].engine
-        for binary in self.engine_binaries:
-            if binary.engine == engine:
+        binary_name = TREATMENT_SPECS[treatment].binary_name
+        for binary in self.binaries:
+            if binary.binary_name == binary_name:
                 return binary.path
-        if engine == "egglog" and self.primary_engine in (None, "egglog"):
+        if binary_name == "egglog-experimental" and self.primary_binary in (None, "egglog-experimental"):
             return self.binary_path
-        raise ValueError(f"target {self.display_label} has no {engine} binary")
+        raise ValueError(f"target {self.display_label} has no {binary_name} binary")
 
     @property
     def display_label(self) -> str:
@@ -167,9 +166,9 @@ class EndpointRequest:
     memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
 
     def __post_init__(self) -> None:
-        if TREATMENT_SPECS[self.treatment].engine != "egglog" and self.disequality_encoding != "nee":
+        if TREATMENT_SPECS[self.treatment].binary_name != "egglog-experimental" and self.disequality_encoding != "nee":
             raise ValueError("disequality encoding selection is only supported by egglog treatments")
-        if not TREATMENT_SPECS[self.treatment].allocator_limit:
+        if not BINARIES[TREATMENT_SPECS[self.treatment].binary_name].allocator_limit:
             object.__setattr__(self, "memory_limit_bytes", None)
         if self.memory_limit_bytes is not None and self.memory_limit_bytes < 1:
             raise ValueError("allocator memory limit must be positive")
@@ -185,18 +184,18 @@ class BenchmarkEndpoint:
     memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
 
     def __post_init__(self) -> None:
-        if not TREATMENT_SPECS[self.treatment].allocator_limit:
+        if not BINARIES[TREATMENT_SPECS[self.treatment].binary_name].allocator_limit:
             object.__setattr__(self, "memory_limit_bytes", None)
 
     @property
-    def cache_identity(self) -> tuple[str, Treatment, DisequalityEncoding, int | None]:
+    def cache_identity(self) -> tuple[str, Treatment, DisequalityEncoding, bool]:
         """Return the endpoint coordinates shared by all of its file keys."""
 
         return (
             self.target.binary_sha256_for(self.treatment),
             self.treatment,
             self.disequality_encoding,
-            self.memory_limit_bytes,
+            self.memory_limit_bytes is not None,
         )
 
 
@@ -215,8 +214,8 @@ class ComparisonSpec:
             raise ValueError("benchmark comparison requires at least one file")
         validate_unique_file_identities(self.files)
         for endpoint in (self.baseline, self.candidate):
-            engine = TREATMENT_SPECS[endpoint.treatment].engine
-            validate_unique_file_identities(tuple(file.for_engine(engine) for file in self.files))
+            binary_name = TREATMENT_SPECS[endpoint.treatment].binary_name
+            validate_unique_file_identities(tuple(file.for_binary(binary_name) for file in self.files))
         if self.rounds < 1:
             raise ValueError("benchmark rounds must be positive")
         if self.timeout_sec < 1:

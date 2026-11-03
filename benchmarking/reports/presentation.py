@@ -129,7 +129,9 @@ def _selection_section(
                 _git_display(endpoint.target.row.git_sha, endpoint.target.row.is_dirty),
             ),
             endpoint.treatment,
-            endpoint.disequality_encoding if TREATMENT_SPECS[endpoint.treatment].engine == "egglog" else "n/a",
+            endpoint.disequality_encoding
+            if TREATMENT_SPECS[endpoint.treatment].binary_name == "egglog-experimental"
+            else "n/a",
         )
         for role, endpoint in (("baseline", comparison.baseline), ("candidate", comparison.candidate))
     )
@@ -142,8 +144,8 @@ def _selection_section(
         caption=_comparison_caption(report_path, comparison, file_labels),
     )
     blocks: list[ReportBlock] = [endpoint_table]
-    baseline_engine = TREATMENT_SPECS[comparison.baseline.treatment].engine
-    candidate_engine = TREATMENT_SPECS[comparison.candidate.treatment].engine
+    baseline_engine = TREATMENT_SPECS[comparison.baseline.treatment].binary_name
+    candidate_engine = TREATMENT_SPECS[comparison.candidate.treatment].binary_name
     target_changed = (
         comparison.baseline.target.row.git_sha,
         comparison.baseline.target.row.is_dirty,
@@ -244,7 +246,11 @@ def _summary_section(
 
 
 def _endpoint_identity(endpoint: BenchmarkEndpoint) -> str:
-    encoding = f"/{endpoint.disequality_encoding}" if TREATMENT_SPECS[endpoint.treatment].engine == "egglog" else ""
+    encoding = (
+        f"/{endpoint.disequality_encoding}"
+        if TREATMENT_SPECS[endpoint.treatment].binary_name == "egglog-experimental"
+        else ""
+    )
     return f"{endpoint.target.display_label} {endpoint.treatment}{encoding}"
 
 

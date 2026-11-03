@@ -63,7 +63,7 @@ def _render(
         args.timeout_sec,
     )
     available = {
-        (row["binary_sha256"], row["treatment"], row["disequality_encoding"], row["memory_limit_bytes"])
+        (row["binary_sha256"], row["treatment"], row["disequality_encoding"], row["memory_limit_bytes"] is not None)
         for row in grouped.records
     }
     if comparison.baseline.cache_identity in available and comparison.candidate.cache_identity in available:
@@ -143,7 +143,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             status.write(f"Partial nightly: {error}\n")
     try:
         grouped = store.grouped_report(
-            {(label, "egglog"): target.binary_sha256_for("off") for label, target in resolved_targets.items()},
+            {
+                (label, "egglog-experimental"): target.binary_sha256_for("off")
+                for label, target in resolved_targets.items()
+            },
             workloads.exclusion_bindings(files),
         )
         write_grouped_report(grouped, grouped_report_path(report))

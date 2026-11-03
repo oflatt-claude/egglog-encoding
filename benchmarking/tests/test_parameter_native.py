@@ -10,7 +10,7 @@ import pytest
 from rich.console import Console
 
 from benchmarking import benchmark, collection, models, processes, targets, workloads
-from benchmarking.engines import Engine, Treatment
+from benchmarking.engines import BinaryName, Treatment
 from benchmarking.reports.analysis import analyze_pair
 from benchmarking.reports.presentation import build_report_catalog
 from benchmarking.reports.render import render_markdown_report_document
@@ -25,14 +25,14 @@ METHODS: tuple[Treatment, ...] = ("egg-de", "egg-ee", "egg-nee", "egg-oee")
 def test_native_command_uses_the_physical_input(treatment: Treatment, tmp_path: Path) -> None:
     native = models.FileSpec("fixture.in", tmp_path / "fixture.in", "sha256:native")
     logical = models.FileSpec(
-        "fixture.egg", tmp_path / "fixture.egg", "sha256:egglog", engine_inputs=((cast(Engine, treatment), native),)
+        "fixture.egg", tmp_path / "fixture.egg", "sha256:egglog", binary_inputs=((cast(BinaryName, treatment), native),)
     )
     binary = tmp_path / treatment
     expected = [str(binary), str(native.absolute_path), "100000", "10000"]
     assert targets.workload_command(binary, native, treatment) == expected
     assert targets.workload_command(binary, logical, treatment) == expected
     with pytest.raises(ValueError, match="native .in"):
-        targets.workload_command(binary, replace(logical, engine_inputs=()), treatment)
+        targets.workload_command(binary, replace(logical, binary_inputs=()), treatment)
     with pytest.raises(ValueError, match="fact-directory"):
         targets.workload_command(binary, replace(native, fact_directory=tmp_path), treatment)
     with pytest.raises(ValueError, match="only supported by egglog"):
@@ -50,9 +50,9 @@ def test_registered_workload_binds_native_file_with_its_own_hash(tmp_path: Path)
     native.write_text("1\n2\n")
     (logical,) = workloads.resolve_files([egglog.name], tmp_path)
     assert logical.sha256 == targets.sha256_file(egglog)
-    assert logical.for_engine("egglog") == logical
+    assert logical.for_binary("egglog-experimental") == logical
     for method in METHODS:
-        physical = logical.for_engine(cast(Engine, method))
+        physical = logical.for_binary(cast(BinaryName, method))
         assert physical.absolute_path == native
         assert physical.display_path == native.name
         assert physical.sha256 == targets.sha256_file(native)
@@ -107,7 +107,7 @@ def test_logical_request_rejects_a_native_input_changed_during_execution(
         egglog.name,
         egglog,
         targets.sha256_file(egglog),
-        engine_inputs=((cast(Engine, "slotted" if suffix == ".ref" else treatment), physical),),
+        binary_inputs=((cast(BinaryName, "slotted-reference" if suffix == ".ref" else treatment), physical),),
     )
 
     def mutate(*_args: object, **_kwargs: object) -> processes.TimingResult:
@@ -122,14 +122,14 @@ def test_logical_request_rejects_a_native_input_changed_during_execution(
 def test_native_cache_and_plan_use_physical_input_identity(tmp_path: Path) -> None:
     target = replace(
         make_target(),
-        engine_binaries=tuple(models.EngineBinary(cast(Engine, method), "sha256:bin", None) for method in METHODS),
+        binaries=tuple(models.BuiltBinary(cast(BinaryName, method), "sha256:bin", None) for method in METHODS),
     )
     native = models.FileSpec("fixture.in", tmp_path / "fixture.in", "sha256:native")
     logical = models.FileSpec(
         "fixture.egg",
         tmp_path / "fixture.egg",
         "sha256:egglog",
-        engine_inputs=tuple((cast(Engine, method), native) for method in METHODS),
+        binary_inputs=tuple((cast(BinaryName, method), native) for method in METHODS),
     )
     endpoints = tuple(models.BenchmarkEndpoint(target, method) for method in METHODS)
     requests = tuple(
@@ -162,7 +162,6 @@ def test_native_build_uses_the_isolated_manifest_and_selected_profile(
     treatment: Treatment, profile: targets.BuildProfile, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "shared-target"))
-    native = tmp_path / "benchmarks/disequality/native"
     target_dir = tmp_path / "benchmarks/local/parameter-native/target"
     binary = target_dir / profile / treatment
     binary.parent.mkdir(parents=True)
@@ -177,28 +176,28 @@ def test_native_build_uses_the_isolated_manifest_and_selected_profile(
 
     monkeypatch.setattr(targets.subprocess, "run", run)
     row = models.TargetRow(".", str(tmp_path), "HEAD", "abc", False)
-    actual, digest = targets.build_target(row, Console(quiet=True), profile, cast(Engine, treatment))
+    actual, digest = targets.build_target(row, Console(quiet=True), profile, cast(BinaryName, treatment))
     assert actual == binary
     assert digest == targets.sha256_file(binary)
     assert calls == [
         [
             "cargo",
             "build",
-            *(["--release"] if profile == "release" else ["--profile", profile]),
             "--locked",
             "--manifest-path",
-            str(native / "Cargo.toml"),
-            "--target-dir",
-            str(target_dir),
+            "benchmarks/disequality/native/Cargo.toml",
             "--bin",
             treatment,
+            "--target-dir",
+            str(target_dir),
+            *(["--release"] if profile == "release" else ["--profile", profile]),
         ],
     ]
 
 
 def test_native_preflight_never_launches_help_or_conversion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     binary = tmp_path / "egg-ee"
-    target = replace(make_target(), engine_binaries=(models.EngineBinary("egg-ee", "sha256:bin", binary),))
+    target = replace(make_target(), binaries=(models.BuiltBinary("egg-ee", "sha256:bin", binary),))
     fixture = models.FileSpec("fixture.in", tmp_path / "fixture.in", "sha256:file")
     requests = (collection.BenchmarkRequest(models.EndpointRequest(target.request, "egg-ee"), (fixture,)),)
     store = ReportStore(tmp_path / "report.jsonl")
@@ -220,10 +219,10 @@ def test_native_preflight_never_launches_help_or_conversion(tmp_path: Path, monk
 
 
 def test_native_detailed_report_uses_bound_inputs_and_marks_phases_unavailable(tmp_path: Path) -> None:
-    target = replace(make_target(), engine_binaries=(models.EngineBinary("egg-ee", "sha256:native-bin", None),))
+    target = replace(make_target(), binaries=(models.BuiltBinary("egg-ee", "sha256:native-bin", None),))
     native = models.FileSpec("fixture.in", tmp_path / "fixture.in", "sha256:native-file")
     logical = models.FileSpec(
-        "fixture.egg", tmp_path / "fixture.egg", "sha256:file", engine_inputs=(("egg-ee", native),)
+        "fixture.egg", tmp_path / "fixture.egg", "sha256:file", binary_inputs=(("egg-ee", native),)
     )
     comparison = models.ComparisonSpec(
         models.BenchmarkEndpoint(target, "off"),

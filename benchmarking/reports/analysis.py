@@ -16,9 +16,9 @@ from typing import Literal, NamedTuple, cast
 
 from scipy import stats
 
-from ..engines import TREATMENT_SPECS
+from ..engines import BINARIES, TREATMENT_SPECS
 from ..models import ComparisonSpec, DetailLevel
-from .store import CacheKey, GroupedReport, IndexedRecord
+from .store import GroupedReport, IndexedRecord, select_observations
 
 MetricName = Literal["wall_sec", "max_rss_bytes"]
 ResultClass = Literal["higher", "invalid", "lower", "point_only", "unclear"]
@@ -175,21 +175,15 @@ def analyze_pair(
         for file in comparison.files
     )
     comparison = replace(comparison, files=files)
-    observations = _selected_observations(store, comparison)
-    issues = {
-        (endpoint_order, file_order): (
-            f"excluded ({excluded.kind}): {excluded.reason}"
-            if (
-                excluded := file.exclusion_for(
-                    endpoint.treatment, endpoint.disequality_encoding, memory_limit_bytes=endpoint.memory_limit_bytes
-                )
-            )
-            is not None
-            else _selection_issue(observations[(endpoint_order, file_order)], comparison.rounds)
+    selections = {
+        (endpoint_order, file_order): select_observations(
+            store, endpoint, file, comparison.rounds, comparison.timeout_sec
         )
         for endpoint_order, endpoint in enumerate((comparison.baseline, comparison.candidate))
         for file_order, file in enumerate(comparison.files)
     }
+    observations = {key: selection.rows for key, selection in selections.items()}
+    issues = {key: selection.issue for key, selection in selections.items()}
     t_critical = None if comparison.rounds < 2 else float(stats.t.ppf(0.975, comparison.rounds - 1))
     estimates = _metric_estimates(observations, issues, t_critical)
     file_rows = _file_comparisons(comparison, estimates, t_critical)
@@ -202,39 +196,6 @@ def analyze_pair(
 
     timing = _timing_breakdowns(comparison, observations, estimates)
     return PairReportViewData(summary, file_rows, timing)
-
-
-def _selected_observations(
-    store: GroupedReport,
-    comparison: ComparisonSpec,
-) -> dict[_ObservationKey, tuple[IndexedRecord, ...]]:
-    selected: dict[_ObservationKey, tuple[IndexedRecord, ...]] = {}
-    for endpoint_order, endpoint in enumerate((comparison.baseline, comparison.candidate)):
-        for file_order, file in enumerate(comparison.files):
-            if (
-                file.exclusion_for(
-                    endpoint.treatment, endpoint.disequality_encoding, memory_limit_bytes=endpoint.memory_limit_bytes
-                )
-                is not None
-            ):
-                selected[(endpoint_order, file_order)] = ()
-                continue
-            key = CacheKey.for_endpoint(endpoint, file)
-            selected[(endpoint_order, file_order)] = store.latest_records(
-                key, comparison.rounds, comparison.timeout_sec
-            )
-    return selected
-
-
-def _selection_issue(rows: tuple[IndexedRecord, ...], rounds: int) -> str | None:
-    if len(rows) < rounds:
-        return f"missing {rounds - len(rows)} row(s)"
-    statuses = tuple(row.record["status"] for row in rows)
-    if "failure" in statuses:
-        return "failure row selected"
-    if "timed-out" in statuses:
-        return "timeout row selected"
-    return None
 
 
 def _metric_estimates(
@@ -326,6 +287,7 @@ def _summary_rows(
     file_rows: tuple[FileComparisonView, ...],
     t_critical: float | None,
 ) -> tuple[SummaryView, ...]:
+    # Suite time is additive across workloads; separate peak RSS values are not.
     baseline = [estimates[(0, order, "wall_sec")] for order in range(len(comparison.files))]
     candidate = [estimates[(1, order, "wall_sec")] for order in range(len(comparison.files))]
     first_issue = next(
@@ -390,7 +352,7 @@ def _timing_breakdowns(
     metric_estimates: dict[_MetricKey, _MetricEstimate],
 ) -> tuple[FileTimingBreakdown, ...]:
     if any(
-        not TREATMENT_SPECS[endpoint.treatment].timing_summary
+        not BINARIES[TREATMENT_SPECS[endpoint.treatment].binary_name].timing_summary
         for endpoint in (comparison.baseline, comparison.candidate)
     ):
         return ()

@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.progress import TaskID
 
 from benchmarking import collection, engines, models, processes, targets
+from benchmarking.native_memory import NATIVE_LIMIT_BYTES
 from benchmarking.reports.grouped import grouped_report_path
 from benchmarking.reports.store import CacheKey, ReportStore
 
@@ -163,7 +164,7 @@ def test_same_checkout_target_aliases_build_once(
         Console(stderr=True),
     )
 
-    assert builds == [(baseline_request, ("egglog",))]
+    assert builds == [(baseline_request, ("egglog-experimental",))]
     assert resolved[baseline_request].request == baseline_request
     assert resolved[candidate_request].request == candidate_request
     assert resolved[baseline_request].row.source == "."
@@ -238,7 +239,7 @@ def test_isolated_native_checkouts_allow_a_shared_cargo_target_dir(
         row: models.TargetRow,
         _console: Console,
         _profile: targets.BuildProfile,
-        _engines: tuple[models.Engine, ...],
+        _engines: tuple[models.BinaryName, ...],
     ) -> models.ResolvedTarget:
         builds.append(request)
         return models.ResolvedTarget(request, row, f"sha256:{row.git_sha}", Path(row.path) / "binary")
@@ -301,7 +302,7 @@ def test_same_target_builds_each_engine_required_by_its_treatments(
         Console(stderr=True),
     )
 
-    assert observed_engines == [("egglog", "egg")]
+    assert observed_engines == [("egglog-experimental", "egg-math-benchmark")]
 
 
 def test_batch_target_resolution_reuses_complete_cache_label_before_building_pending_target(
@@ -359,7 +360,7 @@ def test_batch_target_resolution_reuses_complete_cache_label_before_building_pen
     )
 
     assert materialized == [fresh_request]
-    assert builds == [(fresh_request, ("egglog",))]
+    assert builds == [(fresh_request, ("egglog-experimental",))]
     assert resolved[cached_request].binary_sha256 == "sha256:cached"
     assert resolved[cached_request].binary_path is None
     assert resolved[fresh_request].binary_sha256 == "sha256:fresh"
@@ -497,7 +498,7 @@ def test_shared_collection_rejects_conflicting_label_bindings_before_launch(
     plans = collection.plan_collection(store, requests, resolved, 1, 120, False)
     monkeypatch.setattr(collection, "preflight_collection", lambda *_a: pytest.fail("ambiguous label must fail first"))
 
-    with pytest.raises(ValueError, match="label 'figures' resolves to different egglog binaries"):
+    with pytest.raises(ValueError, match="label 'figures' resolves to different egglog-experimental binaries"):
         collection.collect(store, plans, requests, resolved, 120, Console(file=io.StringIO()))
     assert not store.path.exists()
 
@@ -766,7 +767,7 @@ def test_collect_rows_appends_process_and_ruleset_timing_together(
     collection.preflight_collection(plan, 120)
     collection.collect_rows(store, plan, 120, Console(stderr=True))
     key = CacheKey.for_endpoint(selected_endpoint, file_spec)
-    selected = store.selected_statuses_for_keys((key,), 1, 120)[key]
+    selected = tuple(row.record["status"] for row in store.latest_records(key, 1, 120, NATIVE_LIMIT_BYTES))
 
     persisted = json.loads(report.read_text(encoding="utf-8"))
     assert "row_index" not in persisted
@@ -821,10 +822,10 @@ def test_preflight_checks_each_required_engine_binary(monkeypatch: pytest.Monkey
         original.binary_sha256,
         original.binary_path,
         (
-            models.EngineBinary("egglog", "sha256:egglog", egglog_binary),
-            models.EngineBinary("egg", "sha256:egg", egg_binary),
+            models.BuiltBinary("egglog-experimental", "sha256:egglog", egglog_binary),
+            models.BuiltBinary("egg-math-benchmark", "sha256:egg", egg_binary),
         ),
-        "egglog",
+        "egglog-experimental",
     )
     calls: list[tuple[Path, tuple[str, ...]]] = []
 
@@ -868,10 +869,10 @@ def test_collected_row_uses_selected_engine_binary_and_hash(
         original.binary_sha256,
         original.binary_path,
         (
-            models.EngineBinary("egglog", "sha256:egglog", egglog_binary),
-            models.EngineBinary("egg", "sha256:egg", egg_binary),
+            models.BuiltBinary("egglog-experimental", "sha256:egglog", egglog_binary),
+            models.BuiltBinary("egg-math-benchmark", "sha256:egg", egg_binary),
         ),
-        "egglog",
+        "egglog-experimental",
     )
     file_spec = models.FileSpec(
         "egglog-experimental/tests/math-microbenchmark-rational.egg",
@@ -1197,7 +1198,7 @@ def test_preflight_requires_math12_flag_only_for_fresh_math12(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     egg_binary = ROOT / "egg-math-benchmark"
-    target = replace(make_target(), engine_binaries=(models.EngineBinary("egg", "sha256:egg", egg_binary),))
+    target = replace(make_target(), binaries=(models.BuiltBinary("egg-math-benchmark", "sha256:egg", egg_binary),))
     math12 = replace(
         planned_run(treatment="egg", required=1),
         file=models.FileSpec("math12.egg", ROOT / "absent.egg", engines.MATH12_WORKLOAD_SHA256),

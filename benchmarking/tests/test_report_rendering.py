@@ -108,10 +108,10 @@ def test_selection_does_not_treat_cross_engine_binary_difference_as_target_chang
         original.binary_sha256,
         original.binary_path,
         (
-            models.EngineBinary("egglog", "sha256:egglog", None),
-            models.EngineBinary("egg", "sha256:egg", None),
+            models.BuiltBinary("egglog-experimental", "sha256:egglog", None),
+            models.BuiltBinary("egg-math-benchmark", "sha256:egg", None),
         ),
-        "egglog",
+        "egglog-experimental",
     )
     comparison = models.ComparisonSpec(
         models.BenchmarkEndpoint(target, "egg-proofs"),

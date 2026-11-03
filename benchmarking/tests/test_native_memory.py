@@ -10,11 +10,27 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from benchmarking import collection, native_memory, processes
+from benchmarking import benchmark, collection, figures, native_memory, processes
 from benchmarking.reports.store import ReportStore
 
 from .report_fixtures import make_target
 from .test_collection import planned_run
+
+
+@pytest.mark.parametrize(
+    "arguments,expected",
+    [([], native_memory.NATIVE_LIMIT_BYTES), (["--no-memory-limit"], None), (["--memory-limit-bytes", "12345"], 12345)],
+)
+def test_comparison_memory_budget_reaches_both_endpoints(arguments: list[str], expected: int | None) -> None:
+    args = benchmark.parse_benchmark_args(["example.egg", *arguments])
+    assert args.files == ["example.egg"]
+    assert {endpoint.memory_limit_bytes for endpoint in benchmark.endpoint_requests(args)} == {expected}
+
+
+def test_figure_memory_budget_preserves_positional_names() -> None:
+    args, _ = figures.parse_args(["--memory-limit-bytes", "12345", "math-runtime"])
+    assert args.names == ["math-runtime"]
+    assert args.memory_limit_bytes == 12345
 
 
 def test_native_command_uses_explicit_limit_and_fixed_startup_policy() -> None:
@@ -28,13 +44,13 @@ def test_native_command_uses_explicit_limit_and_fixed_startup_policy() -> None:
 def test_native_exit_protocol_does_not_depend_on_diagnostic_text(
     tmp_path: Path, code: int, controlled: bool, stop: bool
 ) -> None:
-    engine = tmp_path / "engine"
-    engine.write_text(
+    binary_name = tmp_path / "engine"
+    binary_name.write_text(
         f"#!{sys.executable}\nimport sys\nprint('arbitrary diagnostic',file=sys.stderr)\nsys.exit({code})\n"
     )
-    engine.chmod(0o755)
+    binary_name.chmod(0o755)
     result = processes.run_command(
-        [str(engine)], tmp_path, 5, memory_limit_bytes=native_memory.NATIVE_LIMIT_BYTES if controlled else None
+        [str(binary_name)], tmp_path, 5, memory_limit_bytes=native_memory.NATIVE_LIMIT_BYTES if controlled else None
     )
     assert result.status == "failure"
     assert result.stop_collection is stop
@@ -84,14 +100,14 @@ def test_native_outcome_is_retained_before_local_skip_or_invocation_stop(
 
 
 def test_older_binary_rejecting_native_option_fails_preflight(tmp_path: Path) -> None:
-    engine = tmp_path / "engine"
-    engine.write_text(
+    binary_name = tmp_path / "engine"
+    binary_name.write_text(
         f"#!{sys.executable}\nimport sys\n"
         "assert sys.argv[1] == '--memory-limit-bytes=10737418240'\n"
         "print('unsupported native option',file=sys.stderr)\nsys.exit(2)\n"
     )
-    engine.chmod(0o755)
-    plan = collection.CollectionPlan(make_target(binary_path=engine), (planned_run(required=1),))
+    binary_name.chmod(0o755)
+    plan = collection.CollectionPlan(make_target(binary_path=binary_name), (planned_run(required=1),))
     with pytest.raises(ValueError, match="preflight failed.*unsupported native option"):
         collection.preflight_collection(plan, 5)
 

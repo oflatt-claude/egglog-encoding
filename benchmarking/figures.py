@@ -24,9 +24,9 @@ from benchmarks.reproduction.native import NATIVE_ALLOCATION_FAILURE
 
 from .engines import TREATMENT_SPECS, TREATMENTS, Treatment
 from .models import BenchmarkEndpoint, EndpointRequest, FileSpec, ResolvedTarget, validate_unique_file_identities
-from .native_memory import NATIVE_LIMIT_BYTES
+from .native_memory import add_memory_limit_options
 from .reports.grouped import grouped_report_path, write_grouped_report
-from .reports.store import CacheKey, GroupedReport
+from .reports.store import CacheKey, GroupedReport, select_observations
 from .targets import parse_target
 from .workloads import exclusion_bindings, resolve_files
 
@@ -214,12 +214,7 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, FigureConfig]:
     parser.add_argument(
         "--output-dir", type=Path, help="common output directory (default: each specification directory)"
     )
-    parser.add_argument(
-        "--memory-limit",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="apply the local 10 GiB allocator cap for verification (default: uncapped paper measurements)",
-    )
+    add_memory_limit_options(parser, default=None)
     args = parser.parse_args(argv)
     if args.rounds < 1:
         parser.error("--rounds must be positive")
@@ -230,9 +225,7 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, FigureConfig]:
     unknown = set(args.names) - {figure.name for figure in config.figures}
     if unknown:
         parser.error("unknown figure names: " + ", ".join(sorted(unknown)) + "; select a JSON catalog with --config")
-    return args, replace(
-        config, rounds=args.rounds, memory_limit_bytes=NATIVE_LIMIT_BYTES if args.memory_limit else None
-    )
+    return args, replace(config, rounds=args.rounds, memory_limit_bytes=args.memory_limit_bytes)
 
 
 def resolve_figures(config: FigureConfig, names: Sequence[str], invocation_cwd: Path) -> tuple[ResolvedFigure, ...]:
@@ -295,20 +288,11 @@ def render_figures(
         for file in resolved.files:
             info = metadata.get((file.sha256, file.fact_directory_sha256))
             for treatment in figure.treatments:
-                physical = file.for_engine(TREATMENT_SPECS[treatment].engine)
-                key = CacheKey.for_endpoint(
-                    BenchmarkEndpoint(target, treatment, memory_limit_bytes=config.memory_limit_bytes), file
-                )
-                excluded = file.exclusion_for(treatment, memory_limit_bytes=key.memory_limit_bytes)
-                rows = (
-                    ()
-                    if excluded is not None
-                    else grouped.latest_records(
-                        key,
-                        config.rounds,
-                        config.timeout_sec,
-                    )
-                )
+                physical = file.for_binary(TREATMENT_SPECS[treatment].binary_name)
+                endpoint = BenchmarkEndpoint(target, treatment, memory_limit_bytes=config.memory_limit_bytes)
+                key = CacheKey.for_endpoint(endpoint, file)
+                selection = select_observations(grouped, endpoint, file, config.rounds, config.timeout_sec)
+                excluded, rows = selection.exclusion, selection.rows
                 if excluded is not None:
                     excluded_conditions += 1
                 else:
@@ -322,8 +306,8 @@ def render_figures(
                         "fact_directory_sha256": physical.fact_directory_sha256,
                         "treatment": treatment,
                         "binary_sha256": key.binary_sha256,
-                        "execution_settings_sha256": key.execution_settings_sha256,
-                        "memory_limit_bytes": key.memory_limit_bytes,
+                        "allocator_profile": key.allocator_profile,
+                        "memory_limit_bytes": endpoint.memory_limit_bytes,
                         "selected_row_indices": [row.row_index for row in rows],
                         "validation_failures": info["validation_failures"] if info else {},
                         "exclusion": None

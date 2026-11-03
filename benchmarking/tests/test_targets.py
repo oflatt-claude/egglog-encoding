@@ -173,7 +173,6 @@ def test_build_target_builds_release_binary(monkeypatch: pytest.MonkeyPatch, tmp
             "cargo",
             "build",
             "--locked",
-            "--release",
             "-p",
             "egglog-experimental",
             "--no-default-features",
@@ -181,17 +180,18 @@ def test_build_target_builds_release_binary(monkeypatch: pytest.MonkeyPatch, tmp
             "bin",
             "--bin",
             "egglog-experimental",
+            "--release",
         ]
     ]
     assert stream.getvalue().strip() == f"Building {label}"
 
 
 @pytest.mark.parametrize("target_dir_is_absolute", [False, True])
-@pytest.mark.parametrize("engine", ["egglog", "egg"])
+@pytest.mark.parametrize("binary_name", ["egglog-experimental", "egg-math-benchmark"])
 @pytest.mark.parametrize("profile", ["release", "profiling"])
 def test_build_target_uses_cargo_target_dir(
     target_dir_is_absolute: bool,
-    engine: models.Engine,
+    binary_name: models.BinaryName,
     profile: targets.BuildProfile,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -200,7 +200,7 @@ def test_build_target_uses_cargo_target_dir(
     checkout.mkdir()
     target_dir = tmp_path / "shared-target" if target_dir_is_absolute else Path("shared-target")
     binary_root = target_dir if target_dir_is_absolute else checkout / target_dir
-    binary_name = "egglog-experimental" if engine == "egglog" else "egg-math-benchmark"
+    binary_name = "egglog-experimental" if binary_name == "egglog-experimental" else "egg-math-benchmark"
     binary = binary_root / profile / binary_name
     binary.parent.mkdir(parents=True)
     binary.write_text("binary", encoding="utf-8")
@@ -209,7 +209,7 @@ def test_build_target_uses_cargo_target_dir(
     monkeypatch.setattr(targets, "sha256_file", lambda path: "sha256:bin")
     row = models.TargetRow(".", str(checkout), "HEAD", "abc123", False, None)
 
-    path, digest = targets.build_target(row, Console(file=io.StringIO(), color_system=None), profile, engine)
+    path, digest = targets.build_target(row, Console(file=io.StringIO(), color_system=None), profile, binary_name)
 
     assert path == binary
     assert digest == "sha256:bin"
@@ -226,7 +226,7 @@ def test_legacy_resolved_target_only_falls_back_to_egglog_binary() -> None:
 
     assert target.binary_sha256_for("proofs") == "sha256:egglog"
     assert target.binary_path_for("proofs") == binary
-    with pytest.raises(ValueError, match="has no egg binary"):
+    with pytest.raises(ValueError, match="has no egg-math-benchmark binary"):
         target.binary_sha256_for("egg-proofs")
-    with pytest.raises(ValueError, match="has no egg binary"):
+    with pytest.raises(ValueError, match="has no egg-math-benchmark binary"):
         target.binary_path_for("egg-proofs")

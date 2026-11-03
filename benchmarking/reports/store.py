@@ -15,7 +15,7 @@ from math import isfinite
 from pathlib import Path
 from typing import Final, Literal, TypedDict, cast
 
-from ..engines import TREATMENT_SPECS, Engine, execution_settings_sha256
+from ..engines import BINARIES, TREATMENT_SPECS, BinaryName
 from ..models import (
     BenchmarkEndpoint,
     DisequalityEncoding,
@@ -26,13 +26,13 @@ from ..models import (
     TargetRow,
     Treatment,
 )
-from ..native_memory import NATIVE_LIMIT_BYTES
+from ..native_memory import NATIVE_ALLOCATION_EXIT
 
-type ReportSchemaVersion = Literal[6]
-REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 6
+type ReportSchemaVersion = Literal[7]
+REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 7
 
-type GroupedSchemaVersion = Literal[3]
-GROUPED_SCHEMA_VERSION: Final[GroupedSchemaVersion] = 3
+type GroupedSchemaVersion = Literal[4]
+GROUPED_SCHEMA_VERSION: Final[GroupedSchemaVersion] = 4
 
 type TimingSummarySchemaVersion = Literal[4]
 TIMING_SUMMARY_SCHEMA_VERSION: Final[TimingSummarySchemaVersion] = 4
@@ -94,50 +94,36 @@ class ReportRecord(TypedDict):
     error_signal: int | None
     error_message: str | None
     memory_limit_bytes: int | None
-    execution_settings_sha256: str
     timing_summary: TimingSummaryRecord | None
 
 
 @dataclass(frozen=True)
 class CacheKey:
-    """Exact persisted identity used to select reusable observations."""
+    """Executable, workload and treatment identity, independent of resource cutoffs."""
 
     binary_sha256: str
     file_sha256: str
     treatment: Treatment
     fact_directory_sha256: str = ""
     disequality_encoding: DisequalityEncoding = "nee"
-    memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
-    execution_settings_sha256: str = ""
+    allocator_profile: Literal["capped", "uncapped"] = "capped"
 
     def __post_init__(self) -> None:
-        if not TREATMENT_SPECS[self.treatment].allocator_limit:
-            object.__setattr__(self, "memory_limit_bytes", None)
-        if not self.execution_settings_sha256:
-            object.__setattr__(
-                self,
-                "execution_settings_sha256",
-                execution_settings_sha256(
-                    self.treatment, self.file_sha256, self.disequality_encoding, self.memory_limit_bytes
-                ),
-            )
+        if not BINARIES[TREATMENT_SPECS[self.treatment].binary_name].allocator_limit:
+            object.__setattr__(self, "allocator_profile", "uncapped")
 
     @classmethod
-    def for_endpoint(
-        cls,
-        endpoint: BenchmarkEndpoint,
-        file_spec: FileSpec,
-    ) -> CacheKey:
-        """Build the identity shared by collection and reporting."""
+    def for_endpoint(cls, endpoint: BenchmarkEndpoint, file_spec: FileSpec) -> CacheKey:
+        """Resolve the executable and physical input before any cache lookup."""
 
-        file_spec = file_spec.for_engine(TREATMENT_SPECS[endpoint.treatment].engine)
+        file_spec = file_spec.for_binary(TREATMENT_SPECS[endpoint.treatment].binary_name)
         return cls(
             binary_sha256=endpoint.target.binary_sha256_for(endpoint.treatment),
             file_sha256=file_spec.sha256,
             treatment=endpoint.treatment,
             disequality_encoding=endpoint.disequality_encoding,
             fact_directory_sha256=file_spec.fact_directory_sha256,
-            memory_limit_bytes=endpoint.memory_limit_bytes,
+            allocator_profile="uncapped" if endpoint.memory_limit_bytes is None else "capped",
         )
 
 
@@ -164,27 +150,41 @@ class IndexedRecord:
         return (self.started_at, self.row_index)
 
 
-def select_records(rows: Sequence[IndexedRecord], rounds: int, timeout_sec: int) -> tuple[IndexedRecord, ...]:
-    """Select newest applicable observations, retaining failures at unchanged bounds.
+def select_records(
+    rows: Sequence[IndexedRecord], rounds: int, timeout_sec: int, memory_limit_bytes: int | None
+) -> tuple[IndexedRecord, ...]:
+    """Reuse successes under sufficient bounds; retry resource failures when raised.
 
-    Successful completion under an equal/tighter deadline is sufficient even
-    when process-launch overhead exceeds that deadline or wall time is absent.
-    A raised deadline retires timeouts; other failures persist within their exact execution profile.
+    Callers first select the same allocator profile. Capped and uncapped runs
+    use different startup environments and never share observations.
     """
     if rounds < 1:
         raise ValueError("rounds must be positive")
     eligible = []
     for row in rows:
         record = row.record
+        cap = record["memory_limit_bytes"]
         wall = record["wall_sec"]
         if record["status"] == "success":
             if record["timeout_sec"] > timeout_sec and not (
                 wall is not None and isfinite(wall) and 0 < wall <= timeout_sec
             ):
                 continue
+            # Peak RSS does not establish the VM bound used by the allocator.
+            if cap is not None and memory_limit_bytes is not None and cap > memory_limit_bytes:
+                continue
         elif "process-group cleanup failed:" in (record["error_message"] or ""):
-            pass  # A control failure is not repaired by raising a workload limit.
-        elif record["status"] == "timed-out" and timeout_sec > record["timeout_sec"]:
+            pass  # Raising a workload budget cannot repair process control.
+        elif (
+            record["status"] == "timed-out"
+            and timeout_sec > record["timeout_sec"]
+            or (
+                record["error_exit_code"] == NATIVE_ALLOCATION_EXIT
+                and cap is not None
+                and memory_limit_bytes is not None
+                and memory_limit_bytes > cap
+            )
+        ):
             continue
         eligible.append(row)
     return tuple(sorted(eligible, key=lambda row: row.order_key)[-rounds:])
@@ -196,8 +196,7 @@ class GroupedKey(TypedDict):
     treatment: Treatment
     fact_directory_sha256: str
     disequality_encoding: DisequalityEncoding
-    memory_limit_bytes: int | None
-    execution_settings_sha256: str
+    allocator_profile: Literal["capped", "uncapped"]
 
 
 class GroupedSample(ReportRecord):
@@ -265,10 +264,12 @@ class GroupedReport:
             for row in sorted((row for rows in self._by_key.values() for row in rows), key=lambda row: row.row_index)
         )
 
-    def latest_records(self, key: CacheKey, rounds: int, timeout_sec: int) -> tuple[IndexedRecord, ...]:
+    def latest_records(
+        self, key: CacheKey, rounds: int, timeout_sec: int, memory_limit_bytes: int | None
+    ) -> tuple[IndexedRecord, ...]:
         """Select the requested tail without discarding the snapshot's other samples."""
 
-        return select_records(self._by_key.get(key, ()), rounds, timeout_sec)
+        return select_records(self._by_key.get(key, ()), rounds, timeout_sec, memory_limit_bytes)
 
 
 class ReportStore:
@@ -318,7 +319,7 @@ class ReportStore:
 
     def grouped_report(
         self,
-        label_bindings: Mapping[tuple[str, Engine], str] | None = None,
+        label_bindings: Mapping[tuple[str, BinaryName], str] | None = None,
         exclusions: Sequence[GroupedExclusion] = (),
     ) -> GroupedReport:
         """Freeze observations and refresh aliases from any targets resolved this invocation.
@@ -327,22 +328,22 @@ class ReportStore:
         adding observations when the current binary is already fully cached.
         """
 
-        latest: dict[tuple[str, Engine], IndexedRecord] = {}
+        latest: dict[tuple[str, BinaryName], IndexedRecord] = {}
         for label, rows in self._by_label.items():
             for row in rows:
-                identity = (label, TREATMENT_SPECS[row.record["treatment"]].engine)
+                identity = (label, TREATMENT_SPECS[row.record["treatment"]].binary_name)
                 if identity not in latest or row.order_key > latest[identity].order_key:
                     latest[identity] = row
         bindings = {identity: row.record["binary_sha256"] for identity, row in latest.items()}
         if label_bindings is not None:
             bindings.update(label_bindings)
-        labels: dict[tuple[Engine, str], list[str]] = {}
-        for (label, engine), binary_sha256 in bindings.items():
-            labels.setdefault((engine, binary_sha256), []).append(label)
+        labels: dict[tuple[BinaryName, str], list[str]] = {}
+        for (label, binary_name), binary_sha256 in bindings.items():
+            labels.setdefault((binary_name, binary_sha256), []).append(label)
         groups: list[ObservationGroup] = [
             {
                 "key": cast(GroupedKey, asdict(key)),
-                "labels": sorted(labels.get((TREATMENT_SPECS[key.treatment].engine, key.binary_sha256), ())),
+                "labels": sorted(labels.get((TREATMENT_SPECS[key.treatment].binary_name, key.binary_sha256), ())),
                 "samples": [
                     {**row.record, "row_index": row.row_index} for row in sorted(rows, key=lambda row: row.order_key)
                 ],
@@ -359,7 +360,7 @@ class ReportStore:
             self.display_path,
         )
 
-    def find_label_pointer(self, label: str, engine: Engine | None = None) -> CachedTarget | None:
+    def find_label_pointer(self, label: str, binary_name: BinaryName | None = None) -> CachedTarget | None:
         """Return the latest row carrying ``label`` for an optional engine."""
 
         rows = self._by_label.get(label)
@@ -367,8 +368,8 @@ class ReportStore:
             return None
         matching = (
             rows
-            if engine is None
-            else [row for row in rows if TREATMENT_SPECS[row.record["treatment"]].engine == engine]
+            if binary_name is None
+            else [row for row in rows if TREATMENT_SPECS[row.record["treatment"]].binary_name == binary_name]
         )
         if not matching:
             return None
@@ -385,25 +386,12 @@ class ReportStore:
             record["binary_sha256"],
         )
 
-    def selected_statuses_for_keys(
-        self,
-        keys: Sequence[CacheKey],
-        rounds: int,
-        timeout_sec: int,
-    ) -> dict[CacheKey, tuple[Status, ...]]:
-        """Select latest statuses for every distinct exact cache key."""
-
-        if rounds < 1:
-            raise ValueError("rounds must be positive")
-        return {
-            key: tuple(row.record["status"] for row in self.latest_records(key, rounds, timeout_sec))
-            for key in dict.fromkeys(keys)
-        }
-
-    def latest_records(self, key: CacheKey, rounds: int, timeout_sec: int) -> tuple[IndexedRecord, ...]:
+    def latest_records(
+        self, key: CacheKey, rounds: int, timeout_sec: int, memory_limit_bytes: int | None
+    ) -> tuple[IndexedRecord, ...]:
         """Return up to ``rounds`` newest rows in chronological presentation order."""
 
-        return select_records(self._by_key.get(key, ()), rounds, timeout_sec)
+        return select_records(self._by_key.get(key, ()), rounds, timeout_sec, memory_limit_bytes)
 
     def _indexed(self, record: ReportRecord) -> IndexedRecord:
         return IndexedRecord(
@@ -428,6 +416,48 @@ class ReportStore:
         )
 
 
+@dataclass(frozen=True)
+class SelectedObservations:
+    """One selection shared by collection, terminal reports and figure bindings."""
+
+    rows: tuple[IndexedRecord, ...]
+    exclusion: Exclusion | None
+    issue: str | None
+
+
+def select_observations(
+    store: ReportStore | GroupedReport,
+    endpoint: BenchmarkEndpoint,
+    file: FileSpec,
+    rounds: int,
+    timeout_sec: int,
+) -> SelectedObservations:
+    """Apply reviewed exclusions and both resource budgets at one boundary."""
+
+    excluded = file.exclusion_for(
+        endpoint.treatment, endpoint.disequality_encoding, memory_limit_bytes=endpoint.memory_limit_bytes
+    )
+    if excluded is not None:
+        return SelectedObservations((), excluded, f"excluded ({excluded.kind}): {excluded.reason}")
+    rows = store.latest_records(CacheKey.for_endpoint(endpoint, file), rounds, timeout_sec, endpoint.memory_limit_bytes)
+    if len(rows) < rounds:
+        issue = f"missing {rounds - len(rows)} row(s)"
+    elif any(r.record["status"] == "failure" for r in rows):
+        issue = (
+            "memory limit row selected"
+            if any(
+                r.record["error_exit_code"] == NATIVE_ALLOCATION_EXIT and r.record["memory_limit_bytes"] is not None
+                for r in rows
+            )
+            else "failure row selected"
+        )
+    elif any(r.record["status"] == "timed-out" for r in rows):
+        issue = "timeout row selected"
+    else:
+        issue = None
+    return SelectedObservations(rows, None, issue)
+
+
 def _record_key(record: ReportRecord) -> CacheKey:
     return CacheKey(
         binary_sha256=record["binary_sha256"],
@@ -435,8 +465,7 @@ def _record_key(record: ReportRecord) -> CacheKey:
         treatment=record["treatment"],
         disequality_encoding=record["disequality_encoding"],
         fact_directory_sha256=record["fact_directory_sha256"],
-        memory_limit_bytes=record["memory_limit_bytes"],
-        execution_settings_sha256=record["execution_settings_sha256"],
+        allocator_profile="uncapped" if record["memory_limit_bytes"] is None else "capped",
     )
 
 
@@ -497,7 +526,11 @@ def _require_current_record(record: ReportRecord) -> None:
     summary = record["timing_summary"]
     if summary is not None:
         _require_current_timing_summary(summary)
-    if record["status"] == "success" and summary is None and TREATMENT_SPECS[record["treatment"]].timing_summary:
+    if (
+        record["status"] == "success"
+        and summary is None
+        and BINARIES[TREATMENT_SPECS[record["treatment"]].binary_name].timing_summary
+    ):
         raise ValueError("successful benchmark record is missing its timing summary")
 
 

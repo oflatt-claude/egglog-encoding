@@ -23,7 +23,7 @@ from rich.console import Console
 from rich.text import Text
 
 from . import samply_analysis
-from .engines import TREATMENT_SPECS, TREATMENTS, Treatment, validate_engine_workload
+from .engines import BINARIES, TREATMENT_SPECS, TREATMENTS, Treatment, validate_binary_workload
 from .models import DisequalityEncoding, FileSpec, TargetRequest
 from .native_memory import NATIVE_LIMIT_BYTES, native_memory_command
 from .processes import run_command, terminate_process_group
@@ -323,10 +323,10 @@ def resolve_profile_request(args: argparse.Namespace, invocation_cwd: Path) -> P
     files = resolve_files([str(args.file)], invocation_cwd, args.fact_directory)
     treatment = cast(Treatment, str(args.treatment))
     disequality_encoding = cast(DisequalityEncoding, args.disequality_encoding)
-    if TREATMENT_SPECS[treatment].engine != "egglog" and disequality_encoding != "nee":
+    if TREATMENT_SPECS[treatment].binary_name != "egglog-experimental" and disequality_encoding != "nee":
         raise ValueError("disequality encoding selection is only supported by egglog treatments")
-    file = files[0].for_engine(TREATMENT_SPECS[treatment].engine)
-    validate_engine_workload(file, treatment)
+    file = files[0].for_binary(TREATMENT_SPECS[treatment].binary_name)
+    validate_binary_workload(file, treatment)
     if args.iterations is not None:
         mode = ProfileMode(iterations=args.iterations, profile_seconds=None)
     else:
@@ -360,11 +360,11 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
     if binary_path is None:
         raise ValueError(f"target {target.display_label} needs a profiling binary")
     checkout_path = Path(target.row.path)
-    native_limit = TREATMENT_SPECS[request.treatment].allocator_limit
+    native_limit = BINARIES[TREATMENT_SPECS[request.treatment].binary_name].allocator_limit
     workload = workload_command(binary_path, request.file, request.treatment, request.disequality_encoding)
     treatment_label = (
         f"{request.treatment} ({request.disequality_encoding})"
-        if TREATMENT_SPECS[request.treatment].engine == "egglog"
+        if TREATMENT_SPECS[request.treatment].binary_name == "egglog-experimental"
         else request.treatment
     )
     artifact = profile_cache_path(

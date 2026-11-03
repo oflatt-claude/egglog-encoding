@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import pytest
 
-from benchmarking import models
+from benchmarking import models, workloads
 from benchmarking.reports import interactive
 from benchmarking.reports.interactive_runtime import (
     InteractiveRuntime,
@@ -47,7 +47,7 @@ def test_interactive_snapshot_reuses_cross_timeout_rows_and_freezes_memory_bound
     selectors = cast(dict[str, JsonValue], payload["selectors"])
     assert selectors["timeouts_sec"] == [120, 300, 600, 900]
     assert selectors["max_rounds"] == 3
-    assert "failure row selected" in json.dumps(payload)
+    assert "memory limit row selected" in json.dumps(payload)
     assert runtime.apply({**initial, "memory_limit_bytes": 16}) == payload
     assert len(store.data["groups"]) == 2
     assert len(store.records) == 5
@@ -266,6 +266,7 @@ def test_html_embeds_exact_grouped_snapshot_initial_catalog_runtime_and_safe_dat
     )
     assert cast(str, envelope["pyodide_base_url"]) == interactive.PYODIDE_BASE_URL
     assert set(cast(dict[str, str], envelope["python_modules"])) == {
+        "benchmarks/resources.json",
         "benchmarking/native_memory.py",
         "benchmarking/__init__.py",
         "benchmarking/engines.py",
@@ -361,17 +362,17 @@ def test_grouped_runtime_restores_logical_workload_physical_input_bindings(tmp_p
         "source.egg",
         tmp_path / "source.egg",
         "sha256:egglog-input",
-        engine_inputs=(("egg-de", physical), ("egg-ee", physical)),
+        binary_inputs=(("egg-de", physical), ("egg-ee", physical)),
     )
     baseline = make_endpoint(binary_sha256="sha256:baseline", treatment="off")
     if native_only:
         baseline = models.BenchmarkEndpoint(
-            replace(baseline.target, engine_binaries=(models.EngineBinary("egg-ee", "sha256:baseline", None),)),
+            replace(baseline.target, binaries=(models.BuiltBinary("egg-ee", "sha256:baseline", None),)),
             "egg-ee",
         )
     target = replace(
         baseline.target,
-        engine_binaries=(models.EngineBinary("egg-de", "sha256:native", None),),
+        binaries=(models.BuiltBinary("egg-de", "sha256:native", None),),
     )
     candidate = models.BenchmarkEndpoint(target, "egg-de")
     comparison = models.ComparisonSpec(baseline, candidate, (logical,), 1, 120)
@@ -445,7 +446,7 @@ def test_write_rejects_the_jsonl_path_itself(tmp_path: Path) -> None:
 
 def test_embedded_python_modules_include_transitive_local_imports() -> None:
     root = Path(interactive.__file__).resolve().parents[2]
-    embedded = set(interactive._PYTHON_MODULES)
+    embedded = set(interactive._RUNTIME_FILES)
     missing: set[tuple[str, str]] = set()
     for filename in embedded:
         source = (root / filename).read_text(encoding="utf-8")
@@ -576,4 +577,72 @@ def test_cap_scoped_exclusion_survives_snapshot_and_uncapped_retarget(tmp_path: 
         candidate=replace(candidate, memory_limit_bytes=None),
     )
     assert "excluded" not in json.dumps(runtime.apply(scope_for_comparison(uncapped))["sections"])
+    assert path.read_bytes() == before
+
+
+def test_reused_tighter_memory_success_preserves_invocation_budget_and_latest_provenance(tmp_path: Path) -> None:
+    from benchmarking.native_memory import NATIVE_LIMIT_BYTES
+
+    path = tmp_path / "budget.jsonl"
+    for treatment in ("off", "proofs"):
+        for file_id, cap, second in (("b", NATIVE_LIMIT_BYTES, 0), ("a", NATIVE_LIMIT_BYTES // 2, 1)):
+            record = make_record(
+                0,
+                started_at=f"2026-10-27T00:00:0{second}Z",
+                treatment=treatment,
+                file_sha256=file_id,
+                memory_limit_bytes=cap,
+                max_rss_bytes=1024,
+            )
+            record["target_git_sha"] = "cached-latest" if second else "earlier"
+            write_report(path, record)
+    files = tuple(models.FileSpec(name + ".egg", tmp_path / (name + ".egg"), name) for name in ("a", "b"))
+    comparison = models.ComparisonSpec(make_endpoint(), make_endpoint(treatment="proofs"), files, 1, 120)
+    initial = scope_for_comparison(comparison)
+    runtime = InteractiveRuntime(ReportStore(path).grouped_report(), initial)
+    before = runtime.payload()
+    after = runtime.apply(initial)
+    assert before == after
+    rendered = json.dumps(after)
+    assert "missing 1 row(s)" not in rendered
+    assert f"{NATIVE_LIMIT_BYTES / 1024**3:g} GiB cap" in rendered
+    assert "cached-latest" in rendered
+
+
+def test_retargeting_outside_initial_files_keeps_current_exclusions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name, source in (("selected.egg", "(check (= 1 1))"), ("archived.egg", "(check (= 2 2))")):
+        (tmp_path / name).write_text(source)
+    ignore = tmp_path / "ignore.json"
+    ignore.write_text(
+        json.dumps(
+            [
+                {
+                    "file": "archived.egg",
+                    "treatments": ["proofs"],
+                    "kind": "expected-failure",
+                    "reason": "known table-size mismatch",
+                    "evidence": "issue",
+                }
+            ]
+        )
+    )
+    monkeypatch.setattr(workloads, "IGNORE_FILE", ignore)
+    (selected,) = workloads.resolve_files(["selected.egg"], tmp_path)
+    (archived,) = workloads.resolve_files(["archived.egg"], tmp_path)
+    path = tmp_path / "exclusions.jsonl"
+    for file in (selected, archived):
+        for treatment in ("off", "proofs"):
+            row = make_record(0, started_at="2026-10-27T00:00:00Z", treatment=treatment, file_sha256=file.sha256)
+            row["file_path"] = file.display_path
+            write_report(path, row)
+    before = path.read_bytes()
+    comparison = models.ComparisonSpec(make_endpoint(), make_endpoint(treatment="proofs"), (selected,), 1, 120)
+    snapshot = ReportStore(path).grouped_report(exclusions=workloads.exclusion_bindings((selected,)))
+    runtime = InteractiveRuntime(snapshot, scope_for_comparison(comparison))
+    assert "known table-size mismatch" not in json.dumps(runtime.payload()["sections"])
+    archived_scope = scope_for_comparison(replace(comparison, files=(archived,)))
+    payload = runtime.apply(archived_scope)
+    assert "excluded (expected-failure): known table-size mismatch" in json.dumps(payload["sections"])
     assert path.read_bytes() == before
