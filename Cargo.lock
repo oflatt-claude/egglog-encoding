@@ -692,7 +692,6 @@ version = "3.0.0"
 dependencies = [
  "benchmark-memory",
  "codspeed-divan-compat",
- "egg-math-benchmark",
  "egglog",
  "egglog-ast",
  "egglog-reports",
@@ -703,7 +702,6 @@ dependencies = [
  "indexmap",
  "insta",
  "lazy_static",
- "libc",
  "libtest-mimic",
  "log",
  "num",
@@ -711,10 +709,8 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
- "slotted-reference",
  "smallvec",
  "stacker",
- "tempfile",
 ]
 
 [[package]]
@@ -1364,6 +1360,23 @@ dependencies = [
  "num-traits",
  "rand 0.8.6",
  "serde",
+]
+
+[[package]]
+name = "paper-tests"
+version = "0.1.0"
+dependencies = [
+ "benchmark-memory",
+ "egg-math-benchmark",
+ "egglog",
+ "egglog-experimental",
+ "glob",
+ "libc",
+ "libtest-mimic",
+ "serde",
+ "serde_json",
+ "slotted-reference",
+ "tempfile",
 ]
 
 [[package]]

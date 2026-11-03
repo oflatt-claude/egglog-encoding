@@ -1,7 +1,7 @@
 //! Small guards for the instrumentation used on the full paper inputs.
 use egglog::CommandOutput;
 use egglog_experimental::*;
-#[path = "support/extraction.rs"]
+#[path = "../../../egglog-experimental/tests/support/extraction.rs"]
 mod extraction;
 #[path = "support/extraction_comparison.rs"]
 mod extraction_comparison;
@@ -13,7 +13,11 @@ mod table_comparison;
 #[test]
 fn paper_registration_rejects_unmapped_oracles_and_missing_companions() {
     use std::path::Path;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
     let slotted = root.join("benchmarks/slotted/inputs/sdql/batax_1st-44rules.egg");
     for (file, mode, valid) in [
         (&slotted, "slotted", true),

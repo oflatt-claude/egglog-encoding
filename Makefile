@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := check
 
-.PHONY: check nits nightly
+.PHONY: check nits test-python test-rust test-figures nightly
 
 export CARGO_PROFILE_DEV_DEBUG ?= 0
 export CARGO_PROFILE_TEST_DEBUG ?= 0
@@ -16,11 +16,17 @@ CARGO_HOME_DIR ?= $(HOME)/.cargo
 NPX ?= npx --yes
 VEGA = $(NPX) --package=vega@6.4.0 --package=vega-lite@6.4.3 --package=vega-cli@6.4.0 --package=canvas@3.2.3
 
-check: nits
+check: nits test-python test-rust test-figures
+
+test-python:
 	uv run --locked pytest -q
+
+test-rust:
 	cargo build --locked --release --manifest-path benchmarks/disequality/native/Cargo.toml --target-dir benchmarks/local/parameter-native/target --bins
-	cargo test --locked --workspace -- --skip paper/ $(RUST_TEST_ARGS)
-	RUST_TEST_THREADS=$${RUST_TEST_THREADS:-2} cargo test --locked -p egglog-experimental --test paper -- $(RUST_TEST_ARGS)
+	cargo test --locked --workspace --exclude paper-tests -- $(RUST_TEST_ARGS)
+	RUST_TEST_THREADS=$${RUST_TEST_THREADS:-2} cargo test --locked -p paper-tests -- $(RUST_TEST_ARGS)
+
+test-figures:
 	cd figures && $(VEGA) node --test eval.test.mjs
 
 nits:

@@ -227,7 +227,7 @@ def test_rust_paper_dispatch_covers_the_shared_treatment_table() -> None:
 
     from benchmarking.engines import TREATMENTS
 
-    source = (ROOT / "egglog-experimental/tests/paper.rs").read_text()
+    source = (ROOT / "benchmarks/paper-tests/tests/paper.rs").read_text()
     dispatch = source.split("let supported = [", 1)[1].split("];", 1)[0]
     assert set(re.findall(r'"([^"]+)"', dispatch)) == set(TREATMENTS)
 

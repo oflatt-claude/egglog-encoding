@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[path = "support/extraction.rs"]
+#[path = "../../../egglog-experimental/tests/support/extraction.rs"]
 mod extraction;
 #[path = "support/extraction_comparison.rs"]
 mod extraction_comparison;
@@ -23,7 +23,6 @@ mod table_comparison;
 
 #[global_allocator]
 static ALLOCATOR: benchmark_memory::LimitedAllocator = benchmark_memory::LimitedAllocator;
-const LIMIT: u64 = 10 * 1024 * 1024 * 1024;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Ignore {
@@ -554,6 +553,8 @@ fn main() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
+        .parent()
+        .unwrap()
         .canonicalize()
         .unwrap();
     if raw.get(1).is_some_and(|arg| arg == "--paper-child") {
@@ -710,7 +711,12 @@ fn main() {
         assert!(!rule.matched.is_empty(), "stale ignore pattern");
     }
     let memory_limit_bytes = match std::env::var("PAPER_TEST_MEMORY_LIMIT_BYTES").as_deref() {
-        Err(_) => Some(LIMIT),
+        Err(_) => Some(
+            serde_json::from_str::<serde_json::Value>(include_str!("../../resources.json"))
+                .unwrap()["memory_limit_bytes"]
+                .as_u64()
+                .unwrap(),
+        ),
         Ok("none") => None,
         Ok(value) => Some(
             value

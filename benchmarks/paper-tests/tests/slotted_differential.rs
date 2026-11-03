@@ -64,7 +64,11 @@ fn partition(graph: &mut EGraph, compiler: &mut Compiler, probes: &[String]) -> 
 
 #[test]
 fn frozen_semantic_pairs_have_reference_partitions_and_validated_counts() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
     let directory = root.join("benchmarks/slotted/correctness");
     let mut families = BTreeMap::<String, usize>::new();
     let mut partitions = BTreeMap::new();

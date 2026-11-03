@@ -35,26 +35,65 @@ jobs:
           path: paper/build/semantics.pdf
           if-no-files-found: error
 
-  check:
-    name: Fast checks (paper workload trials skipped)
-    # Full paper workloads run locally; CI always skips those large trials.
-    timeout-minutes: 60
+  nits:
+    name: Nits
     permissions:
       contents: read
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@v6
+      - run: rustup component add clippy rustfmt
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: make nits
+
+  python:
+    name: Python tests
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      # The public CLI integration test builds the real Rust executable.
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: make test-python
+
+  rust:
+    name: Rust tests (paper workload trials skipped)
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: make test-rust
+        env:
+          RUST_TEST_ARGS: --skip paper/
+
+  figures:
+    name: Figure tests
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: rustup component add clippy rustfmt
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: make check
-        env:
-          RUST_TEST_ARGS: --skip paper/
+      - run: make test-figures
 
   codspeed:
     name: codspeed (${{ matrix.mode }})

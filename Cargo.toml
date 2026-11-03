@@ -13,6 +13,7 @@ members = [
   "egglog/wasm-example",
   "egg-math-benchmark",
   "benchmark-memory",
+  "benchmarks/paper-tests",
   "egraph-isomorphism",
   "egglog-experimental",
   "slotted-reference",
