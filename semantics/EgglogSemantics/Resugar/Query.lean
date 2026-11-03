@@ -22,22 +22,27 @@ def replaceChildren (P : Program) (children : List Proof) (parent : Proof) : Opt
 mutual
 
 /-- The children's proofs, then the application's own atom, one edge per child and the edge
-to its root. A value child needs no proof of its own: its edge already ends at it. A
-reflexive proof is not chained in, which keeps lifted proofs small; the claim is the same. -/
+to its root. Every child's proof runs from the matched child `b_i`: an application child's
+proof, which ends at its root `x_i`, is extended along the edge `b_i = x_i` (Edge), and a
+value child is proved by that edge itself, as a value side of a comparison is proved by the
+comparison's own premise (Val). A reflexive proof is not chained in, which keeps lifted
+proofs small; the claim is the same. A bare pattern `e` is the comparison `e = e` with one
+shared derivation, whose proof is `trans(sym(π), π)`. -/
 @[blueprint "def:lift-query"
   (statement := /--
   \begin{mathpar}
-  \ir{App}{e_i\Uparrow\pi_i:x_i=\eval{e_i}\text{ for each application child}\\
-    \pi_0:f(b_1,\ldots,b_n)=f(b_1,\ldots,b_n)\\ \pi'_i:b_i=x_i\ (\forall i)\\ \pi_r:f(b_1,\ldots,b_n)=y}
-    {f(e_1,\ldots,e_n)\Uparrow\kw{trans}(\kw{sym}(\pi_r),\kw{cong}_n(\cdots\kw{cong}_1(\pi_0,\pi''_1)\cdots,\pi''_n))
+  \ir{Val}{v\in\mathit{Var}\cup\mathit{Lit}\\ \pi:s=\eval{v}}{v\Uparrow\pi:s=\eval{v}}
+  \and
+  \ir{Edge}{e\Uparrow\pi:x=\eval{e}\\ \pi':b=x}{e\Uparrow\kw{trans}(\pi',\pi):b=\eval{e}}
+  \and
+  \ir{App}{e_i\Uparrow\pi_i:b_i=\eval{e_i}\ (\forall i)\\
+    \pi_0:f(b_1,\ldots,b_n)=f(b_1,\ldots,b_n)\\ \pi_r:f(b_1,\ldots,b_n)=y}
+    {f(e_1,\ldots,e_n)\Uparrow\kw{trans}(\kw{sym}(\pi_r),\kw{cong}_n(\cdots\kw{cong}_1(\pi_0,\pi_1)\cdots,\pi_n))
       :y=\eval{f(e_1,\ldots,e_n)}}
   \and
   \ir{Compare}{e_1\Uparrow\pi_1:x=\eval{e_1}\\e_2\Uparrow\pi_2:x=\eval{e_2}}
     {(e_1=e_2)\Uparrow\kw{trans}(\kw{sym}(\pi_1),\pi_2):\eval{e_1}=\eval{e_2}}
   \end{mathpar}
-  where $\pi''_i=\kw{trans}(\pi'_i,\pi_i)$ for an application child and $\pi'_i$ for a value
-  child, and a value side of a comparison is proved by the comparison's own premise $x=x$.
-  A premise that is a bare application $e$ is proved by $\kw{trans}(\kw{sym}(\pi),\pi):\eval{e}=\eval{e}$.
   -/)
   (latexEnv := "paperfragment")]
 def queryExpr (P : Program) : Expr → List Proof → Option (Proof × List Proof)
