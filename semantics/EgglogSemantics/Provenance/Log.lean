@@ -22,24 +22,30 @@ def firings (P : Program) (terms : List Term) : List (Nat × Env) :=
 /-- Proofs by the term they prove. -/
 abbrev Facts := List (Term × Proof)
 
-/-- The proof of a premise under `σ`: of a row's instance, of the common value of an
-equality, or of the left side of a disequality. -/
-def premiseProof (facts : Facts) (σ : Env) : Pattern → Option Proof
-  | .expr e => do facts.lookup (← e.eval σ)
-  | .eq a b => do
+/-- The proofs of a query's premises under `σ`, one per equality pattern: of a row's
+instance, or of the common value of an equality. A disequality has no proof and only has to
+hold. -/
+def premiseProofs (facts : Facts) (σ : Env) : Query → Option (List Proof)
+  | [] => some []
+  | .expr e :: ps => do
+      let p ← facts.lookup (← e.eval σ)
+      some (p :: (← premiseProofs facts σ ps))
+  | .eq a b :: ps => do
       let x ← a.eval σ
       let y ← b.eval σ
-      if x == y then facts.lookup x else none
-  | .ne a b => do
+      if x != y then none else
+      let p ← facts.lookup x
+      some (p :: (← premiseProofs facts σ ps))
+  | .ne a b :: ps => do
       let x ← a.eval σ
       let y ← b.eval σ
-      if x == y then none else facts.lookup x
+      if x == y then none else premiseProofs facts σ ps
 
 /-- The terms a firing proves once its premises have proofs: every subterm of every row it
 writes, by a rule node stating that term's reflexivity. -/
 def justify (P : Program) (facts : Facts) (i : Nat) (σ : Env) : Option Facts := do
   let r ← P.rules[i]?
-  let ps ← r.query.mapM (premiseProof facts σ)
+  let ps ← premiseProofs facts σ r.query
   some <| r.actions.flatMap fun a => match a with
     | .expr e => match e.eval σ with
       | some t => t.subtermList.map fun s => (s, .rule ⟨s, s⟩ i σ ps)
@@ -74,16 +80,15 @@ def rowProofs (P : Program) (terms : List Term) : List (Term × Option Proof) :=
   (dataRows P terms).map fun t =>
     (t, (facts.lookup t).bind fun pf => if check P pf == some t then some pf else none)
 
-/-- A checked proof of every row, read off the log `L` of the instrumented run. The proofs
-are the derivations of the checker's rule case whose firings are logged, `L ⊢ π : c`;
+/-- A checked proof of every row, read off the log `L` of the instrumented run: `L ⊢ π : c`
+holds of the checker's derivations whose every rule node is a logged firing, and
 `reconstruct` finds one per row by justifying firings in order. -/
 @[blueprint "def:log-proofs"
   (statement := /--
   \begin{mathpar}
   \ir{Fire}{\mathtt{fire}_i(\sigma(x_1),\ldots,\sigma(x_n))\in L\\
-    r_i=(p_1\land\cdots\land p_m\Rightarrow H)\\
-    L\vdash\pi_j:c_j\quad c_j\in\operatorname{premises}_\sigma(p_j)\ (\forall j)\\
-    c\in\operatorname{facts}_\sigma(H)}
+    L\vdash\pi_j:c_j\ (\forall j)\\
+    P'\vdash\kw{rule}_i(c,\sigma;\pi_1,\ldots,\pi_m):c}
     {L\vdash\kw{rule}_i(c,\sigma;\pi_1,\ldots,\pi_m):c}
   \end{mathpar}
   -/)

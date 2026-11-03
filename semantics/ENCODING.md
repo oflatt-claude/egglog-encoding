@@ -145,8 +145,9 @@ of `SourceProof/Format.lean`: a certificate for the compiled program is a rule n
 `rule_i((t = t), σ; π̄)` stating the reflexivity of a row `t` the firing wrote, or of a
 subterm of one, checked by the same checker as a source certificate (`Provenance.check` is
 `SourceProof.checkIn` on a union-free program, returning the term). A logged firing is
-justified once every premise has a proof: a row premise by the proof of its instance, an
-equality or disequality premise by the proof of the side in question. `reconstruct`
+justified once every equality premise has a proof, a row premise by the proof of its
+instance and an equality by the proof of the common value, and every disequality holds; a
+rule node carries one premise proof per equality pattern. `reconstruct`
 justifies firings one at a time until none is left that can be, so a row gets a proof
 exactly when the checker has a derivation for it whose rule nodes are logged firings.
 Proof lifting (`Resugar/Lift.lean`) turns each such proof into a source proof that

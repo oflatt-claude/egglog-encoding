@@ -11,33 +11,28 @@ namespace Egglog.SourceProof
 /-- Only the monotone constructor source fragment. -/
 def sourceOk (P : Program) : Bool := decide P.Fragment
 
-/-- An equality premise is proved by the equation of its two instances; a bare pattern `e`
-is the paper's `e = e`, so it is proved by its instance's reflexivity. A disequality, which
-only compiled programs use, is proved by its left instance's reflexivity when the two
-instances differ. -/
-def premiseMatches (σ : Env) (p : Pattern) (c : Claim) : Bool :=
-  match p with
-  | .expr e => e.eval σ == some c.lhs && c.lhs == c.rhs
-  | .eq a b => a.eval σ == some c.lhs && b.eval σ == some c.rhs
-  | .ne a b =>
-    a.eval σ == some c.lhs && c.lhs == c.rhs && (b.eval σ).isSome && a.eval σ != b.eval σ
-
+/-- The premise proofs a rule node carries, one per equality pattern in order, claim the
+pattern's two instances; a bare pattern `e` is the paper's `e = e`, so its proof claims the
+instance's reflexivity. A disequality, which only compiled programs use, carries no proof:
+it is a test of the substitution, whose two instances must be bound and differ. -/
 def premisesMatch (σ : Env) : Query → List Claim → Bool
   | [], [] => true
-  | p :: ps, c :: cs => premiseMatches σ p c && premisesMatch σ ps cs
+  | .expr e :: ps, c :: cs =>
+    e.eval σ == some c.lhs && c.lhs == c.rhs && premisesMatch σ ps cs
+  | .eq a b :: ps, c :: cs =>
+    a.eval σ == some c.lhs && b.eval σ == some c.rhs && premisesMatch σ ps cs
+  | .ne a b :: ps, cs =>
+    (a.eval σ).isSome && (b.eval σ).isSome && a.eval σ != b.eval σ && premisesMatch σ ps cs
   | _, _ => false
 
 /-- The facts a firing of `r` under `σ` with the premise claims `premises` may state: `σ`
-binds exactly the query's variables, the premise claims match the patterns in order, and
-the facts are those of the head. Every bound value is a subterm of a premise instance, so
+binds exactly the query's variables, the premise claims match the equality patterns in
+order while every disequality holds, and the facts are those of the head. Every bound value is a subterm of a premise instance, so
 no further support is needed. -/
 @[blueprint "def:proof-facts"
   (statement := /--
   \[
   \begin{aligned}
-  \operatorname{premises}_\sigma(e_1=e_2)&=\{\eval{e_1}=\eval{e_2}\}\\
-  \operatorname{premises}_\sigma(e_1\ne e_2)&=\{\eval{e_1}=\eval{e_1}\}
-    \quad\text{if }\eval{e_1}\ne\eval{e_2}\\
   \operatorname{refl}(t)&=\{\,s=s\mid s\text{ a subterm of }t\,\}\\
   \operatorname{facts}_\sigma(\kw{union}(e_1,e_2))
     &=\{\eval{e_1}=\eval{e_2},\ \eval{e_2}=\eval{e_1}\}
@@ -67,9 +62,10 @@ def ruleFacts (r : Rule) (σ : Env) (premises : List Claim) : Option (List Claim
   \and
   \ir{Rule}{r_i=(p_1\land\cdots\land p_n\Rightarrow H)\\
     \sigma:\operatorname{FV}(p_1\land\cdots\land p_n)\to\mathit{Term}\\
-    P\vdash\pi_j:c_j\\c_j\in\operatorname{premises}_\sigma(p_j)\ (\forall j)\\
+    P\vdash\pi_j:\eval{e}=\eval{e'}\text{ for the $j$th equality pattern }e=e'\\
+    \eval{e}\ne\eval{e'}\text{ for each disequality pattern }e\ne e'\\
     c\in\operatorname{facts}_\sigma(H)}
-    {P\vdash\kw{rule}_i(c,\sigma;\pi_1,\ldots,\pi_n):c}
+    {P\vdash\kw{rule}_i(c,\sigma;\pi_1,\ldots,\pi_m):c}
   \end{mathpar}
   -/)
   (latexEnv := "paperfragment")]

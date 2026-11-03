@@ -65,7 +65,7 @@ private def three : Term := .lit (.int 3)
 /-- The firing that built `T(3)` also states `3 = 3`. -/
 private def threeProof : Proof := .rule (refl three) 0 [] []
 private def rewritten : Proof :=
-  .rule (refl (table 2)) 1 [("x", three), ("y", .lit (.int 2))] [stored, goal, threeProof]
+  .rule (refl (table 2)) 1 [("x", three), ("y", .lit (.int 2))] [stored, goal]
 
 #guard check rewriting stored == some (table 3)
 #guard check rewriting threeProof == some three
@@ -74,10 +74,10 @@ private def rewritten : Proof :=
 #guard (check rewriting (.rule (refl (table 2)) 1 [] [])).isNone
 -- The disequality must hold between the bound values.
 #guard (check rewriting (.rule (refl (table 2)) 1 [("x", .lit (.int 2)), ("y", .lit (.int 2))]
-  [stored, goal, .rule (refl (.lit (.int 2))) 0 [] []])).isNone
+  [stored, goal])).isNone
 -- Every node is checked, not only the root.
 #guard (check rewriting (.rule (refl (table 3)) 1 [("x", three), ("y", .lit (.int 2))]
-  [.rule (refl (table 2)) 0 [] [], goal, threeProof])).isNone
+  [.rule (refl (table 2)) 0 [] [], goal])).isNone
 
 -- The proofs are read off the log: without it no row has one.
 private def uninstrumented : Option FDatabase :=
