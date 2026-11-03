@@ -110,12 +110,12 @@ identity out of the data entirely.
 - Executable: `difftest congruence 64` passes all 101 corpus cases; `difftest provenance
   64` and `difftest resugar 64` pass all 101 in about three seconds each; the 14
   hand-written programs under `tests/` have `.congruence.egg`, `.provenance.egg` and
-  `.proofs.txt` snapshots (`difftest egg 64`). `scripts/compiled-difftest.sh` runs the
+  `.proofs.txt` snapshots (`difftest egg 64`). `semantics/compiled-difftest.sh` runs the
   compiled programs in Rust egglog, with generated `@` names spelled `at_`, and compares
   the view relations' row counts, which are the numbers of canonical e-nodes and
-  independent of representative choice: 101 of 101 agree. `scripts/difftest.sh` (source
+  independent of representative choice: 101 of 101 agree. `semantics/difftest.sh` (source
   programs, Lean against egglog) passes 101 of 101, and the Rust checker judges the 120
-  exported source certificates like the Lean checker (`make lean-certificate-test`).
+  exported source certificates like the Lean checker (`make -C semantics lean-certificate-test`).
 - Interpreter: `execRunRules` matches every rule against the pre-state, deletes every
   firing's rows, then unions every firing's writes. The relational runtime
   (`Congruence/Relational.lean`, structural identity only) agrees with the general
@@ -192,7 +192,7 @@ inserts completed rebuilding after each scheduled run. `Tests.LeaderGrowth` reco
 the nested-head growth trace and proves that its program violates `NoSaturate`.
 No nested schedules are needed for the paper's bounded source fragment.
 
-`make -k lean-check lean-difftest` remains blocked on the older `SourceReads` and
+`make -C semantics -k lean-check lean-difftest` remains blocked on the older `SourceReads` and
 interpreter proofs. These are outside the compiler theorem's import closure.
 `make check`, retried with serial tests and CPU affinity, passes the nits and all
 172 Python tests; Rust tests still encounter the host thread limit in explicit
@@ -728,7 +728,7 @@ listing each tree's nodes in postorder with shared subtrees, and
 Rust egglog's proof checker. The fixtures in
 [Resugar/Fixtures.lean](EgglogSemantics/Resugar/Fixtures.lean) pair lifted proofs with
 hand-written proofs that both checkers must judge alike; their export is committed as
-`egglog/tests/lean-certificates.json`, and `make lean-certificate-test` also exports and
+`egglog/tests/lean-certificates.json`, and `make -C semantics lean-certificate-test` also exports and
 checks the whole corpus.
 
 ## Proof status
@@ -786,7 +786,7 @@ checks data preservation and every retained function entry's extracted proof.
 proves `lift_sound` for lifted proofs. Every retained row of every in-domain corpus
 program lifts to a proof the source checker accepts, and Rust egglog's checker accepts
 the same proofs and rejects the same hand-written counterexamples
-(`make lean-certificate-test`).
+(`make -C semantics lean-certificate-test`).
 
 Source merge proofs are deferred: equality can produce another spelling of one
 stored function row without establishing a second input to its merge body. The
@@ -803,7 +803,7 @@ See [Source.lean](EgglogSemantics/Source/Domain.lean) for the exact conditions.
 
 ## Validation
 
-`make lean-check` builds the library, audits for proof holes, and runs the corpus gates.
+`make -C semantics lean-check` builds the library, audits for proof holes, and runs the corpus gates.
 The congruence gate compares every pair of held source terms against the compiled
 program's reading, and checks that execution with and without equality reasoning agrees.
 The provenance gate checks data preservation
@@ -817,7 +817,7 @@ hand-written `.egg` programs under [`tests/`](tests), which `Program.ofEgg` pars
 egg gate (`difftest egg`) checks each of those against its committed snapshots: the
 congruence encoding in `<name>.congruence.egg`, the provenance encoding in
 `<name>.provenance.egg`, and the lifted source proofs in `<name>.proofs.txt`.
-`make lean-update-egg-snapshots` rewrites them after an intended change. A program that
+`make -C semantics lean-update-egg-snapshots` rewrites them after an intended change. A program that
 unions a term with its own subterm does not saturate in the model, whose classes are sets
 of explicit spellings, so the hand-written programs evaluate into separate constructors
 instead.

@@ -1209,214 +1209,72 @@ reach one value. The root keeps the frame's spelling (C11).
 
 # Against the reference
 
-The treatment definitions in `slotted/treatments.py` are shared by the standalone
-benchmark (`slotted/eval.py`) and correctness runner (`slotted/check.py`). They
-specify the engine, matcher, substitution policy, CLI flags, exact comparison
-partner, and timing baseline:
+The slotted experiments use the repository's shared treatment table in
+`benchmarking/engines.py` and figure catalog in `figures/catalog.json`. Native
+algorithms live in `slotted-reference`; the executable drives a frozen workload,
+and the common Python runner measures its whole-process runtime and peak RSS.
+The root README documents the complete test and figure commands.
 
-| Treatment | Behavior | Role |
+| Treatment | Behavior | Correctness oracle |
 | --- | --- | --- |
-| `encoding` | Egglog's slotted encoding with slot aliasing and snapshot substitution | Must match `ref-multi` |
-| `encoding-no-aliasing` | Egglog's nested compatibility mode with snapshot substitution | Must match `ref-nested-snapshot`; timed against `ref-nested` |
-| `ref-multi` | Reference multipattern matcher with snapshot substitution | Exact reference and timing baseline |
-| `ref-nested-snapshot` | Reference nested matcher with snapshot substitution | Exact reference for compatibility checks |
-| `ref-nested` | Original nested matcher with syntactic substitution | Timing baseline; graph equality is diagnostic |
+| `slotted` | Full slot aliasing, snapshot substitution | Class/node counts and probe partitions against `slotted-ref-multi` |
+| `slotted-no-aliasing` | Nested compatibility, snapshot substitution | Class/node counts and probe partitions against `slotted-ref-nested-snapshot` |
+| `slotted-ref-multi` | Reference multipattern matching, snapshot substitution | Native representation checks, counts and prescribed targets |
+| `slotted-ref-nested-snapshot` | Reference nested matching, snapshot substitution | Matched-policy compatibility oracle |
+| `slotted-ref-nested` | Reference nested matching, syntactic substitution | Paper timing baseline with prescribed target checks |
 
-Both commands use the same generated programs and rewrite budgets:
+The 23 benchmark pairs are checked-in source `.egg` programs and native `.ref`
+specifications. The array inputs retain 0–10 extra function parameters, four
+functions, two dimensions and six rewrite iterations. SDQL retains all ten
+kernel/phase combinations, the full 44-rule library and artifact budgets. Two
+logic fixtures retain their source schedules. Routine tests and figures do not
+regenerate these inputs. Provenance and explicit reproduction live under
+`benchmarks/reproduction/slotted/`.
 
-```bash
-python3 slotted/eval.py array
-python3 slotted/check.py array
-python3 slotted/check.py sdql --kernel mmm_sum --phase 1st
-python3 slotted/check.py logic
-```
+The normal Rust workspace suite tests the actual benchmark bytes and schedules.
+Counts are taken after the positive run and before constructing the target term.
+The remaining source checks then run, including zero-round maintenance where the
+fixture prescribes it. Reference goals use lookup and require equivalence to the
+initial term; they do not insert the expected target before rewriting. Unsupported
+nested logic patterns and resource exclusions are recorded in the one shared
+`benchmarks/ignore.json`; cap-specific exclusions do not suppress uncapped runs.
 
-Omitting the study selects all array, SDQL, and first-order logic workloads.
-The array suite fixes the paper's Figure 8 sweep at 0–10 additional function
-parameters, four functions, two array dimensions, and six rewrite iterations;
-the [artifact runner](https://github.com/memoryleak47/slotted-egraphs-artifact/blob/83f2e5b/functional-array-language/run.py#L100-L106)
-uses the same parameter range. These are workload sizes, not random seeds.
-The SDQL suite selects Table 1's ten kernel/phase combinations.
-`--rounds` overrides rewrite iterations, including an explicit zero. The default
-budgets come from the paper's artifact or the logic fixture. Unsupported nested
-patterns are reported explicitly; supported treatments still run and must pass.
+Three semantic choices make a matched-policy size comparison meaningful:
 
-**Benchmarking.** `eval.py` builds release binaries and collects fresh wall-clock
-timings. It has no cache and does not export graphs or run isomorphism search.
-Its two tables show `egglog` versus `ref-multi`, then `egglog-no-aliasing` versus
-`ref-nested`. CLI selectors remain `encoding` and `encoding-no-aliasing`.
-The default is one sample per treatment; `--samples N` reports the median of N
-fresh samples. Each timed process includes Rust source transformation, execution,
-and its goal check. Completed runs retain their elapsed time even if the goal
-was missed, with failed goals listed after the tables. A cell says `timeout` if
-any of its samples exceeded the limit. `ref-nested-snapshot` is available through
-`--treatments` for diagnostic timings but is not substituted for the original
-nested baseline. These scripts are independent of the proof benchmark cache,
-report UI, and nightly automation.
+- Snapshot substitution reads the graph at the start of a round and chooses a
+  smallest term with the encoding's canonical constructor spelling as tie-break.
+  The native `SnapshotSubst` uses the same constructor names from the frozen
+  `ctor` lines. Reconstruction freshens bound occurrences before applying the
+  free-slot renaming, preventing capture of an invocation's free slot.
+- The shape walk keeps one row per shape per class, including images under a
+  child's symmetry, matching native hash-consing.
+- Full multipattern matching may identify redundant slots. Nested compatibility
+  instead tracks a match-wide disequality clique over the outer invocation and
+  entered nodes' redundant and bound slots. Joins, symmetry resolution and
+  refinement all respect that clique; stored sharing remains valid.
 
-**Correctness.** `check.py` runs every supported treatment, including the snapshot
-nested reference. Each gets a goal check and a separate input-only graph export
-at the same rewrite budget. `verify.py` validates raw sizes and calls the Rust
-`egraph-isomorphism` crate to find an isomorphism and independently verify its witness.
-The two required pairs need both equal class/node counts and a verified witness;
-other encoding/reference pairs are diagnostic. Counts or probe partitions cannot
-establish equality or override a rejected witness. Missing counts, invalid graph
-exports, and inconclusive searches fail a required comparison.
+Syntactic substitution selects the class's stored syntactic term at application
+time. It is the artifact's SDQL choice and differs from snapshot substitution.
+The paper timing pair is `slotted-no-aliasing` versus `slotted-ref-nested`;
+its two graphs need not have equal sizes. Each side must establish its prescribed
+target. The array experiment uses explicit let-rewriting instead of direct beta
+substitution, preserving the artifact's rule selection.
 
-Both graphs reach the checker as `egraph-serialize` JSON with an optional
-`slotted` annotation object. Both engines export this format directly. The
-[Rust exporter](export.rs) reads native encoding tables, validates their invariants,
-and reconstructs the logical graph. Python passes the document unchanged to the
-checker; operator correspondences come from the fixture's `.ref` metadata. See the
-[checker API](../../../egraph-isomorphism/src/lib.rs) for the format and comparison
-policy, including slot renaming, symmetry groups, and witness verification.
+The 122 frozen differential cases separately preserve named matcher, binder,
+substitution, guard and aliasing regressions. They compare probe class partitions
+with `renaming-=`, validated logical counts, and explicit expected outcomes. The
+known scope-erasing encoding limitation pins both differing answers and fails if
+that record becomes stale. Export validation still rejects malformed slot maps,
+groups and raw edges. Equal counts and selected probe partitions do not establish
+an e-graph isomorphism; the paper harness makes no such claim or witness obligation.
+The independent `egraph-isomorphism` library retains its own tests and inspection
+API.
 
-Encoding nodes are counted directly from native constructor table sizes, including
-the variable row and excluding auxiliary tables. This raw count must agree with
-the exported graph. Reconstruction preserves every row, even when two rows
-translate to identical nodes: retiring duplicates is the encoding's responsibility.
-Reference counts are collected directly before graph dumping and checked against
-the parsed dump. Counts remain available when a symmetry group exceeds the export element
-limit or a graph dump times out. A count mismatch rejects the comparison before
-isomorphism search. Unexpected exporter or checker errors propagate. The regression suite also
-checks class reconstruction against an independent count computed inside egglog.
-
-Each treatment's goal is checked independently. A missed goal fails the command
-even if the graphs agree. Reference timeouts are explicitly unverified and do not
-produce a failure banner; they cannot excuse an encoding error or a known mismatch.
-The correctness tables show sizes, goals, and required versus diagnostic verdicts.
-An error banner and nonzero exit status identify failed goals, missing results,
-count mismatches, and unsuccessful required isomorphism checks. Results are kept
-only in memory, with each verdict attached to the actual pair of observations.
-
-**Execution.** Both commands are serial by default. `--jobs 4` runs up to four
-workloads concurrently in separate processes; each worker uses the same programs
-and treatment configuration, and output retains workload order. Parallel timings
-include CPU and memory contention; use `--jobs 1` for serial measurements. Progress
-goes to stderr, with one dot per completed treatment/sample and `(Running ...)`
-messages identifying slow phases. Tables go to stdout and can be redirected to a
-file. `--timeout` defaults to 300 seconds per engine subprocess. Rust isomorphism
-search uses work limits. Graph reconstruction and input/witness validation have
-no wall-clock timeout, so correctness checks can take longer than the timed runs.
-`--group-limit` on `check.py` bounds the actual number of symmetries exported per
-reference class (default 100,000, including identity). The exporter reads the
-reference's stored generators and enumerates their complete group; it does not
-search every possible permutation of the live slots. Wide classes with small
-groups remain cheap. Exceeding the limit rejects the entire graph export, so a
-partial group can never certify equality. Direct counts remain available, and
-required comparisons report the missing graph as inconclusive. This export limit
-does not affect the timing runner. Graph collection stops at the requested rewrite
-budget; it does not execute an extra round to probe saturation.
-
-Three things had to
-be made the same, each established on a minimal case the harness keeps:
-
-- *Substitution picks the same term.* `beta` substitutes into one term of the body's
-  class, and which term decides which rows the graph holds from then on. The encoding
-  takes the smallest term, ties broken by a canonical spelling (`egglog-experimental/src/slotted/runtime/subst.rs`,
-  `cheapest`), from the e-graph as the round began, since `beta/apply` runs in one
-  apply phase whose reads are that snapshot. The parsed terms and substitution results
-  belong to that execution state and are shared by its workers and the two result
-  primitives. A new phase starts with an empty cache, including after `push`/`pop`
-  or an e-graph clone; constructor, class-slot, and layout changes are all observed.
-  The crate's own methods read the graph at
-  application time, after the round's earlier unions, and its default takes the node a
-  class was created with -- history the encoding cannot replay. So the oracle harness
-  substitutes as the encoding does: `slotted/xmulti`'s `SnapshotSubst` takes the
-  smallest term per class at each round's start, the same tie-break over the same
-  constructor names (`ctor` lines in the spec, from `workloads.py`), and is the harness's
-  default (`XMULTI_SUBST=syntactic` restores the crate's). Reconstructing that term
-  freshens each node's bound occurrences before applying its free-slot renaming,
-  so a stored binder name cannot capture an invocation's free slot.
-  Without matching selection, ΣMMM's second
-  phase ended with 71 classes against the
-  reference's 75, eight reference classes split; with it the partitions agree.
-- *One row per node.* The shape walk folds a row and its image under a symmetry of a
-  child (*One row per shape per class*), as the reference's hashcons does. Before, the
-  encoding kept both -- an extra `sum` row per such reading on MMM's first phase -- and
-  `cheapest` could pick a spelling the reference never holds.
-- *A redundant slot unifies, on both sides.* `let x = var(r) in var(a)` sits in the
-  class of `var(a)` carrying `r`, which its class does not. The frame reads the slot as
-  an occurrence like any other (C4), so on `binop f (var a) (var b)` the pattern
-  `(Binop f (Let e1 $x e2) (Let e1 $x e3))` finds `e1` with the two lets' redundant
-  slots read as one -- soundly, since the class's meaning does not depend on the slot.
-  The multipattern matcher's `unify` and `final_refine` do the same. The crate's nested
-  matcher, the one the paper's experiments ran, gives such a slot a fresh name on every
-  use and finds no `e1`, which is why `ref-nested` holds fewer `sdql-let` rows than
-  either. The encoding follows MultiPattern's treatment of redundant slots.
-
-With the three in place, ΣMMM's and MMM's first and second phases have verified
-isomorphism witnesses against `ref-multi`. The former `same rows` label was only a
-probe/count diagnostic and could miss different symmetry groups; those records must
-be recomputed. TTM's second phase remains unverified:
-`ref-multi` did not finish it within the artifact's 300 s in the recorded evaluation.
-
-**The nested performance baseline.** `treatments.py` explicitly selects `snapshot` for
-`ref-multi` and `ref-nested-snapshot`, and `syntactic` for `ref-nested`, overriding ambient `XMULTI_SUBST` on
-both the timed and counting runs. The binary reports the selected policy and each
-evaluation row records it. Syntactic substitution does not build our extraction
-snapshots. The `ref-nested` results are diagnostic; their counts and graph are not expected
-to match the encoding, since both the matcher and substitution policy differ.
-
-This follows the artifact at commit `83f2e5b`: the
-[SDQL beta rule](https://github.com/memoryleak47/slotted-egraphs-artifact/blob/83f2e5b/sdql/slotted/src/rewrite.rs)
-uses direct term substitution, and its `EGraph::new()` selects
-[`SynExprSubst`](https://github.com/memoryleak47/slotted-egraphs-artifact/blob/83f2e5b/sdql/slotted/slotted-egraphs/src/egraph/mod.rs).
-That method reconstructs the stored syntactic term; the library also offers
-`ExtractionSubst`, which chooses a smallest AST, but the SDQL runner does not select
-it. The SDQL runner separately extracts the final optimized program with `SdqlCost`.
-The paper's egg/SDQL baseline uses
-[`BetaExtractApplier`](https://github.com/memoryleak47/slotted-egraphs-artifact/blob/83f2e5b/sdql/baseline/src/sdqlsubstitute.rs)
-on cached `beta_extract` expressions, so that side does use extraction-based substitution.
-The array experiment uses explicit let-rewriting instead of direct substitution,
-as stated in the paper's footnote 4. We retain the pinned modern reference revision
-for both matchers, so this baseline reproduces the substitution choice, not the
-entire historical implementation.
-
-**Nested compatibility.** To compare exact graphs with the nested matcher, run:
-
-```sh
-python3 slotted/check.py array
-```
-
-The compiler emits `nested-atom` instead of `atom` for query patterns. This adds
-one match-wide disequality clique whose members are the outer class's live slots
-and every matched node's slots outside that node's class slot set. These are the
-origins of the concrete names the nested matcher assigns: it preserves the outer
-invocation and freshens each entered node's redundant and bound slots. Child edges
-transport names already in that clique; they do not introduce another member for
-the same name. Pattern literals retain their ordinary distinctness constraint and
-can name one of these slots.
-
-Every join, symmetry resolution, and refinement must respect the extra clique.
-Thus the mode prevents new aliases both when joining repeated pattern variables
-or literals and when enumerating optional refinements. Merely disabling final
-refinement would still permit aliases forced during a join. Sharing already present
-in a stored edge remains valid. The mode supports a single nested left-hand pattern;
-additional constructor patterns in `:when` are rejected. Conditions still apply,
-and checks use the same aliasing constraints.
-
-Compatibility evaluation uses the same snapshot substitution on both sides, so
-representative selection does not confound the matcher comparison. The
-`encoding-no-aliasing` row requires equal counts and verified isomorphism against
-`ref-nested-snapshot`. The unrestricted `encoding` row requires the same evidence
-against `ref-multi`. A default invocation runs all five systems together, checking
-both pairs independently. Other cross-comparisons are diagnostic: different aliasing
-or substitution policies can produce different graphs. No pair accepts an
-inconclusive isomorphism as agreement. The evaluator's `--nested-compat` flag remains
-a shorthand that replaces selected `encoding` and `ref-nested` sides with
-`encoding-no-aliasing` and `ref-nested-snapshot`, respectively. The compiler's
-`--slotted-no-aliasing` flag continues to control how individual programs are compiled.
-The registered `nested-compatibility` check covers optional and forced aliases,
-sibling matches, bound slots, stored sharing, and class symmetries against both
-reference matchers.
-
-**Rounds.** The evaluation runs the paper's budget on every side; the reference stops
-early when a round applies nothing new and reports that. Encoding graph collection
-stops at the requested budget without a further user-rule round; its saturation
-status is left unknown. A timeout or missing graph leaves equivalence inconclusive;
-it is never evidence of saturation or graph equality. Timings include source
-transformation and evaluation in one process.
+A round applies every user rule once on both sides. A reference may stop early
+when no rule changes the graph; the encoding does not execute an extra user round
+to observe saturation. Neither a timeout nor a missing observation establishes
+saturation or equivalence. Shared reports keep failures, exclusions and missing
+conditions explicit.
 
 # Where the pieces live
 
@@ -1424,24 +1282,19 @@ transformation and evaluation in one process.
 | --- | --- |
 | `egglog-experimental/src/slotted/LANGUAGE.md` | the source language: every form and why it exists |
 | `egglog-experimental/src/slotted/` | the Rust source-to-source compiler, used by `--slotted` |
-| `slotted/reference.py` | fixture syntax, language metadata, and translation to the reference |
-| `slotted/test_program.py` | Rust CLI adapter and observer rules for differential tests |
-| `egglog-experimental/src/slotted/runtime/` | matching frames, substitution, renaming and group algorithms, and their primitive registration |
-| `egglog-experimental/src/slotted/export.rs` | native logical graph export, raw row counts, and encoding invariant validation |
-| `egglog-experimental/src/slotted/extract.rs` | source-tree extraction, slot names, and binder reconstruction |
-| `slotted/benchmarks/` | array generator, SDQL artifact inputs, and logic case studies |
-| `egglog-experimental/tests/slotted/` | regression fixtures and compiler snapshots |
-| `slotted/checks/` | language, frontend, maintenance, and evaluation regression checks |
-| `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
-| `slotted/xmulti/` | the reference oracle, pinned to an exact revision |
-| `slotted/benchmarks/sdql.py` | the paper's ten SDQL workloads from the artifact: translation, Table 1's numbers, the generated tests |
-| `slotted/eval.py` | standalone timing CLI and tables; fresh samples without graph checking |
-| `slotted/check.py` | standalone correctness CLI; all supported treatments, counts, and required isomorphism checks |
-| `slotted/treatments.py` | shared treatment definitions, exact comparison pairs, and timing baselines |
-| `slotted/workloads.py` | shared workload selectors, source programs, and reference specs for both runners |
-| `slotted/runner.py` | builds, progress, subprocess execution, and serial/parallel workload execution |
-| `slotted/verify.py` | untimed graph export, independent raw counts, and calls to the Rust checker |
-| `egraph-isomorphism/` | reusable Rust library and CLI for annotated `egraph-serialize` graphs |
+| `benchmarks/reproduction/slotted/` | pure fixture renderers, artifact provenance and explicit regeneration |
+| `benchmarks/slotted/inputs/` | 23 frozen benchmark `.egg`/`.ref` pairs |
+| `benchmarks/slotted/correctness/` | 122 frozen differential semantic pairs |
+| `egglog-experimental/src/slotted/runtime/` | matching frames, substitution, renaming and group algorithms |
+| `egglog-experimental/src/slotted/export.rs` | logical counts, graph export and invariant validation |
+| `egglog-experimental/src/slotted/extract.rs` | source-tree extraction and binder reconstruction |
+| `egglog-experimental/tests/slotted/` | language examples, regression fixtures and compiler snapshots |
+| `egglog-experimental/tests/slotted_differential.rs` | native semantic comparisons over frozen regression pairs |
+| `egglog-experimental/tests/paper.rs` | shared paper workload correctness and native-reference harness |
+| `slotted-reference/` | pinned native algorithm library and workload-only driver |
+| `benchmarking/` | shared collection, cache, reporting and figures for all three experiment families |
+| `figures/catalog.json` | figure membership, timed treatments, required checks and schedules |
+| `egraph-isomorphism/` | independent annotated-graph library and inspection CLI |
 
 The shared and per-carrier maintenance rules live in the Rust compiler's
 `templates/` directory. Constructor-dependent rules are generated from the declared

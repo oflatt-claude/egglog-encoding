@@ -1,92 +1,140 @@
 # Egglog encoding
 
-This repository is a workspace for iterating on proof and term encoding changes
-across `egglog` and `egglog-experimental`.
-
-The goal is to make proof generation work with a reasonable slowdown before
-porting the winning strategy back upstream. The current success target is:
-
-- proof-mode wall time is under `2x` the non-proof baseline; and
-- that claim is supported by benchmark reports with confidence intervals, not
-  just point estimates.
+This workspace develops three egglog encodings for the paper: disequality,
+congruence/term encoding and proofs, and slotted e-graphs. Their experiments use
+one catalog, one correctness pipeline, and one cached benchmark runner.
 
 ## Daily workflow
 
-Run the complete Python and Rust validation suite through the root Makefile:
-
 ```bash
-make check
+make check                 # complete Python, Rust, native-reference, and Vega validation
+./bench.py figures         # all five paper figures; ten uncapped observations per condition
+./bench.py example.egg --treatment term --compare-treatment off
 ```
 
-Hygiene checks and tests can be run independently. `nits` never runs tests:
+`make nits` runs hygiene checks independently. `make check` prepares the
+unchanged author-supplied disequality drivers,
+then uses normal Cargo workspace tests for semantic and native-reference checks.
+The workspace phase keeps the small native-reference cases checked; a second
+Cargo invocation runs every enabled paper trial with the reference feature
+settings used for benchmarks. Both phases belong to the complete command.
+Use `uv run --locked pytest` and `cargo test` directly for focused reruns.
+Lean and the semantics paper retain an independent workflow under
+`semantics/Makefile`.
+
+For a disposable three-round verification preview:
 
 ```bash
-make nits           # lockfile, formatting checks, linting, and type checking
-make test           # Python, Rust, and slotted reference/differential tests
-make python-check   # complete Python validation
-make rust-check     # complete Rust validation
-make python-nits    # Python hygiene only
-make rust-nits      # rustfmt check, Clippy, and doc-link check only
-make proof-tests    # proof-focused subset of the workspace tests
-make benchmark-smoke
-make nightly        # benchmark the nightly endpoints and publish nightly/output/
-make nightly-local  # the same run at one round, for trying it out
-make update-snapshots
-make format         # apply Ruff and rustfmt formatting
+./bench.py figures --rounds 3 --memory-limit \
+  --report /tmp/egglog-paper-preview.jsonl --output-dir /tmp/egglog-paper-preview
 ```
 
-`make benchmark-smoke` uses a one-round comparison on small Math and disequality
-fixtures, not the full benchmark suite, and writes its disposable
-JSONL report to `/tmp/egglog-encoding-bench-smoke.jsonl`. Override
-`BENCHMARK_SMOKE_REPORT` to choose another path. `make update-snapshots` accepts
-intentional changes to Markdown reports and slotted compiler snapshots; review
-the resulting diff before committing it.
+Preview observations use the existing local 10 GiB allocator/address-space cap.
+The cap bounds address space; peak RSS is measured separately. The comparison
+CLI defaults to the cap, while figures default to uncapped collection. Cap and
+execution settings are exact cache coordinates, so a preview cannot populate
+uncapped paper measurements. Cached reruns collect only missing observations.
 
-Slotted case studies have standalone runners:
+[`benchmarks/ignore.json`](benchmarks/ignore.json) is the shared exclusion policy
+for Rust tests, comparisons, and figures. Each entry records a reason and
+evidence; optional treatment/encoding selectors narrow it. A resource entry
+with `memory_limit_bytes` applies only when the selected cap is no larger than
+that recorded bound. It never excludes an uncapped run. Entries without a cap
+selector apply across profiles. Excluded conditions remain visible in reports and figure
+coverage, and are never observations or successful correctness checks.
+
+Known table-size bugs use `kind: "expected-failure"` with an issue and exact
+`expected_table_sizes` pairs in `[ordinary, candidate]` order. Rust still executes
+the case and checks every other table, output, extraction and proof. An unexpected
+pass or a different failure fails the suite. The affected condition cannot supply
+verified figure measurements, even if older successful timing rows are cached.
+The current count discrepancy is tracked in
+[issue #164](https://github.com/saulshanabrook/egglog-encoding/issues/164).
+
+The normal Rust paper suite uses the local cap. To run that same suite uncapped:
 
 ```bash
-python3 slotted/eval.py array   # fresh timings; no cache or graph checks
-python3 slotted/check.py array  # all treatments, counts, and exact isomorphism
+PAPER_TEST_MEMORY_LIMIT_BYTES=none make check
 ```
 
-Both use the same workload selectors and [treatment definitions](slotted/treatments.py).
-`array` runs Figure 8's fixed sweep of 0–10 extra function parameters;
-`sdql` runs Table 1's ten kernel/phase combinations. Omit the study to run all
-case studies. See
-[the reference comparison documentation](egglog-experimental/src/slotted/ENCODING.md#against-the-reference)
-for substitution policies and comparison requirements.
+The final paper recipe is `./bench.py figures`: the catalog supplies ten
+observations, a 500-second timeout, and baseline-only cohort selection. The
+final collection uses a clean environment with allocator and thread overrides
+unset; retain its machine/environment description with the data. The
+three-round preview is implementation validation and does not replace paper
+figures or performance numbers. Outputs are `disequality-runtime`,
+`math-runtime`, `corpus-congruence-cdf`, `corpus-proofs-cdf`, and
+`slotted-runtime`, each in PDF/SVG/PNG form.
 
-Case-study programs live in `egglog-experimental/benches/slotted/`; regression
-fixtures, shared languages, and compiler snapshots live in
-`egglog-experimental/tests/slotted/`. Artifact inputs and generators live in
-[`slotted/benchmarks/`](slotted/benchmarks/). `make test` (also part of `make check`)
-runs the Rust regressions, reference comparisons, and differential fuzz tests,
-including the benchmarks' shared generators. The
-[source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also
-included in the Rust documentation for `egglog_experimental::slotted`.
+## Experiment organization and correctness
 
-The reusable Rust checker accepts `egraph-serialize` JSON from either engine,
-with optional annotations for slotted graphs:
+| Source | Responsibility |
+| --- | --- |
+| [`egglog/`](egglog/) and [`egglog-experimental/`](egglog-experimental/) | Integrated engine and encoding implementations, with their Rust tests |
+| [`figures/catalog.json`](figures/catalog.json) | Workload globs, timed treatments, correctness-only `checks`, rounds and timeout |
+| [`benchmarking/`](benchmarking/) | Runner, cache, reports, figures and nightly collection |
+| [`benchmarking/native_memory.py`](benchmarking/native_memory.py) | Startup policy shared with independent reproduction tools; Rust enforces the cap |
+| [`benchmarks/`](benchmarks/) | Frozen disequality, published-corpus and slotted inputs, provenance, and shared exclusions |
+| [`benchmarking/tests/`](benchmarking/tests/) | Python tooling tests |
+| [`egglog-experimental/tests/paper.rs`](egglog-experimental/tests/paper.rs) | Actual catalog inputs/schedules, source-visible per-table sizes, stable outputs, exact extracted terms/variant order/costs, strict proof checks and family oracles |
+| [`egglog-experimental/tests/slotted_differential.rs`](egglog-experimental/tests/slotted_differential.rs) | 122 frozen semantic differential cases, including guards, aliases, substitution, and a pinned known limitation |
+| [`slotted-reference/`](slotted-reference/) and [`egg-math-benchmark/`](egg-math-benchmark/) | Native algorithms shared by Rust tests and workload drivers |
+| [`benchmark-memory/`](benchmark-memory/) and [`egraph-isomorphism/`](egraph-isomorphism/) | Allocator support and the independent graph-isomorphism library/CLI |
+| [`benchmarks/reproduction/`](benchmarks/reproduction/) | Explicit historical acquisition and fixture regeneration, outside routine tests/figure collection |
+| [`semantics/`](semantics/) and [`paper/`](paper/) | Independent Lean model, differential-test scripts and its formal-semantics writeup |
+
+The paper test target compares ordinary, term-encoded and strict proof-testing
+runs of each enabled input. It excludes internal encoding/proof tables from the
+size map. Extraction checks compare the actual returned terms and costs, and
+strict extraction verifies certificates for those returned terms in order,
+including a checked connection to the requested source root. Supplementary
+extraction checks use a clone and do not mutate the workload being observed.
+One explicit normalization handles equal-cost best-term ties: a different single
+best expression is accepted only when its reported cost matches and the alternate
+expression is checked equal to the requested root in the ordinary configuration
+at that command boundary, or by a checked source proof in strict mode.
+Strict mode proves that equality. The suite reports each accepted tie and its
+count; raw outputs and certificate right-hand sides remain exact. Variant order,
+variant counts and costs are not normalized. Paper inputs must expose their
+extractions at top level so every extraction is intercepted.
+
+Native Math uses the frozen twelve-round witness, its eleven-round negative
+boundary, and logical constructor/class counts. Native disequality checks the
+prescribed contradiction against the four original drivers. Slotted tests use
+matched-policy class/node counts; timing pairs also check their prescribed
+targets. Syntactic and snapshot substitution can produce different graphs.
+Count equality is a size check and does not establish graph isomorphism.
+Matched snapshot comparisons require their encoded count oracle; shared
+exclusions must name both members when that oracle is unavailable.
+The second-phase BATAX multipattern pair is deferred across profiles after a
+fresh local-cap failure; uncapped validation is unestablished. Its nested timing
+and matched-count configurations remain separate checks on the full input.
+The full parameter-analysis NEE strict-proof configuration exceeds the local
+cap even in a fresh process and is explicitly deferred across profiles; it has
+not been certified uncapped. The proofs-off figure is unaffected. General NEE/EE
+pass composition is checked in the smaller semantic cases, which do not
+certify that excluded full workload. Math12 strict modes are excluded only under
+the local cap and have separately passed the actual uncapped correctness trial.
+
+The slotted benchmark suite has 23 frozen `.egg`/`.ref` pairs: ten full-rule SDQL
+kernel/phase inputs, eleven array parameter counts, and two logic fixtures.
+Its 122 small semantic pairs live beside them in `benchmarks/slotted/correctness`.
+Routine commands read these bytes. Regeneration is explicit:
 
 ```bash
-cargo run -p egraph-isomorphism -- left.json right.json
+python -m benchmarks.reproduction.slotted.generate --check
+python -m benchmarks.reproduction.slotted.generate_differential --check
 ```
 
-It prints a JSON verdict and a verified isomorphism witness.
-See the crate's [API documentation](egraph-isomorphism/src/lib.rs) for the format
-and comparison policy. `slotted/check.py` builds and invokes this checker.
+The reusable `egraph-isomorphism` library/CLI retains its independent tests. Paper
+correctness does not require an isomorphism search. See the
+[slotted source guide](egglog-experimental/src/slotted/LANGUAGE.md) for the
+language and [encoding explanation](egglog-experimental/src/slotted/ENCODING.md)
+for policy details.
 
-The root workspace includes both `egglog` and `egglog-experimental`.
-`egglog-experimental` depends on the workspace `egglog` crate, keeping proof
-changes and downstream behavior in one reviewable unit.
-
-Proof-specific file tests use the `proofs/` filter: explicit `(prove ...)`
-fixtures under `tests/proofs` plus every proof-compatible file under
-proof-testing mode. Proof testing turns checks outside `fail` into proof queries
-and extracts into `prove-extract` commands, verifies each proof, and snapshots
-the certificates. Commands inside `fail` retain their ordinary behavior. Use
-`make proof-tests` for focused iteration and `make rust-check` or `make check`
-for complete validation.
+The Python suite includes a real CLI integration test on small Math and
+disequality fixtures. It uses a temporary report and checks successful runtime/RSS
+observations through the same public runner.
 
 ## Benchmarking
 
@@ -137,10 +185,16 @@ Treatments map directly to engine modes:
 | `egg-proof-extraction` | current egg with explanation recording and extraction |
 | `egg-proof-testing` | current egg with extraction and explanation checking |
 | `egg-de`, `egg-ee`, `egg-nee`, `egg-oee` | original parameter-analysis drivers with the named encoding, without proofs |
+| `slotted`, `slotted-no-aliasing` | encoded slotted e-graphs with multipattern or nested compatibility matching |
+| `slotted-ref-multi`, `slotted-ref-nested-snapshot` | native slotted driver with matched snapshot substitution policies |
+| `slotted-ref-nested` | native slotted driver with syntactic substitution for the SDQL timing baseline |
 
-The five egglog treatments run `egglog-experimental`. The four Math treatments
-(`egg` and its proof variants) run the separate `egg-math-benchmark` executable and
-support only `egglog-experimental/tests/math-microbenchmark-rational.egg`.
+The source and encoded slotted treatments run `egglog-experimental`. The four
+Math treatments (`egg` and its proof variants) run `egg-math-benchmark` and support
+the fixed eleven-round `egglog-experimental/tests/math-microbenchmark-rational.egg`
+and twelve-round `benchmarks/corpus/math/math-iteration-12.egg` workloads.
+Native slotted treatments run `slotted-reference` on the selected input's frozen
+`.ref` companion.
 Results from either proof-extraction treatment are performance evidence only;
 the corresponding proof-testing treatment provides the strict validity check.
 
@@ -241,8 +295,8 @@ fully cached runs; raw `label=` lookup still follows recorded observations.
 One invocation cannot assign the same label and engine to different binaries.
 
 The baseline and candidate may share a binary, as the default proof-overhead
-comparison does, but their complete cache identities—binary SHA-256 and
-treatment and disequality encoding—must differ.
+comparison does, but their endpoint identities—binary SHA-256, treatment,
+disequality encoding and allocator cap—must differ.
 
 For disequality programs, `--disequality-encoding {nee,ee}` selects the candidate
 encoding and `--compare-disequality-encoding {nee,ee}` selects the baseline.
@@ -264,8 +318,10 @@ selected workloads containing `(input ...)` commands:
 ```
 
 Paths are resolved relative to the command invocation directory, not relative
-to either target. Both endpoints therefore run the exact same file and fact
-directory contents. Their SHA-256 hashes are part of the cache identity.
+to either target. This also applies to transitive `(include ...)` and `(input ...)`
+paths, including comparisons against Git or PR targets. Both endpoints therefore
+run the exact same input and fact-directory contents. Their SHA-256 hashes are
+part of the cache identity.
 
 With no positional files, the representative suite is:
 
@@ -324,7 +380,7 @@ with:
 This workload is intentionally not part of the default suite. In the initial
 one-round baseline, proof recording took 20.38 seconds and 11.4 GiB of peak RSS
 versus 0.77 seconds and 296.7 MiB without proofs. Keeping it opt-in avoids
-placing that memory requirement on benchmark-smoke CI and nightly hosts; allow
+placing that memory requirement on ordinary CI and nightly hosts; allow
 substantial memory headroom when running it.
 
 The Math language, rewrites, and seeds come from
@@ -491,7 +547,7 @@ Churchroad wide multiply and DialEgg NMM-40. The ordinary CLI roster is separate
 
 ```bash
 make nightly
-uv run --locked python scripts/nightly_bench.py /path/to/output --rounds 1 --timeout-sec 120
+uv run --locked python -m benchmarking.nightly /path/to/output --rounds 1 --timeout-sec 120
 ```
 
 The initial request is one observation per endpoint/file, with a 120-second
@@ -513,7 +569,6 @@ The [egraphs-good nightly service](https://nightly.cs.washington.edu) runs
 `make nightly` and serves `nightly/output/`. The Make target installs pinned uv
 and rustup when missing; uv supplies the project's Python environment. The script
 puts rustup's cargo shims first on PATH. Existing installations are reused.
-`make nightly-local` runs the same one-round comparison.
 
 ### CPU profiling
 
@@ -559,14 +614,15 @@ becomes `-grouped.json`; other names gain `-grouped.json`.
 Cache reuse is keyed by:
 
 - binary SHA-256;
-- file SHA-256;
+- complete physical input/include SHA-256;
 - fact-directory SHA-256;
-- treatment; and
-- disequality encoding.
+- treatment and disequality encoding;
+- allocator profile (byte limit or null); and
+- persisted effective execution-settings SHA-256.
 
 Target source, path, git revision, dirty state, labels, and display paths are
-provenance rather than cache-key dimensions. Resource bounds do not partition
-successful observations. The runner selects the newest applicable `--rounds`
+provenance rather than cache-key dimensions. Allocator profiles partition every
+observation, including successes. Timeout eligibility is evaluated separately. The runner selects the newest applicable `--rounds`
 rows for each exact endpoint/file, ordering first by `started_at` and
 then by physical JSONL order. Without `--force-run`, it appends only missing
 rows. With `--force-run`, it appends a full fresh set and then selects the
@@ -574,20 +630,18 @@ newest rows.
 
 A failed or timed-out attempt ends the remaining repetitions of that exact
 workload and endpoint; independent conditions continue. A compatible selected
-cached ordinary error also prevents automatic retries. A timeout or native
-allocation failure is retried only when its corresponding bound increases;
-successful rows still count toward the requested total. A success remains
+cached ordinary error also prevents automatic retries. A timeout can be retried when its deadline increases. A different allocator cap
+selects a distinct observation set; successes from another cap do not fill it. A success remains
 reusable at the same or a higher timeout. After lowering the timeout, its
 recorded deadline or completed wall time must fit. Use `--force-run` to explicitly
 retry failed conditions; earlier observations remain in the append-only cache.
 
-Keep `.reports.jsonl` as the active append-only cache when changing resource
-bounds. New native allocation failures record the configured requested allowance
-in `error_memory_limit_bytes`; this is not RSS or necessarily the effective
-address-space limit under a stricter inherited limit. Older allocation failures
-without a recorded allowance do not block collection. If another observation is
-needed, a new allocation failure records the current allowance and prevents
-repeated retries at that bound.
+Every row records its actual `memory_limit_bytes` and execution-settings digest.
+A null limit means uncapped. Original author drivers do not implement this cap,
+so their benchmark rows truthfully record null even during a locally capped
+comparison of other engines. The allocator's address-space bound is distinct from
+independently measured peak RSS. Profile-specific exclusions are snapshot metadata;
+they never create rows, overwrite failures, or erase historical observations.
 
 Before any measured row is appended, all targets needing collection are built.
 Fresh collection is serial; one untimed `<binary> --help` capability preflight
@@ -671,10 +725,6 @@ when an unrelated file is incomplete. Mechanism contributions and ruleset
 totals or component deltas are descriptive diagnostics; only endpoint
 estimates and ratios receive confidence intervals.
 
-The `<2x` proof goal is established only when the upper bound of the suite wall
-ratio's 95% confidence interval is below `2x` for a proofs-versus-off
-comparison.
-
 Methodology references:
 
 - Kalibera and Jones, “Rigorous Benchmarking in Reasonable Time” (ISMM 2013).
@@ -696,7 +746,7 @@ Top-level ownership:
 - `bench.py`: executable uv entrypoint.
 - `benchmarking/`: Python collection, reporting, interactive-view, and
   profiling code.
-- `tests/`: domain-focused pytest and Syrupy snapshot coverage.
+- `benchmarking/tests/`: pytest and Syrupy snapshot coverage for the tooling.
 - `Makefile`: canonical validation and maintenance commands.
 - `pyproject.toml` and `uv.lock`: Python configuration and locked environment.
 - `.reports.jsonl`: ignored, disposable benchmark cache.
@@ -722,7 +772,7 @@ Python ownership is layered so new code has one clear home:
   Python modules, and adjacent browser assets into the HTML artifact, then
   writes and opens it.
 
-Every module has a more precise ownership docstring. Package `__init__.py`
+Every module has a more precise ownership docstring. The `benchmarking` package `__init__.py`
 files are documentation-only; tests enforce that rule, the data-layer boundary,
 and an acyclic static import graph.
 
@@ -778,21 +828,16 @@ Each report row records the exact benchmark binary hash.
 
 ## CI
 
-CI runs on pull requests, manual dispatches, and pushes to `main`:
+PRs and pushes run the clearly labelled partial fast check: `make check` with
+`RUST_TEST_ARGS="--skip paper/"`. It includes the small Rust semantic/reference
+regressions and Vega tests, while skipping the full paper workload trials.
+The complete suite runs locally with `make check`; there is no manual CI dispatch.
+The paper harness honors `--test-threads` and `RUST_TEST_THREADS`. The local Make
+invocation defaults to two paper workers; set `RUST_TEST_THREADS=1` for a serial
+paper run. The allocator cap is per child process. A previous serial full run
+took 2 hours 29 minutes on the local M4.
 
-- `python`: `make python-nits`, then `make python-test`.
-- `rust`: `make rust-nits`, then `make rust-test`.
-- `slotted`: `make slotted-test` builds the reference runners and runs their
-  unit and differential tests, including both fixed fuzz seeds. This runs in
-  parallel with the workspace Rust tests; `make test` still runs all three suites.
-- `benchmark-smoke`: a one-round `off`/`proof-testing` runner check on small Math and
-  disequality fixtures through `make benchmark-smoke`. The full parameter-analysis
-  benchmark is not included in this CI job.
-- `codspeed`: an in-process, proofs-only benchmark over a smaller workload set
-  in simulation and memory modes. CodSpeed includes phase-clock execution but
-  does not persist phase reports; `./bench.py` remains the source for
-  off/proofs and commit comparisons with stored observations.
-
-Ruff and Mypy discover all repository-owned Python files from project
-configuration, so new modules under `benchmarking/` or `tests/` require no
-Makefile edits.
+The semantics-paper job remains independent. The Python tests exercise the
+public small-input comparison CLI; CodSpeed retains its smaller in-process
+performance workload. Stored paper measurements come from `./bench.py`, with
+complete executable/input/settings identities in the cache.

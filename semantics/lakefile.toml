@@ -26,7 +26,7 @@ name = "EgglogSemantics"
 [[lean_lib]]
 name = "EgglogPaper"
 
-# Writes the differential-test cases; see scripts/difftest.sh.
+# Writes the differential-test cases; see semantics/difftest.sh.
 [[lean_exe]]
 name = "difftest"
 root = "DiffTest"

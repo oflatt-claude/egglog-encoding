@@ -16,6 +16,9 @@ BATAX), each in the compiler's two phases.
   Table 2 judges that workload by, whose `_esat` file is the coarse-grained run's.
 
 The published files have no final newline; the copies follow repository convention and
-do. `slotted/checks/check-paper-sdql.py` pins their hashes, and
-`slotted/benchmarks/sdql.py` translates them into the language of
-`egglog-experimental/tests/slotted/languages/sdql.egg` and writes the tests under `egglog-experimental/tests/slotted/sdql-paper/`.
+do. `benchmarks/reproduction/slotted/provenance.py` pins their hashes, and
+`benchmarks/reproduction/slotted/sdql.py` translates them into the language of
+`egglog-experimental/tests/slotted/languages/sdql.egg`. The explicit
+`python -m benchmarks.reproduction.slotted.generate --check` command reproduces
+the ten full-rule inputs under `benchmarks/slotted/inputs/sdql/`; routine tests
+and figures consume those frozen files directly.

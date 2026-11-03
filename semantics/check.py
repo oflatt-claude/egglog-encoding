@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run repository validation and paper builds; Make targets forward here."""
+"""Lean corpus gates and semantics-paper builds, independent of the experiment harness."""
 
 from __future__ import annotations
 
@@ -63,9 +63,6 @@ class Checks:
         if not self.dry_run:
             subprocess.run(args, cwd=cwd, env=process_env, check=True)
 
-    def _python(self, *args: str) -> None:
-        self._run("uv", "run", "--locked", *args)
-
     def _lake(self, *args: str) -> None:
         self._run("lake", *args, lean=True)
 
@@ -74,86 +71,6 @@ class Checks:
             self._lake("build", "difftest")
             self._difftest_built = True
         self._run(".lake/build/bin/difftest", *args, lean=True)
-
-    def check(self) -> None:
-        self._group("nits", "test")
-
-    def nits(self) -> None:
-        self._group("python-nits", "rust-nits")
-
-    def test(self) -> None:
-        self._group("python-test", "rust-test", "slotted-test")
-
-    def slotted_test(self) -> None:
-        self._run("cargo", "build", "-p", "egglog-experimental", "-p", "egraph-isomorphism", "--bins")
-        self._run("cargo", "build", "--manifest-path", "slotted/xmulti/Cargo.toml")
-        self._run("cargo", "test", "--manifest-path", "slotted/xmulti/Cargo.toml", "--", *self._rust_args)
-        self._python("python", "slotted/checks/check-slotted.py")
-
-    def python_check(self) -> None:
-        self._group("python-nits", "python-test")
-
-    def python_nits(self) -> None:
-        self._group("python-lock", "python-format-check", "python-lint", "python-typecheck")
-
-    def python_lock(self) -> None:
-        self._run("uv", "lock", "--check")
-
-    def python_format_check(self) -> None:
-        self._python("ruff", "format", "--check", ".")
-
-    def python_lint(self) -> None:
-        self._python("ruff", "check", ".")
-
-    def python_typecheck(self) -> None:
-        self._python("mypy", ".")
-
-    def python_test(self) -> None:
-        self._python("pytest", "-q")
-
-    def rust_check(self) -> None:
-        self._group("rust-nits", "rust-test")
-
-    def rust_nits(self) -> None:
-        self._group("rust-format-check", "rust-clippy", "rust-doc-links")
-
-    def rust_format_check(self) -> None:
-        self._run("cargo", "fmt", "--all", "--", "--check")
-
-    def rust_clippy(self) -> None:
-        self._run("cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings")
-
-    def rust_doc_links(self) -> None:
-        self._run(
-            "cargo", "doc", "--no-deps", "--document-private-items", "--workspace", env={"RUSTDOCFLAGS": "-D warnings"}
-        )
-
-    def rust_test(self) -> None:
-        self._run("cargo", "test", "--workspace", "--", *self._rust_args)
-
-    def proof_tests(self) -> None:
-        self._run("cargo", "test", "--workspace", "--test", "files", "proofs/", "--", *self._rust_args)
-
-    def math_parity(self) -> None:
-        from native_memory import NATIVE_ALLOCATOR_ENV, NATIVE_LIMIT_BYTES
-
-        self._run(
-            "cargo",
-            "test",
-            "--locked",
-            "--release",
-            "-p",
-            "egg-math-benchmark",
-            "--bin",
-            "egg-math-benchmark",
-            "--",
-            "--exact",
-            "tests::math12_graph_parity",
-            "--ignored",
-            "--nocapture",
-            *self._rust_args,
-            env={**NATIVE_ALLOCATOR_ENV, "MATH12_MEMORY_LIMIT_BYTES": str(NATIVE_LIMIT_BYTES)},
-        )
 
     def lean_check(self) -> None:
         self._lake("build")
@@ -212,10 +129,10 @@ class Checks:
         self._difftest("export-fixtures", "../egglog/tests/lean-certificates.json")
 
     def lean_difftest(self) -> None:
-        self._run("./scripts/difftest.sh")
+        self._run("./semantics/difftest.sh")
 
     def lean_compiled_difftest(self) -> None:
-        self._run("./scripts/compiled-difftest.sh")
+        self._run("./semantics/compiled-difftest.sh")
 
     def paper(self) -> None:
         self("paper-check")
@@ -243,16 +160,6 @@ class Checks:
             ",".join(PAPER_MODULES),
         )
 
-    def update_snapshots(self) -> None:
-        self._python("pytest", "-q", "--snapshot-update", "--snapshot-details")
-        self._run(
-            "cargo", "test", "-p", "egglog-experimental", "--test", "slotted_files", env={"INSTA_UPDATE": "always"}
-        )
-
-    def format(self) -> None:
-        self._python("ruff", "format", ".")
-        self._run("cargo", "fmt", "--all")
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -260,7 +167,9 @@ def main(argv: list[str] | None = None) -> int:
         epilog="RUST_TEST_ARGS defaults to empty. LEAN_BIN_DIR and LEAN_CERTIFICATES accept repo-relative paths.",
     )
     targets = sorted(name.replace("_", "-") for name in vars(Checks) if not name.startswith("_"))
-    parser.add_argument("targets", nargs="*", metavar="TARGET", help="default: check; choices: " + ", ".join(targets))
+    parser.add_argument(
+        "targets", nargs="*", metavar="TARGET", help="default: lean-check; choices: " + ", ".join(targets)
+    )
     parser.add_argument("--dry-run", action="store_true", help="show commands without executing them")
     args = parser.parse_args(argv)
     for target in args.targets:
@@ -268,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"unknown target {target!r}")
     try:
         checks = Checks(dry_run=args.dry_run)
-        for target in args.targets or ["check"]:
+        for target in args.targets or ["lean-check"]:
             checks(target)
     except subprocess.CalledProcessError as exc:
         return exc.returncode if exc.returncode >= 0 else 128 - exc.returncode

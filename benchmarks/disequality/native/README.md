@@ -93,9 +93,24 @@ Focused tests check source identity, deterministic conversion, assertion order,
 and runner integration without executing full-size workloads:
 
 ```sh
-uv run pytest -q tests/test_parameter_input.py tests/test_parameter_native.py
+uv run pytest -q benchmarking/tests/test_parameter_input.py benchmarking/tests/test_parameter_native.py
 ```
 
-`make parameter-test` separately builds the six release implementations and
-checks native positive/negative cases, full-corpus native CSV results, and both
-Egglog contradiction checks. These normal-mode checks do not write measurements.
+`make check` builds the original author drivers and runs the actual figure
+workload through the catalog-driven Rust paper target. It checks the four native
+CSV count/contradiction oracles and enabled Egglog modes, including term encoding.
+Full-input NEE strict proofs exceeded the local cap in a fresh process and are
+explicitly deferred in the shared exclusion file, including uncapped validation.
+These correctness runs do not write measurements.
+The catalog and shared `benchmarks/ignore.json` make any unsupported or resource
+exclusions explicit. For a focused rerun after building the author drivers:
+
+```sh
+cargo build --locked --release --manifest-path benchmarks/disequality/native/Cargo.toml --target-dir benchmarks/local/parameter-native/target --bins
+cargo test --locked -p egglog-experimental --test paper -- parameter-analysis.egg --nocapture
+```
+
+The same trial retains the native contradiction and consistent canaries from the
+former standalone Python gate, using frozen inputs in `../correctness/`.
+`egglog-experimental/tests/disequality.rs` exercises both Egglog NEE and EE with
+ordinary, term and proof modes; the paper catalog selects NEE for the full workload.

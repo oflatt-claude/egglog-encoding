@@ -67,16 +67,20 @@ fixture hash selects native `--math12`, which fixes both the twelve-round
 schedule and that equality. Math11 remains admitted unchanged. The corpus now
 has 488 saved inputs: 486 application replays and two standalone Math fixtures.
 
-Math12 graph parity is an explicit correctness check, separate from collection:
+Math12 correctness is part of the ordinary Rust paper target, separate from
+measurement collection:
 
 ```sh
-CARGO_BUILD_JOBS=2 make math-parity
+cargo test -p egglog-experimental --test paper math-iteration-12.egg -- --nocapture
+# Include strict Math12 configurations that exceed the local address-space cap:
+PAPER_TEST_MEMORY_LIMIT_BYTES=none cargo test -p egglog-experimental --test paper math-iteration-12.egg -- --nocapture
 ```
 
-The ignored Rust test compares Egg and Egglog with proofs off at exactly twelve
-rounds. It checks the frozen equality, logical constructor and class counts,
-and query non-insertion, dropping the native graph before building the Egglog
-graph. The check runner supplies the shared sixteen-GiB native allocation limit
-and allocator startup policy, then leaves success and failure reporting to the
-normal Rust test runner. This large test remains excluded from ordinary Cargo
-runs; benchmark timings come from the regular CLI collection path.
+The same frozen input and schedule drive ordinary, term-encoded, strict-proof,
+native Egg and native checked-proof modes. The tests compare source table sizes,
+extracted results, native logical constructor/class counts and the witness's
+absence at eleven rounds. The shared ignore file records cap-specific resource
+exclusions; uncapped validation includes those configurations. Routine tests use
+the existing 10 GiB local allocator/address-space cap by default. Figure collection
+defaults to uncapped runs with independently measured peak RSS. The historical
+source-acquisition commands above are never invoked by either routine command.

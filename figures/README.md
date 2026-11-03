@@ -5,8 +5,8 @@ From the code repository root:
 ```sh
 ./bench.py figures
 ./bench.py figures --help
-./bench.py figures math-runtime math-memory
-./bench.py figures --rounds 3 --report /tmp/figures-quick.jsonl
+./bench.py figures math-runtime slotted-runtime
+./bench.py figures --rounds 3 --memory-limit --report /tmp/figures-quick.jsonl --output-dir /tmp/figure-previews
 ./bench.py figures --config path/to/catalog.json
 ./bench.py figures --output-dir ../extended-egglog-paper/figures/eval
 ```
@@ -17,8 +17,10 @@ pinned standalone `npx` packages: Vega 6.4.0, Vega-Lite 6.4.3, Vega CLI 6.4.0,
 Canvas 3.2.3. No npm project or separate PDF converter is required. PDF text uses
 embedded font subsets. The first run may download the pinned renderer packages.
 
-The five PDFs replace the paper's `figures/eval/` placeholders. SVG and 3x PNG
-companions are written alongside them. Absolute image paths are printed on
+The five PDFs replace the paper's `figures/eval/` placeholders. SVG, 3x PNG and
+`.bound.vl.json` companions are written alongside them. The bound specifications
+retain the exact executable/settings hashes and selected observation row IDs.
+Absolute artifact paths are printed on
 stderr. The default output directory is each authored specification's directory,
 `figures/eval/` for the bundled catalog. The paper repository is needed only when selecting it
 as the output destination.
@@ -26,21 +28,21 @@ as the output destination.
 | Figure | Comparison |
 | --- | --- |
 | `disequality-runtime` | Native DE, EE, NEE, OEE and relation-based Egglog NEE; proofs off |
-| `math-runtime` | Twelve-round Math; Egg/Egglog off/checked proofs; absolute time and within-engine overhead |
-| `math-memory` | The same Math process executions, reporting peak RSS and overhead |
-| `corpus-runtime-cdf` | Congruence-only and checked-proof overhead across the application replays |
-| `corpus-memory-cdf` | The same configurations, executions and runtime-selected files, reporting RSS overhead |
+| `math-runtime` | Twelve-round Math; Egg/Egglog off/checked proofs; time, peak RSS and within-engine overhead |
+| `corpus-congruence-cdf` | Congruence-only time and peak-RSS overhead across the application replays |
+| `corpus-proofs-cdf` | Strict checked-proof time and peak-RSS overhead across the same replays |
+| `slotted-runtime` | Full 44-rule SDQL kernels/phases; native syntactic substitution versus the encoded compatibility policy |
 
 ## Flat configuration and automatic reuse
 
 [`catalog.json`](catalog.json) contains global `rounds` and `timeout_sec` settings
-and a `figures` object. Each figure declares only `spec`, `files` and
-`treatments`, using existing treatment strings:
+and a `figures` object. Each figure declares `spec`, `files` and
+`treatments`, with optional correctness-only `checks`, using shared treatment strings:
 
 ```json
 {
   "rounds": 10,
-  "timeout_sec": 300,
+  "timeout_sec": 500,
   "figures": {
     "example": {
       "spec": "example.vl.json",
@@ -62,10 +64,12 @@ Each figure requests the product of its own files and treatments. Collection
 merges identical requests across figures into one plan and one progress display.
 Runtime and memory views therefore share launches. It reuses compatible cached
 observations and collects only missing observations; there is no separate
-cached/render-only mode. Ordinary errors remain cached. Memory-limit and timeout
-failures are retried only after the corresponding bound increases. Successful
-runs remain reusable across bound changes; after lowering the timeout, their
-recorded timeout or completed wall time must fit the new deadline.
+cached/render-only mode. Ordinary errors and memory-limit failures remain cached
+within their exact execution profile. Timeouts are retried after the timeout
+increases. Allocator profiles have separate
+identities for both successes and failures: capped runs never supply uncapped
+measurements. After lowering the timeout, a successful run's recorded timeout or
+completed wall time must fit the new deadline.
 Repeating an unchanged completed invocation launches no
 additional measurements and renders the requested images again.
 
@@ -76,6 +80,26 @@ Command-line paths resolve relative to the invocation directory. The production
 catalog requests ten runs per condition. `--rounds N` overrides that count for
 collection, sample selection and intervals without changing the catalog.
 Use `--rounds 1` and a temporary report for CLI smoke checks.
+
+Final collection defaults to ten uncapped observations per endpoint. Use a clean
+environment with allocator and thread overrides unset, and retain the machine
+and environment description with the observations. Local
+verification can use three rounds and `--memory-limit`, which applies the existing
+10 GiB address-space/allocator cap where supported. Peak RSS is measured separately
+in either profile. The original native disequality executables do not support this
+cap and are identified as uncapped. Keep verification outputs under `/tmp`;
+they do not replace final paper measurements or images.
+
+[`../benchmarks/ignore.json`](../benchmarks/ignore.json) is shared with the normal
+Rust paper tests. Each resource or unsupported exclusion records a reason and
+evidence; a cap-specific exclusion does not apply to uncapped collection. Excluded
+conditions remain visible and never become successful observations. Ordinary
+semantic/proof failures fail the correctness suite.
+An explicitly reviewed `expected-failure` records a known bug and its exact
+ordinary/candidate table counts. Rust executes that case, rejecting unexpected
+passes and other failures. Figure selection quarantines the affected condition,
+including old cached successes; it stays visible in coverage without becoming a
+measured point. All other checks and treatments remain exact.
 
 The shared collection progress estimates remaining time across all missing runs.
 `ETA ~` prefers current-binary cached and newly measured durations, then the
@@ -102,7 +126,8 @@ recorded observations. Source targets are checked and rebound on each figure
 invocation. An ordinary comparison that assigns the same label/engine to two
 different binaries is rejected before launch. The raw
 `.reports.jsonl` remains append-only. The shared selector matches the current
-executable, physical input/facts hashes, treatment and encoding, then selects
+executable, complete physical input/include/facts hashes, treatment, encoding and
+resolved execution settings (including allocator profile), then selects
 rows applicable to the requested resource bounds. It binds their original row
 indices into the Vega-Lite specifications. They never borrow missing measurements
 from an older executable.
@@ -129,8 +154,8 @@ The corpus contains 486 saved deduplicated replays from Eggcc, HardBoiled,
 MISAAL, Churchroad, DialEgg and Luminal, excluding Math. Select only a complete,
 successful baseline's mean wall time >= 0.2 seconds, with no upper cutoff.
 Memory and candidate outcomes never select membership. Each file has equal
-weight; projects contribute different numbers of files. Both candidate curves
-and both metrics share the selected denominator. Failed/missing ratios never
+weight; projects contribute different numbers of files. Both corpus figures
+and both metrics share the selected denominator. Failed/missing/excluded ratios never
 become finite timeouts or disappear from coverage.
 
 Complete data support empirical median/95th-percentile annotations. With
@@ -159,7 +184,7 @@ visible; statistics remain in the authored Vega transforms. Vega resolves other
 relative assets from the authored specification's directory.
 
 Each invocation renders temporary PDF/SVG/PNG files and replaces the previous
-images after all three succeed. The raw JSONL and grouped JSON retain observation
+images and bound specification after all three images succeed. The raw JSONL and grouped JSON retain observation
 provenance, including recorded resource bounds, source/binary hashes, statuses and row IDs. Preserve these
 with the catalog, authored specifications, validated Math12 boundary evidence and
 disequality contradiction-agreement results when handing off measurements.
@@ -167,12 +192,19 @@ Fill paper result sentences only from validated measurements, keeping failed
 and missing cases visible.
 
 ```sh
-make figures-test
-make parameter-test
+make check
 ```
 
 The figure tests use synthetic snapshots without writing the benchmark cache.
 They cover sample counts, means/intervals, missing/failing outcomes, label and
 subset selection, cohort boundaries and coverage. Inspect all five PDFs/PNGs at
 manuscript width for unclipped labels, tails and uncertainty; use `pdffonts` to
-verify embedding. `make check` and `make benchmark-smoke` cover the full project.
+verify embedding. `make check` includes the catalog-driven Rust correctness suite:
+visible table sizes, stable source results, extraction correspondence and strict proof
+verification; native Math/disequality oracles; matched-policy slotted counts and
+actual timing-pair targets. Only verified equal-cost single-best extraction ties
+are normalized, with per-request notices. Term-mode alternatives are checked in
+the ordinary pre-command graph; strict alternatives use checked source proofs.
+Variant order, costs and actual proof
+right-hand sides remain exact. See [the root workflow](../README.md) for the fixtures
+and filters. The Python suite also checks the public comparison CLI.
