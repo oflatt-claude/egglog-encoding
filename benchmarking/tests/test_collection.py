@@ -626,6 +626,7 @@ def test_fresh_failure_stops_only_its_condition(
         treatment: models.Treatment,
         _timeout: int,
         _encoding: models.DisequalityEncoding,
+        _memory_limit_bytes: int | None,
     ) -> collection.ProcessObservation:
         calls.append((file.display_path, treatment))
         if file.display_path == "file.egg" and treatment == "off":
@@ -649,10 +650,8 @@ def test_fresh_failure_stops_only_its_condition(
 def test_raised_memory_limit_retries_only_missing_rows_and_records_new_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, known_cap: int | None
 ) -> None:
-    old = make_record(1, started_at="2026-07-04T12:00:01Z", status="failure")
+    old = make_record(1, started_at="2026-07-04T12:00:01Z", status="failure", memory_limit_bytes=known_cap)
     old["error_exit_code"] = 86
-    if known_cap is not None:
-        old["error_memory_limit_bytes"] = known_cap
     report = tmp_path / "report.jsonl"
     write_report(report, make_record(0, started_at="2026-07-04T12:00:00Z"), old)
     store = ReportStore(report)
@@ -669,7 +668,7 @@ def test_raised_memory_limit_retries_only_missing_rows_and_records_new_bound(
             processes.TimingResult(
                 "failure",
                 processes.TimingRow(wall_sec=1),
-                processes.ErrorRow("allocation failed", exit_code=86, memory_limit_bytes=processes.NATIVE_LIMIT_BYTES),
+                processes.ErrorRow("allocation failed", exit_code=86, memory_limit_bytes=collection.NATIVE_LIMIT_BYTES),
             ),
             None,
         )
@@ -677,8 +676,8 @@ def test_raised_memory_limit_retries_only_missing_rows_and_records_new_bound(
     monkeypatch.setattr(collection, "run_process", observe)
     collection.collect_rows(store, plan, 120, Console(file=io.StringIO()))
     assert len(calls) == 1 and store.row_count == 3
-    assert store.records[-1]["error_memory_limit_bytes"] == processes.NATIVE_LIMIT_BYTES
-    assert "error_memory_limit_bytes" not in store.records[0]
+    assert store.records[-1]["memory_limit_bytes"] == collection.NATIVE_LIMIT_BYTES
+    assert store.records[0]["memory_limit_bytes"] == collection.NATIVE_LIMIT_BYTES
     (repeated,) = collection.plan_collection(store, requests, {target.request: target}, 3, 120, False)
     assert repeated.total_missing_observations == 0
     collection.collect_rows(store, repeated, 120, Console(file=io.StringIO()))
@@ -793,6 +792,7 @@ def test_preflight_requires_extraction_capability_only_for_fresh_rows(
         _checkout_path: Path,
         _timeout_sec: int,
         required_outputs: tuple[str, ...],
+        _memory_limit_bytes: int | None,
     ) -> processes.TimingResult:
         calls.append(required_outputs)
         return failure if "--proof-extraction" in required_outputs else success
@@ -833,6 +833,7 @@ def test_preflight_checks_each_required_engine_binary(monkeypatch: pytest.Monkey
         _checkout_path: Path,
         _timeout_sec: int,
         required_outputs: tuple[str, ...],
+        _memory_limit_bytes: int | None,
     ) -> processes.TimingResult:
         calls.append((binary_path, required_outputs))
         return processes.TimingResult("success", processes.TimingRow(wall_sec=0.01), None)
@@ -913,9 +914,9 @@ def test_collect_rows_rejects_unsupported_timing_summary_before_append(
         _checkout_path: Path,
         _timeout_sec: int,
         *,
-        native_limit: bool,
+        memory_limit_bytes: int | None,
     ) -> processes.TimingResult:
-        assert native_limit
+        assert memory_limit_bytes == collection.NATIVE_LIMIT_BYTES
         summary_path = Path(command[command.index("--timing-summary") + 1])
         summary_path.write_text(
             json.dumps({"schema_version": 1, "rulesets": []}),
@@ -946,9 +947,9 @@ def test_run_process_passes_treatment_flags(
     file_spec = stable_file_spec(tmp_path)
 
     def fake_run_command(
-        command: list[str], checkout_path: Path, timeout_sec: int, *, native_limit: bool
+        command: list[str], checkout_path: Path, timeout_sec: int, *, memory_limit_bytes: int | None
     ) -> processes.TimingResult:
-        assert native_limit
+        assert memory_limit_bytes == collection.NATIVE_LIMIT_BYTES
         commands.append(command)
         assert checkout_path == ROOT
         assert timeout_sec == 120
@@ -1061,9 +1062,9 @@ def test_collect_rows_rejects_mutated_workload_before_append(
         _checkout_path: Path,
         _timeout_sec: int,
         *,
-        native_limit: bool,
+        memory_limit_bytes: int | None,
     ) -> processes.TimingResult:
-        assert native_limit
+        assert memory_limit_bytes == collection.NATIVE_LIMIT_BYTES
         summary_path = Path(command[command.index("--timing-summary") + 1])
         summary_path.write_text(json.dumps(make_timing_summary()), encoding="utf-8")
         if mutated_input == "file":
@@ -1205,7 +1206,11 @@ def test_preflight_requires_math12_flag_only_for_fresh_math12(
     calls: list[tuple[str, ...]] = []
 
     def preflight(
-        _binary: Path, _checkout: Path, _timeout: int, required_outputs: tuple[str, ...]
+        _binary: Path,
+        _checkout: Path,
+        _timeout: int,
+        required_outputs: tuple[str, ...],
+        _memory_limit_bytes: int | None,
     ) -> processes.TimingResult:
         calls.append(required_outputs)
         return processes.TimingResult("success", processes.TimingRow(wall_sec=0.01), None)

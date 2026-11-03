@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +20,38 @@ from benchmarking.reports.store import GroupedReport, ReportStore
 from .report_fixtures import ROOT, make_record, make_target, write_report
 
 FILE_SPEC = models.FileSpec("file.egg", ROOT / "file.egg", "sha256:file")
+
+
+def test_public_cli_collects_real_observations(tmp_path: Path) -> None:
+    report = tmp_path / "report.jsonl"
+    # Use the public build path without extra features or a separate target directory.
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "bench.py"),
+            "egglog-experimental/tests/math-microbenchmark-rational.egg",
+            "egglog-experimental/tests/disequality/congruence.egg",
+            "--rounds",
+            "1",
+            "--report",
+            str(report),
+            "--format",
+            "markdown",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=1800,
+    )
+    assert result.returncode == 0, result.stderr
+    rows = ReportStore(report).records
+    assert len(rows) == 4 and all(row["status"] == "success" for row in rows)
+    assert {row["treatment"] for row in rows} == {"off", "proof-testing"}
+    assert len({row["file_sha256"] for row in rows}) == 2
+    assert len({(row["file_sha256"], row["treatment"]) for row in rows}) == 4
+    for row in rows:
+        for value in (row["wall_sec"], row["max_rss_bytes"]):
+            assert value is not None and math.isfinite(value) and value > 0
 
 
 def test_public_entrypoint_dispatches_benchmark_and_profile(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -241,8 +276,8 @@ def test_comparison_permits_shared_binary_across_different_treatments() -> None:
 
     comparison = models.ComparisonSpec(baseline, candidate, (FILE_SPEC,), 2, 120)
 
-    assert baseline.cache_identity == ("sha256:shared", "off", "nee")
-    assert candidate.cache_identity == ("sha256:shared", "proofs", "nee")
+    assert baseline.cache_identity == ("sha256:shared", "off", "nee", 10 * 1024**3)
+    assert candidate.cache_identity == ("sha256:shared", "proofs", "nee", 10 * 1024**3)
     assert comparison.baseline.target is comparison.candidate.target
 
 

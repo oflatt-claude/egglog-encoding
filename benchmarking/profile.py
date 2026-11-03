@@ -22,11 +22,10 @@ from typing import Any, Literal, cast
 from rich.console import Console
 from rich.text import Text
 
-from native_memory import native_memory_command
-
 from . import samply_analysis
 from .engines import TREATMENT_SPECS, TREATMENTS, Treatment, validate_engine_workload
 from .models import DisequalityEncoding, FileSpec, TargetRequest
+from .native_memory import NATIVE_LIMIT_BYTES, native_memory_command
 from .processes import run_command, terminate_process_group
 from .targets import git_root_for_path, parse_target, resolve_profile_target, workload_command
 from .workloads import require_workload_unchanged, resolve_files
@@ -361,7 +360,7 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
     if binary_path is None:
         raise ValueError(f"target {target.display_label} needs a profiling binary")
     checkout_path = Path(target.row.path)
-    native_limit = TREATMENT_SPECS[request.treatment].engine in ("egglog", "egg")
+    native_limit = TREATMENT_SPECS[request.treatment].allocator_limit
     workload = workload_command(binary_path, request.file, request.treatment, request.disequality_encoding)
     treatment_label = (
         f"{request.treatment} ({request.disequality_encoding})"
@@ -400,7 +399,12 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
                     f" {treatment_label} for {request.mode.profile_seconds}s",
                 )
             )
-            calibration = run_command(workload, checkout_path, request.timeout_sec, native_limit=native_limit)
+            calibration = run_command(
+                workload,
+                checkout_path,
+                request.timeout_sec,
+                memory_limit_bytes=NATIVE_LIMIT_BYTES if native_limit else None,
+            )
             if calibration.status != "success" or calibration.timing.wall_sec is None:
                 detail = calibration.error.message if calibration.error is not None else calibration.status
                 raise ValueError(f"profile calibration failed: {detail}")

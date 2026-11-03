@@ -35,12 +35,12 @@ def test_interactive_snapshot_reuses_cross_timeout_rows_and_freezes_memory_bound
             make_record(1, started_at="2026-10-27T00:00:01Z", treatment=treatment, timeout_sec=900, wall_sec=20),
         )
     failure = make_record(2, started_at="2026-10-27T00:00:02Z", treatment="proofs", status="failure")
-    failure.update({"error_exit_code": 86, "error_memory_limit_bytes": 8})
+    failure["error_exit_code"] = 86
     write_report(path, failure)
     before = path.read_bytes()
     store = ReportStore(path).grouped_report()
     file = models.FileSpec("file.egg", tmp_path / "file.egg", "sha256:file")
-    comparison = models.ComparisonSpec(make_endpoint(), make_endpoint(treatment="proofs"), (file,), 2, 300, 8)
+    comparison = models.ComparisonSpec(make_endpoint(), make_endpoint(treatment="proofs"), (file,), 2, 300)
     initial = scope_for_comparison(comparison)
     runtime = InteractiveRuntime(store, initial)
     payload = runtime.payload()
@@ -49,8 +49,6 @@ def test_interactive_snapshot_reuses_cross_timeout_rows_and_freezes_memory_bound
     assert selectors["max_rounds"] == 3
     assert "failure row selected" in json.dumps(payload)
     assert runtime.apply({**initial, "memory_limit_bytes": 16}) == payload
-    raised = replace(comparison, memory_limit_bytes=16)
-    assert "failure row selected" not in json.dumps(InteractiveRuntime(store, scope_for_comparison(raised)).payload())
     assert len(store.data["groups"]) == 2
     assert len(store.records) == 5
     assert path.read_bytes() == before
@@ -63,10 +61,10 @@ def test_runtime_discovers_entire_cache_and_retargets_all_sections(tmp_path: Pat
     files = cast(list[dict[str, JsonValue]], selectors["files"])
 
     assert {endpoint["label"] for endpoint in endpoints} == {
-        "alternative · abc123 · proofs/nee",
-        "baseline · abc123 · off/nee",
-        "candidate · abc123 · proofs/nee",
-        "historical · abc123 · term/nee",
+        "alternative · abc123 · proofs/nee · 10 GiB cap",
+        "baseline · abc123 · off/nee · 10 GiB cap",
+        "candidate · abc123 · proofs/nee · 10 GiB cap",
+        "historical · abc123 · term/nee · 10 GiB cap",
     }
     assert {file["label"] for file in files} == {"one.egg", "two.egg", "three.egg"}
     assert selectors["timeouts_sec"] == [60, 120]
@@ -163,6 +161,43 @@ def test_incomplete_scope_publishes_missing_cells_but_invalid_scope_rolls_back(t
     assert runtime.payload() == incomplete
 
 
+@pytest.mark.parametrize("cached_baseline", [True, False])
+def test_unobserved_excluded_endpoint_keeps_invocation_metadata_without_synthetic_rows(
+    tmp_path: Path, cached_baseline: bool
+) -> None:
+    path = tmp_path / "report.jsonl"
+    if cached_baseline:
+        write_report(path, make_record(0, started_at="2026-10-31T00:00:00Z", target_label="cached baseline"))
+    else:
+        path.write_text("")
+    before = path.read_bytes()
+    store = ReportStore(path).grouped_report()
+    file = models.FileSpec(
+        "file.egg",
+        tmp_path / "file.egg",
+        "sha256:file",
+        exclusions=(models.Exclusion("expected-failure", "known bug", "issue", ("term",)),),
+    )
+    comparison = models.ComparisonSpec(
+        make_endpoint(target_label="invocation baseline"),
+        make_endpoint(target_label="unobserved candidate", binary_sha256="sha256:unobserved", treatment="term"),
+        (file,),
+        1,
+        120,
+    )
+    scope = scope_for_comparison(comparison)
+    runtime = InteractiveRuntime(store, scope)
+    initial = runtime.initial_payload(comparison)
+    assert "invocation baseline" in json.dumps(initial)
+    assert "unobserved candidate" in json.dumps(initial)
+    updated = runtime.apply(scope)
+    assert ("cached baseline" if cached_baseline else "invocation baseline") in json.dumps(updated)
+    assert "unobserved candidate" in json.dumps(updated)
+    assert "known bug" in json.dumps(updated)
+    assert len(store.records) == int(cached_baseline)
+    assert path.read_bytes() == before
+
+
 def test_scope_request_rejects_invalid_field_types_without_changing_report(tmp_path: Path) -> None:
     runtime, payload, _store, comparison = _interactive_case(tmp_path)
     valid = scope_for_comparison(comparison)
@@ -231,7 +266,7 @@ def test_html_embeds_exact_grouped_snapshot_initial_catalog_runtime_and_safe_dat
     )
     assert cast(str, envelope["pyodide_base_url"]) == interactive.PYODIDE_BASE_URL
     assert set(cast(dict[str, str], envelope["python_modules"])) == {
-        "native_memory.py",
+        "benchmarking/native_memory.py",
         "benchmarking/__init__.py",
         "benchmarking/engines.py",
         "benchmarking/models.py",
@@ -300,7 +335,7 @@ def test_initial_html_uses_native_provenance_file_order_and_selector_labels(tmp_
     assert endpoints[:2] == [
         {
             "id": initial_scope["baseline_endpoint_id"],
-            "label": "feedface0001 dirty · off/nee",
+            "label": "feedface0001 dirty · off/nee · 10 GiB cap",
             "target": "feedface0001",
             "git_sha": "feedface0001",
             "dirty": True,
@@ -308,7 +343,7 @@ def test_initial_html_uses_native_provenance_file_order_and_selector_labels(tmp_
         },
         {
             "id": initial_scope["candidate_endpoint_id"],
-            "label": "working-candidate · feedface0002 · proofs/nee",
+            "label": "working-candidate · feedface0002 · proofs/nee · 10 GiB cap",
             "target": "working-candidate",
             "git_sha": "feedface0002",
             "dirty": False,
@@ -508,3 +543,37 @@ def _local_module_path(root: Path, module: str) -> str | None:
         return module_path
     package_path = relative + "/__init__.py"
     return package_path if (root / package_path).is_file() else None
+
+
+def test_cap_scoped_exclusion_survives_snapshot_and_uncapped_retarget(tmp_path: Path) -> None:
+    path = tmp_path / "profiles.jsonl"
+    store = ReportStore(path)
+    for cap in (None, 10 * 1024**3):
+        for mode in ("off", "proof-testing"):
+            store.append(make_record(0, started_at="2026-10-31T00:00:00Z", treatment=mode, memory_limit_bytes=cap))
+    before = path.read_bytes()
+    snapshot = store.grouped_report(
+        exclusions=[
+            {
+                "file_sha256": "sha256:file",
+                "treatments": ["proof-testing"],
+                "disequality_encoding": None,
+                "kind": "resource",
+                "reason": "recorded cap stop",
+                "evidence": "exit 86",
+                "memory_limit_bytes": 10 * 1024**3,
+            }
+        ]
+    )
+    baseline, candidate = make_endpoint(), make_endpoint(treatment="proof-testing")
+    file = models.FileSpec("file.egg", tmp_path / "file.egg", "sha256:file")
+    capped = models.ComparisonSpec(baseline, candidate, (file,), 1, 120)
+    runtime = InteractiveRuntime(snapshot, scope_for_comparison(capped))
+    assert "excluded (resource): recorded cap stop" in json.dumps(runtime.payload()["sections"])
+    uncapped = replace(
+        capped,
+        baseline=replace(baseline, memory_limit_bytes=None),
+        candidate=replace(candidate, memory_limit_bytes=None),
+    )
+    assert "excluded" not in json.dumps(runtime.apply(scope_for_comparison(uncapped))["sections"])
+    assert path.read_bytes() == before

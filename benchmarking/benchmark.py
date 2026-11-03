@@ -32,6 +32,7 @@ from .models import (
     DetailLevel,
     EndpointRequest,
 )
+from .native_memory import NATIVE_LIMIT_BYTES
 from .reports.interactive import interactive_report_path, open_interactive_report, write_interactive_report
 from .reports.presentation import build_report_catalog
 from .reports.render import render_markdown_report_document, render_rich_report_document
@@ -118,6 +119,12 @@ def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
         help="write an interactive HTML snapshot next to the report cache and open it",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="show preparation timings and collection starts")
+    parser.add_argument(
+        "--memory-limit",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="use the local 10 GiB allocator cap (default: enabled; final figures are uncapped)",
+    )
     args = parser.parse_args(argv)
     if args.report == "-":
         parser.error("--report requires a file path; '-' streaming is not supported")
@@ -152,11 +159,13 @@ def endpoint_requests(args: argparse.Namespace) -> tuple[EndpointRequest, Endpoi
         baseline_target,
         cast(Treatment, str(args.compare_treatment)),
         args.compare_disequality_encoding,
+        NATIVE_LIMIT_BYTES if args.memory_limit else None,
     )
     candidate = EndpointRequest(
         candidate_target,
         cast(Treatment, str(args.treatment)),
         args.disequality_encoding,
+        NATIVE_LIMIT_BYTES if args.memory_limit else None,
     )
     if baseline == candidate:
         raise ValueError("baseline and candidate endpoints must be different")
@@ -212,11 +221,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 resolved_targets[baseline_request.target],
                 baseline_request.treatment,
                 baseline_request.disequality_encoding,
+                baseline_request.memory_limit_bytes,
             ),
             candidate=BenchmarkEndpoint(
                 resolved_targets[candidate_request.target],
                 candidate_request.treatment,
                 candidate_request.disequality_encoding,
+                candidate_request.memory_limit_bytes,
             ),
             files=files,
             rounds=int(args.rounds),

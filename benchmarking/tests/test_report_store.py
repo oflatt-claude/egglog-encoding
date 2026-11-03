@@ -22,81 +22,72 @@ from .report_fixtures import make_record, make_ruleset_timing, make_timing_summa
 
 
 @pytest.mark.parametrize(
-    ("status", "wall", "old_timeout", "exit_code", "memory", "timeout", "cap", "expected"),
+    ("status", "wall", "old_timeout", "timeout", "expected"),
     [
-        ("success", 121.0, 120, None, None, 120, 16, True),
-        ("success", None, 120, None, None, 300, 16, True),
-        ("success", 50.0, 300, None, None, 120, 16, True),
-        ("success", 121.0, 300, None, None, 120, 16, False),
-        ("success", None, 300, None, None, 120, 16, False),
-        ("timed-out", None, 120, None, None, 120, 32, True),
-        ("timed-out", None, 120, None, None, 300, 16, False),
-        ("failure", 50.0, 120, 86, 8, 120, 8, True),
-        ("failure", 50.0, 120, 86, 8, 300, 8, True),
-        ("failure", 50.0, 120, 86, 8, 120, 16, False),
-        ("failure", 50.0, 120, 86, None, 120, 16, False),
-        ("failure", 50.0, 120, 1, None, 300, 32, True),
+        ("success", 121.0, 120, 120, True),
+        ("success", None, 120, 300, True),
+        ("success", 50.0, 300, 120, True),
+        ("success", 121.0, 300, 120, False),
+        ("success", None, 300, 120, False),
+        ("timed-out", None, 120, 120, True),
+        ("timed-out", None, 120, 300, False),
+        ("failure", 50.0, 120, 300, True),
     ],
 )
-def test_selection_reuses_successes_and_retries_only_relaxed_resource_limits(
-    tmp_path: Path,
-    status: Status,
-    wall: float | None,
-    old_timeout: int,
-    exit_code: int | None,
-    memory: int | None,
-    timeout: int,
-    cap: int,
-    expected: bool,
+def test_timeout_selection_preserves_success_and_failure_provenance(
+    tmp_path: Path, status: Status, wall: float | None, old_timeout: int, timeout: int, expected: bool
 ) -> None:
     record = make_record(0, started_at="2026-10-27T00:00:00Z", status=status, wall_sec=wall, timeout_sec=old_timeout)
-    record["error_exit_code"] = exit_code
-    if memory is not None:
-        record["error_memory_limit_bytes"] = memory
     path = tmp_path / "report.jsonl"
     write_report(path, record)
     before = path.read_bytes()
     store = ReportStore(path)
     key = CacheKey("sha256:bin", "sha256:file", "off")
-    selected = store.latest_records(key, 1, timeout, cap)
+    selected = store.latest_records(key, 1, timeout)
     assert bool(selected) is expected
-    assert [row.row_index for row in store.grouped_report().latest_records(key, 1, timeout, cap)] == [
-        row.row_index for row in selected
+    assert [r.row_index for r in store.grouped_report().latest_records(key, 1, timeout)] == [
+        r.row_index for r in selected
     ]
     assert path.read_bytes() == before
 
 
-def test_current_failure_stays_visible_until_its_resource_limit_increases(tmp_path: Path) -> None:
+@pytest.mark.parametrize("status", ["success", "failure", "timed-out"])
+def test_allocator_profiles_never_share_observations(tmp_path: Path, status: Status) -> None:
     path = tmp_path / "report.jsonl"
-    successes = [make_record(i, started_at=f"2026-10-27T00:00:0{i}Z") for i in range(3)]
-    failed = make_record(3, started_at="2026-10-27T00:00:03Z", status="failure")
-    failed.update({"error_exit_code": 86, "error_memory_limit_bytes": 8})
-    write_report(path, *successes, failed)
+    for i, cap in enumerate((None, 8 * 1024**3, 10 * 1024**3)):
+        record = make_record(i, started_at=f"2026-10-27T00:00:0{i}Z", status=status, memory_limit_bytes=cap)
+        if status == "failure":
+            record["error_exit_code"] = 86
+        ReportStore(path).append(record)
     store = ReportStore(path)
+    for i, cap in enumerate((None, 8 * 1024**3, 10 * 1024**3)):
+        key = CacheKey("sha256:bin", "sha256:file", "off", memory_limit_bytes=cap)
+        assert [row.row_index for row in store.latest_records(key, 3, 120)] == [i]
+        assert [r.row_index for r in store.grouped_report().latest_records(key, 3, 120)] == [i]
+
+
+@pytest.mark.parametrize("setting", ["flags", "environment"])
+def test_changed_execution_settings_invalidate_old_observations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str
+) -> None:
+    from benchmarking.engines import PROCESS_ENV, TREATMENT_SPECS, TreatmentSpec
+
+    path = tmp_path / "report.jsonl"
+    write_report(path, make_record(0, started_at="2026-10-27T00:00:00Z"))
+    if setting == "flags":
+        monkeypatch.setitem(TREATMENT_SPECS, "off", TreatmentSpec("egglog", ("--changed-flag",)))
+    else:
+        monkeypatch.setitem(PROCESS_ENV, "RUST_LOG", "info")
     key = CacheKey("sha256:bin", "sha256:file", "off")
-    assert [row.record["status"] for row in store.latest_records(key, 3, 120, 8)] == ["success", "success", "failure"]
-    assert [row.row_index for row in store.latest_records(key, 3, 120, 16)] == [0, 1, 2]
-    failed.update({"started_at": "2026-10-27T00:00:04Z", "error_memory_limit_bytes": 16})
-    store.append(failed)
-    assert store.latest_records(key, 1, 120, 16)[0].record["status"] == "failure"
+    assert not ReportStore(path).latest_records(key, 1, 120)
 
 
-def test_raised_limits_do_not_retry_control_errors_or_foreign_exit_86(tmp_path: Path) -> None:
-    path = tmp_path / "report.jsonl"
-    timeout = make_record(0, started_at="2026-10-27T00:00:00Z", status="timed-out")
-    timeout["error_message"] = "timed out after 120 seconds; process-group cleanup failed: denied"
-    memory = make_record(1, started_at="2026-10-27T00:00:01Z", status="failure")
-    memory.update(
-        {"error_exit_code": 86, "error_memory_limit_bytes": 8, "error_message": "process-group cleanup failed: denied"}
-    )
-    foreign = make_record(2, started_at="2026-10-27T00:00:02Z", status="failure", treatment="egg-de")
-    foreign["error_exit_code"] = 86
-    write_report(path, timeout, memory, foreign)
-    store = ReportStore(path)
-    assert [
-        row.row_index for row in store.latest_records(CacheKey("sha256:bin", "sha256:file", "off"), 2, 300, 16)
-    ] == [0, 1]
-    assert len(store.latest_records(CacheKey("sha256:bin", "sha256:file", "egg-de"), 1, 300, 16)) == 1
+def test_raised_timeout_does_not_retry_control_failure(tmp_path: Path) -> None:
+    record = make_record(0, started_at="2026-10-27T00:00:00Z", status="timed-out")
+    record["error_message"] = "timed out; process-group cleanup failed: denied"
+    store = ReportStore(tmp_path / "report.jsonl")
+    store.append(record)
+    assert len(store.latest_records(CacheKey("sha256:bin", "sha256:file", "off"), 1, 300)) == 1
 
 
 def test_missing_report_is_an_empty_store_without_creating_files(tmp_path: Path) -> None:
@@ -203,7 +194,7 @@ def test_typed_dict_schema_and_nested_values_round_trip(tmp_path: Path) -> None:
     loaded = parse_report_record(report.read_bytes())
 
     assert loaded == record
-    assert tuple(loaded) == tuple(name for name in ReportRecord.__annotations__ if name != "error_memory_limit_bytes")
+    assert set(loaded) == set(ReportRecord.__annotations__)
     summary = cast(TimingSummaryRecord, loaded["timing_summary"])
     assert tuple(summary) == tuple(TimingSummaryRecord.__annotations__)
     rulesets = cast(list[RulesetTimingRecord], summary["rulesets"])

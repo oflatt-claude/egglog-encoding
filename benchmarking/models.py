@@ -12,13 +12,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from native_memory import NATIVE_LIMIT_BYTES
-
 from .engines import TREATMENT_SPECS, Engine, Treatment
+from .native_memory import NATIVE_LIMIT_BYTES
 
 Status = Literal["success", "timed-out", "failure"]
 DisequalityEncoding = Literal["nee", "ee"]
 DetailLevel = Literal["summary", "files", "phases", "rulesets"]
+ExclusionKind = Literal["resource", "unsupported", "expected-failure"]
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,18 @@ class TargetRow:
 
 
 @dataclass(frozen=True)
+class Exclusion:
+    """A reviewed configuration exclusion, attached to its matched logical input."""
+
+    kind: ExclusionKind
+    reason: str
+    evidence: str
+    treatments: tuple[Treatment, ...] = ()
+    disequality_encoding: DisequalityEncoding | None = None
+    memory_limit_bytes: int | None = None
+
+
+@dataclass(frozen=True)
 class FileSpec:
     display_path: str
     absolute_path: Path
@@ -39,6 +51,31 @@ class FileSpec:
     fact_directory: Path | None = None
     fact_directory_sha256: str = ""
     engine_inputs: tuple[tuple[Engine, FileSpec], ...] = ()
+    working_directory: Path | None = None
+    exclusions: tuple[Exclusion, ...] = ()
+
+    def exclusion_for(
+        self,
+        treatment: Treatment,
+        encoding: DisequalityEncoding = "nee",
+        *,
+        memory_limit_bytes: int | None,
+    ) -> Exclusion | None:
+        """Apply both selectors so testing and reports exclude the same configuration."""
+        matched = None
+        for rule in self.exclusions:
+            if rule.treatments and treatment not in rule.treatments:
+                continue
+            if rule.disequality_encoding is not None and rule.disequality_encoding != encoding:
+                continue
+            if rule.memory_limit_bytes is not None and (
+                memory_limit_bytes is None or memory_limit_bytes > rule.memory_limit_bytes
+            ):
+                continue
+            if matched is not None:
+                raise ValueError(f"overlapping benchmark exclusions for {self.display_path}/{treatment}")
+            matched = rule
+        return matched
 
     def for_engine(self, engine: Engine) -> FileSpec:
         """Resolve an engine's physical representation of this logical workload."""
@@ -127,10 +164,15 @@ class EndpointRequest:
     target: TargetRequest
     treatment: Treatment
     disequality_encoding: DisequalityEncoding = "nee"
+    memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
 
     def __post_init__(self) -> None:
         if TREATMENT_SPECS[self.treatment].engine != "egglog" and self.disequality_encoding != "nee":
             raise ValueError("disequality encoding selection is only supported by egglog treatments")
+        if not TREATMENT_SPECS[self.treatment].allocator_limit:
+            object.__setattr__(self, "memory_limit_bytes", None)
+        if self.memory_limit_bytes is not None and self.memory_limit_bytes < 1:
+            raise ValueError("allocator memory limit must be positive")
 
 
 @dataclass(frozen=True)
@@ -140,12 +182,22 @@ class BenchmarkEndpoint:
     target: ResolvedTarget
     treatment: Treatment
     disequality_encoding: DisequalityEncoding = "nee"
+    memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
+
+    def __post_init__(self) -> None:
+        if not TREATMENT_SPECS[self.treatment].allocator_limit:
+            object.__setattr__(self, "memory_limit_bytes", None)
 
     @property
-    def cache_identity(self) -> tuple[str, Treatment, DisequalityEncoding]:
+    def cache_identity(self) -> tuple[str, Treatment, DisequalityEncoding, int | None]:
         """Return the endpoint coordinates shared by all of its file keys."""
 
-        return (self.target.binary_sha256_for(self.treatment), self.treatment, self.disequality_encoding)
+        return (
+            self.target.binary_sha256_for(self.treatment),
+            self.treatment,
+            self.disequality_encoding,
+            self.memory_limit_bytes,
+        )
 
 
 @dataclass(frozen=True)
@@ -157,7 +209,6 @@ class ComparisonSpec:
     files: tuple[FileSpec, ...]
     rounds: int
     timeout_sec: int
-    memory_limit_bytes: int = NATIVE_LIMIT_BYTES
 
     def __post_init__(self) -> None:
         if not self.files:

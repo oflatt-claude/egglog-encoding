@@ -46,6 +46,7 @@ from .models import (
     Treatment,
     validate_unique_file_identities,
 )
+from .native_memory import NATIVE_LIMIT_BYTES
 from .processes import TimingResult, run_command
 from .reports.grouped import grouped_report_path, write_grouped_report
 from .reports.store import (
@@ -64,7 +65,7 @@ from .targets import (
     target_row_for_request,
     workload_command,
 )
-from .workloads import require_workload_unchanged
+from .workloads import exclusion_bindings, require_workload_unchanged
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,7 @@ class BenchmarkRunPlan:
     cached_statuses: tuple[Status, ...]
     missing_observations: int
     disequality_encoding: DisequalityEncoding = "nee"
+    memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,17 @@ def resolve_requests(
     files_by_endpoint: dict[EndpointRequest, dict[tuple[str, str], FileSpec]] = {}
     all_files: dict[tuple[str, str], FileSpec] = {}
     for request in requests:
+        for file in request.files:
+            excluded = file.exclusion_for(
+                request.endpoint.treatment,
+                request.endpoint.disequality_encoding,
+                memory_limit_bytes=request.endpoint.memory_limit_bytes,
+            )
+            if excluded is not None:
+                console.print(
+                    f"Excluded {file.display_path} · {request.endpoint.treatment}: {excluded.kind}: {excluded.reason}",
+                    markup=False,
+                )
         if not request.files:
             raise ValueError("benchmark request requires at least one file")
         validate_unique_file_identities(request.files)
@@ -147,7 +160,15 @@ def resolve_requests(
         physical_files = tuple(file.for_engine(engine) for file in request.files)
         validate_unique_file_identities(physical_files)
         for file in physical_files:
-            validate_engine_workload(file, request.endpoint.treatment)
+            if (
+                file.exclusion_for(
+                    request.endpoint.treatment,
+                    request.endpoint.disequality_encoding,
+                    memory_limit_bytes=request.endpoint.memory_limit_bytes,
+                )
+                is None
+            ):
+                validate_engine_workload(file, request.endpoint.treatment)
         endpoints = endpoints_by_target.setdefault(request.endpoint.target, [])
         if request.endpoint not in endpoints:
             endpoints.append(request.endpoint)
@@ -183,7 +204,12 @@ def plan_collection(
     scopes: dict[tuple[ResolvedTarget, tuple[FileSpec, ...]], list[BenchmarkEndpoint]] = {}
     for request in requests:
         target = resolved_targets[request.endpoint.target]
-        endpoint = BenchmarkEndpoint(target, request.endpoint.treatment, request.endpoint.disequality_encoding)
+        endpoint = BenchmarkEndpoint(
+            target,
+            request.endpoint.treatment,
+            request.endpoint.disequality_encoding,
+            request.endpoint.memory_limit_bytes,
+        )
         endpoints = scopes.setdefault((target, request.files), [])
         if endpoint not in endpoints:
             endpoints.append(endpoint)
@@ -192,6 +218,15 @@ def plan_collection(
     for (_target, files), endpoints in scopes.items():
         for file in files:
             for endpoint in endpoints:
+                if (
+                    file.exclusion_for(
+                        endpoint.treatment,
+                        endpoint.disequality_encoding,
+                        memory_limit_bytes=endpoint.memory_limit_bytes,
+                    )
+                    is not None
+                ):
+                    continue
                 physical_file = file.for_engine(TREATMENT_SPECS[endpoint.treatment].engine)
                 key = CacheKey.for_endpoint(endpoint, file)
                 cells.setdefault(key, (endpoint, physical_file))
@@ -213,6 +248,7 @@ def plan_collection(
                 cached_statuses=cached,
                 missing_observations=missing,
                 disequality_encoding=key.disequality_encoding,
+                memory_limit_bytes=key.memory_limit_bytes,
             )
         )
     return tuple(CollectionPlan(target, tuple(runs)) for target, runs in runs_by_target.items())
@@ -250,6 +286,7 @@ def collect(
     """Preflight all targets, collect once, and refresh their current grouped labels."""
 
     label_bindings = current_label_bindings(requests, resolved_targets)
+    exclusions = exclusion_bindings(tuple(file for request in requests for file in request.files))
     complete = False
     try:
         for plan in plans:
@@ -269,7 +306,7 @@ def collect(
             destination = grouped_report_path(store.path)
             console.print(Text(f"Writing {destination}"), soft_wrap=True)
             started = perf_counter()
-            grouped = store.grouped_report(label_bindings)
+            grouped = store.grouped_report(label_bindings, exclusions)
             write_grouped_report(grouped, destination)
             if verbose:
                 console.print(f"  wrote {store.row_count} observations in {perf_counter() - started:.1f}s")
@@ -325,7 +362,7 @@ def resolve_targets(
         checkout_path
         for checkout_path, pending_targets in pending_by_checkout.items()
         if any(
-            TREATMENT_SPECS[endpoint.treatment].engine in ("egglog", "egg")
+            TREATMENT_SPECS[endpoint.treatment].engine in ("egglog", "egg", "slotted")
             for target in pending_targets
             for endpoint in target.endpoint_requests
         )
@@ -459,10 +496,15 @@ def label_has_enough_rows(
             endpoint.treatment,
             file_spec.fact_directory_sha256,
             endpoint.disequality_encoding,
+            endpoint.memory_limit_bytes,
         )
         for endpoint in endpoint_requests
         for logical_file in (files_by_endpoint[endpoint] if files_by_endpoint is not None else files)
         for file_spec in (logical_file.for_engine(TREATMENT_SPECS[endpoint.treatment].engine),)
+        if logical_file.exclusion_for(
+            endpoint.treatment, endpoint.disequality_encoding, memory_limit_bytes=endpoint.memory_limit_bytes
+        )
+        is None
     )
     selected = store.selected_statuses_for_keys(keys, rounds, timeout_sec)
     return all(any(status != "success" for status in selected[key]) or len(selected[key]) >= rounds for key in keys)
@@ -475,18 +517,23 @@ def run_process(
     treatment: Treatment,
     timeout_sec: int,
     disequality_encoding: DisequalityEncoding = "nee",
+    memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES,
 ) -> ProcessObservation:
     """Run one measured workload and read the summary it emitted on success."""
 
+    file_spec = file_spec.for_engine(TREATMENT_SPECS[treatment].engine)
     with tempfile.TemporaryDirectory(prefix="egglog-benchmark-") as directory:
         summary_path = Path(directory) / "timing-summary.json"
         workload = workload_command(binary_path, file_spec, treatment, disequality_encoding)
+        checkout_path = file_spec.working_directory or checkout_path
+        if not TREATMENT_SPECS[treatment].allocator_limit:
+            memory_limit_bytes = None
         if not TREATMENT_SPECS[treatment].timing_summary:
-            result = run_command(workload, checkout_path, timeout_sec)
+            result = run_command(workload, checkout_path, timeout_sec, memory_limit_bytes=memory_limit_bytes)
             require_workload_unchanged(file_spec)
             return ProcessObservation(result=result, timing_summary=None)
         command = [workload[0], "--timing-summary", str(summary_path), *workload[1:]]
-        result = run_command(command, checkout_path, timeout_sec, native_limit=True)
+        result = run_command(command, checkout_path, timeout_sec, memory_limit_bytes=memory_limit_bytes)
         require_workload_unchanged(file_spec)
         if result.status != "success":
             return ProcessObservation(result=result, timing_summary=None)
@@ -507,6 +554,7 @@ def run_preflight(
     checkout_path: Path,
     timeout_sec: int,
     required_outputs: tuple[str, ...] = ("--timing-summary", "--memory-limit-bytes"),
+    memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES,
 ) -> TimingResult:
     """Run one untimed ``--help`` capability preflight."""
 
@@ -515,7 +563,7 @@ def run_preflight(
         checkout_path,
         timeout_sec,
         required_output=required_outputs,
-        native_limit=True,
+        memory_limit_bytes=memory_limit_bytes,
     )
 
 
@@ -534,16 +582,21 @@ def preflight_collection(plan: CollectionPlan, timeout_sec: int) -> None:
         binary_path = target.binary_path_for(engine_runs[0].treatment)
         if binary_path is None:
             raise ValueError(f"target {target.display_label} needs a fresh {engine} binary")
-        if engine not in ("egglog", "egg"):
+        if engine not in ("egglog", "egg", "slotted"):
             continue
-        required_outputs = ["--timing-summary", "--memory-limit-bytes"]
-        if engine == "egglog":
+        required_outputs = []
+        if any(TREATMENT_SPECS[run.treatment].timing_summary for run in engine_runs):
+            required_outputs.append("--timing-summary")
+        bound = next((run.memory_limit_bytes for run in engine_runs if run.memory_limit_bytes is not None), None)
+        if bound is not None:
+            required_outputs.append("--memory-limit-bytes")
+        if engine in ("egglog", "slotted"):
             if any(run.disequality_encoding != "nee" for run in engine_runs):
                 required_outputs.append("--disequality-encoding")
             required_outputs.extend(
                 flag for run in engine_runs for flag in TREATMENT_SPECS[run.treatment].flags if flag.startswith("--")
             )
-        else:
+        elif engine == "egg":
             required_outputs.extend(
                 flag
                 for run in engine_runs
@@ -555,6 +608,7 @@ def preflight_collection(plan: CollectionPlan, timeout_sec: int) -> None:
             Path(target.row.path),
             timeout_sec,
             tuple(dict.fromkeys(required_outputs)),
+            bound,
         )
         if result.status != "success":
             message = f"target {target.display_label} {engine} preflight failed"
@@ -635,6 +689,9 @@ def flat_report_record(
     """Construct the complete persisted record for one observation."""
 
     result = observation.result
+    key = CacheKey.for_endpoint(
+        BenchmarkEndpoint(target, run.treatment, run.disequality_encoding, run.memory_limit_bytes), run.file
+    )
     record: ReportRecord = {
         "report_schema_version": REPORT_SCHEMA_VERSION,
         "started_at": started_at,
@@ -659,9 +716,9 @@ def flat_report_record(
         "error_signal": result.error.signal if result.error is not None else None,
         "error_message": result.error.message if result.error is not None else None,
         "timing_summary": observation.timing_summary,
+        "memory_limit_bytes": key.memory_limit_bytes,
+        "execution_settings_sha256": key.execution_settings_sha256,
     }
-    if result.error is not None and result.error.memory_limit_bytes is not None:
-        record["error_memory_limit_bytes"] = result.error.memory_limit_bytes
     return record
 
 
@@ -696,7 +753,9 @@ class CollectionETAColumn(ProgressColumn):
             if prior is None or order > prior[0]:
                 self.hints[identity] = (order, wall)
         for target, run in runs:
-            key = CacheKey.for_endpoint(BenchmarkEndpoint(target, run.treatment, run.disequality_encoding), run.file)
+            key = CacheKey.for_endpoint(
+                BenchmarkEndpoint(target, run.treatment, run.disequality_encoding, run.memory_limit_bytes), run.file
+            )
             self.remaining[key] = run.missing_observations
             self.durations[key] = [
                 wall
@@ -782,7 +841,7 @@ def collect_rows(
         for round_index in range(max_deficit):
             for target, run in runs:
                 key = CacheKey.for_endpoint(
-                    BenchmarkEndpoint(target, run.treatment, run.disequality_encoding), run.file
+                    BenchmarkEndpoint(target, run.treatment, run.disequality_encoding, run.memory_limit_bytes), run.file
                 )
                 if round_index >= run.missing_observations or key in stopped:
                     continue
@@ -814,6 +873,7 @@ def collect_rows(
                     run.treatment,
                     timeout_sec,
                     run.disequality_encoding,
+                    run.memory_limit_bytes,
                 )
                 store.append(
                     flat_report_record(

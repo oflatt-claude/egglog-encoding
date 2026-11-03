@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +14,36 @@ import pytest
 from benchmarking.figures import _figure_inventory
 from benchmarks.reproduction.native import NATIVE_ALLOCATION_FAILURE
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_routine_selection_never_imports_acquisition_or_generation_code() -> None:
+    # Only the portable manifest reader and legacy diagnostic constants are shared
+    # with reproduction. Refuse all executable reproduction modules even when
+    # resolving the complete real catalog and projecting its saved metadata.
+    source = """
+import importlib.abc
+import sys
+from pathlib import Path
+
+class NoPreparation(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname.startswith('benchmarks.reproduction.') and fullname not in {
+            'benchmarks.reproduction.corpus', 'benchmarks.reproduction.native'
+        }:
+            raise AssertionError('routine selection imported preparation code: ' + fullname)
+
+sys.meta_path.insert(0, NoPreparation())
+import benchmarking.collection
+from benchmarking.figures import DEFAULT_CONFIG, _figure_inventory, load_config, resolve_figures
+config = load_config(DEFAULT_CONFIG)
+figures = resolve_figures(config, [], Path.cwd())
+files = {file.absolute_path: file for figure in figures for file in figure.files}
+inventory = _figure_inventory(Path.cwd(), list(files.values()))
+assert inventory['workloads']
+assert len(figures) == 5
+"""
+    subprocess.run([sys.executable, "-c", source], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def corpus_fixture(root: Path) -> dict[str, Any]:
@@ -157,3 +188,53 @@ def test_metadata_only_validates_selected_corpus_inputs(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unregistered"):
         _figure_inventory(tmp_path, [FileSpec(item["file"], selected.absolute_path, corpus["workloads"][1]["sha256"])])
     assert _figure_inventory(tmp_path, [FileSpec("custom.egg", tmp_path / "custom.egg", "custom")])["workloads"] == []
+
+
+def test_frozen_slotted_suite_matches_saved_provenance_and_budgets() -> None:
+    import re
+
+    directory = ROOT / "benchmarks/slotted/inputs"
+    manifest = json.loads((directory / "manifest.json").read_text())
+    assert len(manifest["workloads"]) == 23
+    expected = set()
+    for workload in manifest["workloads"]:
+        for key in ("file", "reference"):
+            path = directory / workload[key]
+            expected.add(path)
+            assert "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest() == workload[key + "_sha256"]
+        source = (directory / workload["file"]).read_text()
+        budgets = [int(n) for n in re.findall(r"\(run (\d+)\)", source)]
+        assert budgets == workload["run_budgets"]
+        frozen = json.loads((directory / workload["reference"]).read_text())
+        for matcher in ("multi", "nested"):
+            if frozen[matcher] is not None:
+                assert re.findall(r"^rounds (\d+)$", frozen[matcher], re.MULTILINE) == [str(workload["rounds"])]
+        if workload["family"] == "sdql":
+            assert workload["rules"] == 44
+            for key in ("input", "target"):
+                path = ROOT / workload["source"][key]
+                assert "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest() == workload["source"][key + "_sha256"]
+    assert expected == {p for p in directory.rglob("*") if p.suffix in (".egg", ".ref")}
+    library = manifest["sources"]["sdql"]
+    assert (
+        "sha256:" + hashlib.sha256((ROOT / library["rule_library"]).read_bytes()).hexdigest()
+        == library["rule_library_sha256"]
+    )
+
+
+def test_rust_paper_dispatch_covers_the_shared_treatment_table() -> None:
+    import re
+
+    from benchmarking.engines import TREATMENTS
+
+    source = (ROOT / "egglog-experimental/tests/paper.rs").read_text()
+    dispatch = source.split("let supported = [", 1)[1].split("];", 1)[0]
+    assert set(re.findall(r'"([^"]+)"', dispatch)) == set(TREATMENTS)
+
+
+def test_slotted_static_provenance_guards_and_operator_correspondence() -> None:
+    from benchmarks.reproduction.slotted import language_checks, provenance
+
+    assert language_checks.correspondence() == 0
+    assert language_checks.guards() == 0
+    assert provenance.main() == 0

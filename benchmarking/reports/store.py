@@ -13,25 +13,26 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from math import isfinite
 from pathlib import Path
-from typing import Final, Literal, NotRequired, TypedDict, cast
+from typing import Final, Literal, TypedDict, cast
 
-from native_memory import NATIVE_ALLOCATION_EXIT, NATIVE_LIMIT_BYTES
-
-from ..engines import TREATMENT_SPECS, Engine
+from ..engines import TREATMENT_SPECS, Engine, execution_settings_sha256
 from ..models import (
     BenchmarkEndpoint,
     DisequalityEncoding,
+    Exclusion,
+    ExclusionKind,
     FileSpec,
     Status,
     TargetRow,
     Treatment,
 )
+from ..native_memory import NATIVE_LIMIT_BYTES
 
-type ReportSchemaVersion = Literal[5]
-REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 5
+type ReportSchemaVersion = Literal[6]
+REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 6
 
-type GroupedSchemaVersion = Literal[2]
-GROUPED_SCHEMA_VERSION: Final[GroupedSchemaVersion] = 2
+type GroupedSchemaVersion = Literal[3]
+GROUPED_SCHEMA_VERSION: Final[GroupedSchemaVersion] = 3
 
 type TimingSummarySchemaVersion = Literal[4]
 TIMING_SUMMARY_SCHEMA_VERSION: Final[TimingSummarySchemaVersion] = 4
@@ -92,7 +93,8 @@ class ReportRecord(TypedDict):
     error_exit_code: int | None
     error_signal: int | None
     error_message: str | None
-    error_memory_limit_bytes: NotRequired[int]  # Configured allowance; inherited address-space limits may be tighter.
+    memory_limit_bytes: int | None
+    execution_settings_sha256: str
     timing_summary: TimingSummaryRecord | None
 
 
@@ -105,6 +107,20 @@ class CacheKey:
     treatment: Treatment
     fact_directory_sha256: str = ""
     disequality_encoding: DisequalityEncoding = "nee"
+    memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
+    execution_settings_sha256: str = ""
+
+    def __post_init__(self) -> None:
+        if not TREATMENT_SPECS[self.treatment].allocator_limit:
+            object.__setattr__(self, "memory_limit_bytes", None)
+        if not self.execution_settings_sha256:
+            object.__setattr__(
+                self,
+                "execution_settings_sha256",
+                execution_settings_sha256(
+                    self.treatment, self.file_sha256, self.disequality_encoding, self.memory_limit_bytes
+                ),
+            )
 
     @classmethod
     def for_endpoint(
@@ -121,6 +137,7 @@ class CacheKey:
             treatment=endpoint.treatment,
             disequality_encoding=endpoint.disequality_encoding,
             fact_directory_sha256=file_spec.fact_directory_sha256,
+            memory_limit_bytes=endpoint.memory_limit_bytes,
         )
 
 
@@ -147,14 +164,12 @@ class IndexedRecord:
         return (self.started_at, self.row_index)
 
 
-def select_records(
-    rows: Sequence[IndexedRecord], rounds: int, timeout_sec: int, memory_limit_bytes: int
-) -> tuple[IndexedRecord, ...]:
+def select_records(rows: Sequence[IndexedRecord], rounds: int, timeout_sec: int) -> tuple[IndexedRecord, ...]:
     """Select newest applicable observations, retaining failures at unchanged bounds.
 
     Successful completion under an equal/tighter deadline is sufficient even
     when process-launch overhead exceeds that deadline or wall time is absent.
-    Only a raised bound retires its resource failure; ordinary errors persist.
+    A raised deadline retires timeouts; other failures persist within their exact execution profile.
     """
     if rounds < 1:
         raise ValueError("rounds must be positive")
@@ -169,16 +184,8 @@ def select_records(
                 continue
         elif "process-group cleanup failed:" in (record["error_message"] or ""):
             pass  # A control failure is not repaired by raising a workload limit.
-        elif record["status"] == "timed-out":
-            if timeout_sec > record["timeout_sec"]:
-                continue
-        elif record["error_exit_code"] == NATIVE_ALLOCATION_EXIT and TREATMENT_SPECS[record["treatment"]].engine in (
-            "egglog",
-            "egg",
-        ):
-            bound = record.get("error_memory_limit_bytes")
-            if bound is None or memory_limit_bytes > bound:
-                continue
+        elif record["status"] == "timed-out" and timeout_sec > record["timeout_sec"]:
+            continue
         eligible.append(row)
     return tuple(sorted(eligible, key=lambda row: row.order_key)[-rounds:])
 
@@ -189,6 +196,8 @@ class GroupedKey(TypedDict):
     treatment: Treatment
     fact_directory_sha256: str
     disequality_encoding: DisequalityEncoding
+    memory_limit_bytes: int | None
+    execution_settings_sha256: str
 
 
 class GroupedSample(ReportRecord):
@@ -212,6 +221,17 @@ class GroupedReportRecord(TypedDict):
     grouped_schema_version: GroupedSchemaVersion
     report_schema_version: ReportSchemaVersion
     groups: list[ObservationGroup]
+    exclusions: list[GroupedExclusion]
+
+
+class GroupedExclusion(TypedDict):
+    file_sha256: str
+    treatments: list[Treatment]
+    disequality_encoding: DisequalityEncoding | None
+    kind: ExclusionKind
+    reason: str
+    evidence: str
+    memory_limit_bytes: int | None
 
 
 class GroupedReport:
@@ -220,6 +240,19 @@ class GroupedReport:
     def __init__(self, data: GroupedReportRecord, display_path: str) -> None:
         self.data = data
         self.display_path = display_path
+        excluded: dict[str, list[Exclusion]] = {}
+        for rule in data["exclusions"]:
+            excluded.setdefault(rule["file_sha256"], []).append(
+                Exclusion(
+                    rule["kind"],
+                    rule["reason"],
+                    rule["evidence"],
+                    tuple(rule["treatments"]),
+                    rule["disequality_encoding"],
+                    rule["memory_limit_bytes"],
+                )
+            )
+        self.exclusions_by_input = {identity: tuple(rules) for identity, rules in excluded.items()}
         self._by_key = {
             CacheKey(**group["key"]): tuple(
                 IndexedRecord(sample["row_index"], datetime.fromisoformat(sample["started_at"]), sample)
@@ -232,12 +265,10 @@ class GroupedReport:
             for row in sorted((row for rows in self._by_key.values() for row in rows), key=lambda row: row.row_index)
         )
 
-    def latest_records(
-        self, key: CacheKey, rounds: int, timeout_sec: int, memory_limit_bytes: int = NATIVE_LIMIT_BYTES
-    ) -> tuple[IndexedRecord, ...]:
+    def latest_records(self, key: CacheKey, rounds: int, timeout_sec: int) -> tuple[IndexedRecord, ...]:
         """Select the requested tail without discarding the snapshot's other samples."""
 
-        return select_records(self._by_key.get(key, ()), rounds, timeout_sec, memory_limit_bytes)
+        return select_records(self._by_key.get(key, ()), rounds, timeout_sec)
 
 
 class ReportStore:
@@ -285,7 +316,11 @@ class ReportStore:
             handle.write(encoded + b"\n")
         self._index(indexed)
 
-    def grouped_report(self, label_bindings: Mapping[tuple[str, Engine], str] | None = None) -> GroupedReport:
+    def grouped_report(
+        self,
+        label_bindings: Mapping[tuple[str, Engine], str] | None = None,
+        exclusions: Sequence[GroupedExclusion] = (),
+    ) -> GroupedReport:
         """Freeze observations and refresh aliases from any targets resolved this invocation.
 
         Bindings override historical labels without changing sample provenance or
@@ -319,6 +354,7 @@ class ReportStore:
                 "grouped_schema_version": GROUPED_SCHEMA_VERSION,
                 "report_schema_version": REPORT_SCHEMA_VERSION,
                 "groups": groups,
+                "exclusions": list(exclusions),
             },
             self.display_path,
         )
@@ -354,25 +390,20 @@ class ReportStore:
         keys: Sequence[CacheKey],
         rounds: int,
         timeout_sec: int,
-        memory_limit_bytes: int = NATIVE_LIMIT_BYTES,
     ) -> dict[CacheKey, tuple[Status, ...]]:
         """Select latest statuses for every distinct exact cache key."""
 
         if rounds < 1:
             raise ValueError("rounds must be positive")
         return {
-            key: tuple(
-                row.record["status"] for row in self.latest_records(key, rounds, timeout_sec, memory_limit_bytes)
-            )
+            key: tuple(row.record["status"] for row in self.latest_records(key, rounds, timeout_sec))
             for key in dict.fromkeys(keys)
         }
 
-    def latest_records(
-        self, key: CacheKey, rounds: int, timeout_sec: int, memory_limit_bytes: int = NATIVE_LIMIT_BYTES
-    ) -> tuple[IndexedRecord, ...]:
+    def latest_records(self, key: CacheKey, rounds: int, timeout_sec: int) -> tuple[IndexedRecord, ...]:
         """Return up to ``rounds`` newest rows in chronological presentation order."""
 
-        return select_records(self._by_key.get(key, ()), rounds, timeout_sec, memory_limit_bytes)
+        return select_records(self._by_key.get(key, ()), rounds, timeout_sec)
 
     def _indexed(self, record: ReportRecord) -> IndexedRecord:
         return IndexedRecord(
@@ -404,6 +435,8 @@ def _record_key(record: ReportRecord) -> CacheKey:
         treatment=record["treatment"],
         disequality_encoding=record["disequality_encoding"],
         fact_directory_sha256=record["fact_directory_sha256"],
+        memory_limit_bytes=record["memory_limit_bytes"],
+        execution_settings_sha256=record["execution_settings_sha256"],
     )
 
 

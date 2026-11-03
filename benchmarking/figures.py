@@ -21,14 +21,14 @@ from rich.console import Console
 
 from benchmarks.reproduction.corpus import MANIFEST_RELATIVE_PATH, VALIDATION_POLICY, load_manifest
 from benchmarks.reproduction.native import NATIVE_ALLOCATION_FAILURE
-from native_memory import NATIVE_LIMIT_BYTES
 
 from .engines import TREATMENT_SPECS, TREATMENTS, Treatment
 from .models import BenchmarkEndpoint, EndpointRequest, FileSpec, ResolvedTarget, validate_unique_file_identities
+from .native_memory import NATIVE_LIMIT_BYTES
 from .reports.grouped import grouped_report_path, write_grouped_report
 from .reports.store import CacheKey, GroupedReport
 from .targets import parse_target
-from .workloads import resolve_files
+from .workloads import exclusion_bindings, resolve_files
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "figures/catalog.json"
@@ -41,6 +41,7 @@ class Figure:
     spec: Path
     patterns: tuple[str, ...]
     treatments: tuple[Treatment, ...]
+    checks: tuple[Treatment, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class FigureConfig:
     rounds: int
     timeout_sec: int
     figures: tuple[Figure, ...]
+    memory_limit_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -149,8 +151,12 @@ def load_config(path: Path) -> FigureConfig:
     for name, item in data["figures"].items():
         if not name or Path(name).name != name or name in (".", ".."):
             raise ValueError(f"invalid figure name: {name!r}")
-        if not isinstance(item, dict) or set(item) != {"spec", "files", "treatments"}:
-            raise ValueError(f"{name}: requires exactly spec, files, and treatments")
+        if (
+            not isinstance(item, dict)
+            or not {"spec", "files", "treatments"} <= set(item)
+            or set(item) - {"spec", "files", "treatments", "checks"}
+        ):
+            raise ValueError(f"{name}: requires spec, files, treatments, and optional checks")
         if not isinstance(item["spec"], str) or not item["spec"]:
             raise ValueError(f"{name}: spec must be a path")
         for key in ("files", "treatments"):
@@ -162,11 +168,20 @@ def load_config(path: Path) -> FigureConfig:
                 raise ValueError(f"{name}: {key} must be a nonempty list of strings")
         if len(set(item["treatments"])) != len(item["treatments"]):
             raise ValueError(f"{name}: duplicate treatment")
-        unknown = set(item["treatments"]) - set(TREATMENTS)
+        checks = item.get("checks", [])
+        if not isinstance(checks, list) or any(not isinstance(value, str) for value in checks):
+            raise ValueError(f"{name}: checks must be a list of treatments")
+        unknown = set(item["treatments"] + checks) - set(TREATMENTS)
         if unknown:
             raise ValueError(f"{name}: unknown treatments: {', '.join(sorted(unknown))}")
         figures.append(
-            Figure(name, (path.parent / item["spec"]).resolve(), tuple(item["files"]), tuple(item["treatments"]))
+            Figure(
+                name,
+                (path.parent / item["spec"]).resolve(),
+                tuple(item["files"]),
+                tuple(item["treatments"]),
+                tuple(checks),
+            )
         )
     return FigureConfig(path, data["rounds"], data["timeout_sec"], tuple(figures))
 
@@ -199,6 +214,12 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, FigureConfig]:
     parser.add_argument(
         "--output-dir", type=Path, help="common output directory (default: each specification directory)"
     )
+    parser.add_argument(
+        "--memory-limit",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="apply the local 10 GiB allocator cap for verification (default: uncapped paper measurements)",
+    )
     args = parser.parse_args(argv)
     if args.rounds < 1:
         parser.error("--rounds must be positive")
@@ -209,7 +230,9 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, FigureConfig]:
     unknown = set(args.names) - {figure.name for figure in config.figures}
     if unknown:
         parser.error("unknown figure names: " + ", ".join(sorted(unknown)) + "; select a JSON catalog with --config")
-    return args, replace(config, rounds=args.rounds)
+    return args, replace(
+        config, rounds=args.rounds, memory_limit_bytes=NATIVE_LIMIT_BYTES if args.memory_limit else None
+    )
 
 
 def resolve_figures(config: FigureConfig, names: Sequence[str], invocation_cwd: Path) -> tuple[ResolvedFigure, ...]:
@@ -268,17 +291,28 @@ def render_figures(
         figure = resolved.figure
         selected_inputs = []
         incomplete = 0
+        excluded_conditions = 0
         for file in resolved.files:
             info = metadata.get((file.sha256, file.fact_directory_sha256))
             for treatment in figure.treatments:
                 physical = file.for_engine(TREATMENT_SPECS[treatment].engine)
-                rows = grouped.latest_records(
-                    CacheKey.for_endpoint(BenchmarkEndpoint(target, treatment), file),
-                    config.rounds,
-                    config.timeout_sec,
-                    NATIVE_LIMIT_BYTES,
+                key = CacheKey.for_endpoint(
+                    BenchmarkEndpoint(target, treatment, memory_limit_bytes=config.memory_limit_bytes), file
                 )
-                incomplete += len(rows) < config.rounds or any(row.record["status"] != "success" for row in rows)
+                excluded = file.exclusion_for(treatment, memory_limit_bytes=key.memory_limit_bytes)
+                rows = (
+                    ()
+                    if excluded is not None
+                    else grouped.latest_records(
+                        key,
+                        config.rounds,
+                        config.timeout_sec,
+                    )
+                )
+                if excluded is not None:
+                    excluded_conditions += 1
+                else:
+                    incomplete += len(rows) < config.rounds or any(row.record["status"] != "success" for row in rows)
                 selected_inputs.append(
                     {
                         "logical_id": f"{file.sha256}/{file.fact_directory_sha256}",
@@ -287,16 +321,28 @@ def render_figures(
                         "file_sha256": physical.sha256,
                         "fact_directory_sha256": physical.fact_directory_sha256,
                         "treatment": treatment,
+                        "binary_sha256": key.binary_sha256,
+                        "execution_settings_sha256": key.execution_settings_sha256,
+                        "memory_limit_bytes": key.memory_limit_bytes,
                         "selected_row_indices": [row.row_index for row in rows],
                         "validation_failures": info["validation_failures"] if info else {},
+                        "exclusion": None
+                        if excluded is None
+                        else {
+                            "kind": excluded.kind,
+                            "reason": excluded.reason,
+                            "evidence": excluded.evidence,
+                        },
                     }
                 )
         bindings = {
             "target_label": label,
             "timeout_sec": config.timeout_sec,
             "rounds": config.rounds,
+            "memory_limit_bytes": config.memory_limit_bytes,
             "t_critical": None if config.rounds == 1 else float(stats.t.ppf(0.975, config.rounds - 1)),
             "selected_inputs": selected_inputs,
+            "treatments": figure.treatments,
             "source_blockers": inventory["unavailable_cases"],
         }
         spec = deepcopy(resolved.spec)
@@ -310,7 +356,7 @@ def render_figures(
         console.print(f"Rendering {figure.name}", markup=False)
         # Render the complete set before replacing any existing image.
         with tempfile.TemporaryDirectory(dir=destination, prefix=f".{figure.name}.") as temporary:
-            bound_path = Path(temporary) / f"{figure.name}.vl.json"
+            bound_path = Path(temporary) / f"{figure.name}.bound.vl.json"
             bound_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n")
             for output in outputs:
                 generated = Path(temporary) / output.name
@@ -327,11 +373,17 @@ def render_figures(
                 subprocess.run(args, cwd=ROOT, check=True, stdout=sys.stderr, stderr=sys.stderr)
                 if not generated.is_file() or not generated.stat().st_size:
                     raise ValueError(f"renderer produced no image: {output}")
+            outputs.append(destination / bound_path.name)
             for output in outputs:
                 os.replace(Path(temporary) / output.name, output)
         for output in outputs:
             console.print(str(output), soft_wrap=True, markup=False)
             rendered.append(output)
+        if excluded_conditions:
+            console.print(
+                f"{figure.name}: {excluded_conditions}/{len(selected_inputs)} explicitly excluded conditions",
+                markup=False,
+            )
         if incomplete:
             console.print(
                 f"{figure.name}: {incomplete}/{len(selected_inputs)} incomplete or unsuccessful conditions",
@@ -381,7 +433,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.verbose:
             console.print(f"  loaded {store.row_count} observations in {perf_counter() - started:.1f}s")
         requests = tuple(
-            BenchmarkRequest(EndpointRequest(target_request, treatment), figure.files)
+            BenchmarkRequest(
+                EndpointRequest(target_request, treatment, memory_limit_bytes=config.memory_limit_bytes), figure.files
+            )
             for figure in figures
             for treatment in figure.figure.treatments
         )
@@ -404,7 +458,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # A failed snapshot write must not make an older executable look current.
             console.print(f"Writing {grouped_report_path(report_path)}", soft_wrap=True, markup=False)
             started = perf_counter()
-            grouped = store.grouped_report(current_label_bindings(requests, targets))
+            grouped = store.grouped_report(current_label_bindings(requests, targets), exclusion_bindings(all_files))
             write_grouped_report(grouped, grouped_report_path(report_path))
             if args.verbose:
                 console.print(f"  wrote grouped snapshot in {perf_counter() - started:.1f}s")

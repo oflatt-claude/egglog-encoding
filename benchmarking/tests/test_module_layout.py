@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def python_modules() -> tuple[Path, ...]:
@@ -16,7 +17,6 @@ def python_modules() -> tuple[Path, ...]:
     return (
         ROOT / "bench.py",
         *sorted((ROOT / "benchmarking").rglob("*.py")),
-        *sorted((ROOT / "tests").rglob("*.py")),
     )
 
 
@@ -65,14 +65,16 @@ def test_every_python_module_has_an_ownership_docstring() -> None:
 
 
 def test_package_initializers_are_docstring_only() -> None:
-    initializers = (
-        *sorted((ROOT / "benchmarking").rglob("__init__.py")),
-        *sorted((ROOT / "tests").rglob("__init__.py")),
-    )
+    initializers = (*sorted((ROOT / "benchmarking").rglob("__init__.py")),)
     for path in initializers:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         assert len(tree.body) == 1
         assert ast.get_docstring(tree) is not None
+
+
+def test_native_memory_policy_uses_only_stdlib() -> None:
+    imports = imported_module_names(ROOT / "benchmarking/native_memory.py")
+    assert {name.split(".")[0] for name in imports} <= sys.stdlib_module_names
 
 
 RUNNER_LAYERS = frozenset(

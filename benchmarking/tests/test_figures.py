@@ -15,7 +15,7 @@ from rich.console import Console
 
 import bench
 from benchmarking import figures
-from benchmarking.models import EngineBinary, FileSpec
+from benchmarking.models import EngineBinary, Exclusion, FileSpec
 from benchmarking.reports.grouped import grouped_report_path, write_grouped_report
 from benchmarking.reports.store import ReportStore
 
@@ -207,10 +207,8 @@ def test_shared_specs_and_inputs_are_read_once(tmp_path: Path, monkeypatch: pyte
     (tmp_path / "one.egg").write_text("(check (= 1 1))")
     reads: list[Path] = []
     hashes: list[Path] = []
-    validations: list[Path] = []
     read_bytes = Path.read_bytes
     sha256_file = workloads.sha256_file
-    contains_prove = workloads.file_contains_executable_prove_command
 
     def read(path: Path) -> bytes:
         reads.append(path)
@@ -220,16 +218,11 @@ def test_shared_specs_and_inputs_are_read_once(tmp_path: Path, monkeypatch: pyte
         hashes.append(path)
         return sha256_file(path)
 
-    def validate(path: Path) -> bool:
-        validations.append(path)
-        return contains_prove(path)
-
     monkeypatch.setattr(Path, "read_bytes", read)
     monkeypatch.setattr(workloads, "sha256_file", hash_file)
-    monkeypatch.setattr(workloads, "file_contains_executable_prove_command", validate)
     resolved = figures.resolve_figures(config, [], tmp_path)
     assert reads == [tmp_path / "chart.vl.json"]
-    assert hashes == validations == [tmp_path / "one.egg"]
+    assert hashes == [tmp_path / "one.egg"]
     assert resolved[0].files[0] is resolved[1].files[0]
 
 
@@ -243,7 +236,11 @@ def test_temporary_bindings_render_every_time_and_preserve_images_on_failure(
     resolved = [figures.ResolvedFigure(f, (file,), json.loads(f.spec.read_bytes())) for f in config.figures]
     report = tmp_path / "cache.jsonl"
     write_report(
-        report, *[make_record(i, started_at=f"2026-10-01T00:00:0{i}Z", target_label="figures") for i in range(3)]
+        report,
+        *[
+            make_record(i, memory_limit_bytes=None, started_at=f"2026-10-01T00:00:0{i}Z", target_label="figures")
+            for i in range(3)
+        ],
     )
     grouped = ReportStore(report).grouped_report()
     write_grouped_report(grouped, grouped_report_path(report))
@@ -269,7 +266,7 @@ def test_temporary_bindings_render_every_time_and_preserve_images_on_failure(
     original = (tmp_path / "chart.vl.json").read_bytes()
     inventory: figures.FigureInventory = {"workloads": [], "unavailable_cases": []}
     outputs = figures.render_figures(resolved, config, grouped, report, target, output_dir, console, inventory)
-    assert len(outputs) == 6 and len(calls) == 6
+    assert len(outputs) == 8 and len(calls) == 6
     assert all(str(output) in stream.getvalue().splitlines() for output in outputs)
     assert bindings[0] == bindings[3]
     params = {p["name"]: p["value"] for p in bindings[0]["params"]}
@@ -277,6 +274,8 @@ def test_temporary_bindings_render_every_time_and_preserve_images_on_failure(
     assert params["selected_inputs"][0]["file_sha256"] == "sha256:file"
     assert params["selected_inputs"][0]["selected_row_indices"] == [1, 2]
     assert bindings[0]["data"]["url"] == grouped_report_path(report).as_uri()
+    assert json.loads((output_dir / "runtime.bound.vl.json").read_bytes()) == bindings[0]
+    assert json.loads((output_dir / "memory.bound.vl.json").read_bytes()) == bindings[3]
     assert (tmp_path / "chart.vl.json").read_bytes() == original
     assert set((output_dir).iterdir()) == set(outputs)
     assert all(
@@ -288,11 +287,13 @@ def test_temporary_bindings_render_every_time_and_preserve_images_on_failure(
     # A failing renderer preserves every previous image, including a corrupt
     # member. A later successful invocation replaces the complete set.
     outputs[2].write_bytes(b"corrupt")
+    previous_binding = (output_dir / "runtime.bound.vl.json").read_bytes()
     fail_png = True
     with pytest.raises(figures.subprocess.CalledProcessError if raise_error else ValueError):
         figures.render_figures(resolved, config, grouped, report, target, output_dir, console, inventory)
     assert outputs[0].read_bytes() == b"rendered"
     assert outputs[2].read_bytes() == b"corrupt"
+    assert (output_dir / "runtime.bound.vl.json").read_bytes() == previous_binding
     assert set((output_dir).iterdir()) == set(outputs)
     fail_png = False
     figures.render_figures(resolved, config, grouped, report, target, output_dir, console, inventory)
@@ -300,18 +301,34 @@ def test_temporary_bindings_render_every_time_and_preserve_images_on_failure(
     assert len(calls) == 21
 
 
+@pytest.mark.parametrize("exclude_term", [False, True])
+@pytest.mark.parametrize("requested_cap", [None, 10737418240])
 def test_bindings_select_exact_binaries_physical_inputs_and_resource_bounds(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exclude_term: bool, requested_cap: int | None
 ) -> None:
-    config = figures.load_config(catalog_fixture(tmp_path))
+    config = replace(figures.load_config(catalog_fixture(tmp_path)), memory_limit_bytes=requested_cap)
     figure = replace(config.figures[0], treatments=("off", "egg-de", "term"))
     native = FileSpec("example.in", tmp_path / "example.in", "native")
-    logical = FileSpec("example.egg", tmp_path / "example.egg", "logical", engine_inputs=(("egg-de", native),))
+    logical = FileSpec(
+        "example.egg",
+        tmp_path / "example.egg",
+        "logical",
+        engine_inputs=(("egg-de", native),),
+        exclusions=(
+            # This original driver is always uncapped, even in a capped figure.
+            Exclusion("resource", "cap-only native limit", "probe", ("egg-de",), memory_limit_bytes=10737418240),
+            *((Exclusion("resource", "recorded limit", "probe", ("term",)),) if exclude_term else ()),
+        ),
+    )
     target = replace(make_target(target_label="figures"), engine_binaries=(EngineBinary("egg-de", "native-bin", None),))
     report = tmp_path / "report.jsonl"
-    records = [make_record(i, started_at=f"2026-10-01T00:00:0{i}Z", file_sha256="logical") for i in range(2)] + [
+    records = [
+        make_record(i, memory_limit_bytes=requested_cap, started_at=f"2026-10-01T00:00:0{i}Z", file_sha256="logical")
+        for i in range(2)
+    ] + [
         make_record(
             i,
+            memory_limit_bytes=None,
             started_at=f"2026-10-01T00:00:0{i}Z",
             file_sha256="native",
             treatment="egg-de",
@@ -320,10 +337,28 @@ def test_bindings_select_exact_binaries_physical_inputs_and_resource_bounds(
         for i in range(2, 4)
     ]
     records += [
-        make_record(4, started_at="2026-10-01T00:00:04Z", file_sha256="logical", binary_sha256="old"),
-        make_record(5, started_at="2026-10-01T00:00:05Z", file_sha256="logical", timeout_sec=121, wall_sec=122),
         make_record(
-            6, started_at="2026-10-01T00:00:06Z", file_sha256="logical", treatment="egg-de", binary_sha256="native-bin"
+            4,
+            memory_limit_bytes=requested_cap,
+            started_at="2026-10-01T00:00:04Z",
+            file_sha256="logical",
+            binary_sha256="old",
+        ),
+        make_record(
+            5,
+            memory_limit_bytes=requested_cap,
+            started_at="2026-10-01T00:00:05Z",
+            file_sha256="logical",
+            timeout_sec=121,
+            wall_sec=122,
+        ),
+        make_record(
+            6,
+            memory_limit_bytes=None,
+            started_at="2026-10-01T00:00:06Z",
+            file_sha256="logical",
+            treatment="egg-de",
+            binary_sha256="native-bin",
         ),
     ]
     write_report(report, *records)
@@ -349,7 +384,52 @@ def test_bindings_select_exact_binaries_physical_inputs_and_resource_bounds(
     inputs = next(p["value"] for p in bound[0]["params"] if p["name"] == "selected_inputs")
     assert [item["file_sha256"] for item in inputs] == ["logical", "native", "logical"]
     assert [item["selected_row_indices"] for item in inputs] == [[0, 1], [2, 3], []]
-    assert "1/3 incomplete or unsuccessful conditions" in stream.getvalue()
+    if exclude_term:
+        assert "1/3 explicitly excluded conditions" in stream.getvalue()
+        assert "incomplete or unsuccessful" not in stream.getvalue()
+    else:
+        assert "1/3 incomplete or unsuccessful conditions" in stream.getvalue()
+
+
+def test_expected_failure_never_selects_cached_successes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = figures.load_config(catalog_fixture(tmp_path))
+    figure = replace(config.figures[0], treatments=("term",))
+    file = FileSpec(
+        "case.egg",
+        tmp_path / "case.egg",
+        "sha256:file",
+        exclusions=(Exclusion("expected-failure", "known bug", "issue", ("term",)),),
+    )
+    report = tmp_path / "report.jsonl"
+    write_report(
+        report,
+        *[
+            make_record(i, started_at=f"2026-10-01T00:00:0{i}Z", treatment="term", memory_limit_bytes=None)
+            for i in range(2)
+        ],
+    )
+    before = report.read_bytes()
+    bindings = []
+
+    def render(command: list[str], **_kwargs: Any) -> None:
+        bindings.append(json.loads(Path(command[command.index("--base") - 2]).read_bytes()))
+        Path(command[command.index("--base") - 1]).write_bytes(b"rendered")
+
+    monkeypatch.setattr(figures.subprocess, "run", render)
+    figures.render_figures(
+        [figures.ResolvedFigure(figure, (file,), json.loads(figure.spec.read_bytes()))],
+        config,
+        ReportStore(report).grouped_report(),
+        report,
+        make_target(target_label="figures"),
+        tmp_path / "out",
+        Console(file=io.StringIO()),
+        {"workloads": [], "unavailable_cases": []},
+    )
+    selected = next(p["value"] for p in bindings[0]["params"] if p["name"] == "selected_inputs")[0]
+    assert selected["selected_row_indices"] == []
+    assert selected["exclusion"]["kind"] == "expected-failure"
+    assert report.read_bytes() == before
 
 
 def test_bound_ids_share_resource_selection_without_rewriting_rows(
@@ -361,24 +441,27 @@ def test_bound_ids_share_resource_selection_without_rewriting_rows(
     resolved = [figures.ResolvedFigure(f, (file,), json.loads(f.spec.read_bytes())) for f in config.figures]
     report = tmp_path / "cache.jsonl"
     rows = [
-        make_record(0, started_at="2026-10-01T00:00:00Z", timeout_sec=120, wall_sec=120.01),
-        make_record(1, started_at="2026-10-01T00:00:01Z", timeout_sec=300, wall_sec=100),
-        make_record(2, started_at="2026-10-01T00:00:02Z", timeout_sec=300, wall_sec=180),
-        make_record(3, started_at="2026-10-01T00:00:03Z", timeout_sec=60, status="timed-out"),
-        make_record(4, started_at="2026-10-01T00:00:04Z", status="failure"),
-        make_record(5, started_at="2026-10-01T00:00:05Z", status="failure"),
+        make_record(0, memory_limit_bytes=None, started_at="2026-10-01T00:00:00Z", timeout_sec=120, wall_sec=120.01),
+        make_record(1, memory_limit_bytes=None, started_at="2026-10-01T00:00:01Z", timeout_sec=300, wall_sec=100),
+        make_record(2, memory_limit_bytes=None, started_at="2026-10-01T00:00:02Z", timeout_sec=300, wall_sec=180),
+        make_record(3, memory_limit_bytes=None, started_at="2026-10-01T00:00:03Z", timeout_sec=60, status="timed-out"),
+        make_record(4, memory_limit_bytes=None, started_at="2026-10-01T00:00:04Z", status="failure"),
+        make_record(5, memory_limit_bytes=None, started_at="2026-10-01T00:00:05Z", status="failure"),
     ]
     for row, cap in zip(rows[-2:], (8, 16), strict=True):
         row["error_exit_code"] = 86
-        row["error_memory_limit_bytes"] = cap * 1024**3
+        row["memory_limit_bytes"] = cap * 1024**3
+        row["execution_settings_sha256"] = figures.CacheKey(
+            row["binary_sha256"], row["file_sha256"], row["treatment"], memory_limit_bytes=cap * 1024**3
+        ).execution_settings_sha256
     for row in rows:
         row["target_label"] = "figures"
     write_report(report, *rows)
     original = report.read_bytes()
     grouped = ReportStore(report).grouped_report()
     write_grouped_report(grouped, grouped_report_path(report))
-    assert len(grouped.data["groups"]) == 1
-    assert len(grouped.data["groups"][0]["samples"]) == 6
+    assert len(grouped.data["groups"]) == 3
+    assert sum(len(g["samples"]) for g in grouped.data["groups"]) == 6
 
     bindings = []
 
@@ -387,8 +470,8 @@ def test_bound_ids_share_resource_selection_without_rewriting_rows(
         Path(command[command.index("--base") - 1]).write_bytes(b"rendered")
 
     monkeypatch.setattr(figures.subprocess, "run", render)
-    for cap, expected in ((16, [1, 5]), (32, [0, 1])):
-        monkeypatch.setattr(figures, "NATIVE_LIMIT_BYTES", cap * 1024**3)
+    for requested_cap, expected in ((None, [0, 1]), (16 * 1024**3, [5]), (32 * 1024**3, [])):
+        config = figures.replace(config, memory_limit_bytes=requested_cap)
         bindings.clear()
         figures.render_figures(
             resolved,
@@ -413,7 +496,12 @@ def test_render_keeps_a_label_bound_to_another_executable_missing(
     config = figures.load_config(catalog_fixture(tmp_path))
     file = FileSpec("example.egg", tmp_path / "example.egg", "sha256:file")
     report = tmp_path / "cache.jsonl"
-    write_report(report, make_record(0, started_at="2026-10-01T00:00:00Z", target_label="figures", binary_sha256="old"))
+    write_report(
+        report,
+        make_record(
+            0, memory_limit_bytes=None, started_at="2026-10-01T00:00:00Z", target_label="figures", binary_sha256="old"
+        ),
+    )
     bindings = []
 
     def render(command: list[str], **_kwargs: Any) -> None:
@@ -541,13 +629,19 @@ def test_main_rewrites_fresh_partial_snapshot_before_rendering(
     from benchmarking.reports.store import parse_grouped_report
 
     report = main_environment["report"]
-    write_report(report, make_record(0, started_at="2026-10-01T00:00:00Z", binary_sha256="old", target_label="figures"))
+    write_report(
+        report,
+        make_record(
+            0, memory_limit_bytes=None, started_at="2026-10-01T00:00:00Z", binary_sha256="old", target_label="figures"
+        ),
+    )
     write_grouped_report(ReportStore(report).grouped_report(), grouped_report_path(report))
 
     def interrupted_write(store: ReportStore, _plans: Any, requests: Any, *_args: Any, **_kwargs: Any) -> Any:
         store.append(
             make_record(
                 1,
+                memory_limit_bytes=None,
                 started_at="2026-10-01T00:00:01Z",
                 target_label="figures",
                 status="failure",
@@ -592,7 +686,11 @@ def test_main_ctrl_c_preserves_collector_snapshot_without_rendering(
     def interrupted(store: ReportStore, _plans: Any, requests: Any, targets: Any, *_args: Any, **_kwargs: Any) -> Any:
         store.append(
             make_record(
-                0, started_at="2026-10-01T00:00:00Z", target_label="figures", file_sha256=requests[0].files[0].sha256
+                0,
+                memory_limit_bytes=None,
+                started_at="2026-10-01T00:00:00Z",
+                target_label="figures",
+                file_sha256=requests[0].files[0].sha256,
             )
         )
         write_grouped_report(

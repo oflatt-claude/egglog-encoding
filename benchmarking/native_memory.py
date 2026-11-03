@@ -1,4 +1,4 @@
-"""Select the controlled executables' 16 GiB native address-space policy.
+"""Configure optional allocator protection for local experiments.
 
 Python supplies the cap through a CLI flag; Rust validates and installs it before
 running the workload. Allocator settings must be in the environment before exec:
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-NATIVE_LIMIT_BYTES = 16 * 1024**3
+NATIVE_LIMIT_BYTES = 10 * 1024**3
 NATIVE_ALLOCATION_EXIT = 86
 NATIVE_SETUP_EXIT = 87
 NATIVE_ALLOCATOR_ENV = {
@@ -25,11 +25,12 @@ def native_memory_command(
 ) -> tuple[list[str], dict[str, str]]:
     """Pass explicit protection and the fixed startup policy before native exec.
 
-    Only egglog-experimental and egg-math-benchmark accept this option. An older
-    binary must reject it at preflight instead of silently running uncapped.
-    Allocation failures record this limit; increasing it permits a cached retry.
+    Controlled engines accept this option; unchanged author drivers do not.
+    No cap or allocator-startup overrides are imposed when the limit is absent.
+    Peak-memory measurement is owned by the caller and remains independent.
     """
     args = list(command)
     if limit_bytes is not None:
         args.insert(1, f"--memory-limit-bytes={limit_bytes}")
-    return args, {**env, **NATIVE_ALLOCATOR_ENV}
+        return args, {**env, **NATIVE_ALLOCATOR_ENV}
+    return args, dict(env)

@@ -11,8 +11,6 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from rich.console import Console
 
 from benchmarking import collection, targets, workloads
@@ -64,7 +62,10 @@ def _render(
         args.rounds,
         args.timeout_sec,
     )
-    available = {(row["binary_sha256"], row["treatment"], row["disequality_encoding"]) for row in grouped.records}
+    available = {
+        (row["binary_sha256"], row["treatment"], row["disequality_encoding"], row["memory_limit_bytes"])
+        for row in grouped.records
+    }
     if comparison.baseline.cache_identity in available and comparison.candidate.cache_identity in available:
         write_interactive_report(grouped, comparison, args.output_dir / PAGE_NAME)
     else:
@@ -142,7 +143,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             status.write(f"Partial nightly: {error}\n")
     try:
         grouped = store.grouped_report(
-            {(label, "egglog"): target.binary_sha256_for("off") for label, target in resolved_targets.items()}
+            {(label, "egglog"): target.binary_sha256_for("off") for label, target in resolved_targets.items()},
+            workloads.exclusion_bindings(files),
         )
         write_grouped_report(grouped, grouped_report_path(report))
         if resolved_targets:

@@ -8,7 +8,8 @@ import pytest
 from benchmarking import benchmark, collection, models, targets
 from benchmarking.engines import MATH_WORKLOAD_PATH
 from benchmarking.reports.store import CacheKey, ReportStore
-from tests.report_fixtures import make_record, make_target
+
+from .report_fixtures import make_record, make_target
 
 
 def test_encoding_endpoints_and_cached_results_are_distinct(tmp_path: Path) -> None:
@@ -39,7 +40,7 @@ def test_encoding_flags_depend_only_on_endpoint_not_workload(tmp_path: Path) -> 
     assert "--proofs" in command
     with pytest.raises(ValueError, match="only supported by egglog"):
         models.EndpointRequest(make_target().request, "egg", "ee")
-    native_file = replace(file, absolute_path=Path(__file__).resolve().parents[1] / MATH_WORKLOAD_PATH)
+    native_file = replace(file, absolute_path=Path(__file__).resolve().parents[2] / MATH_WORKLOAD_PATH)
     assert targets.workload_command(Path("binary"), native_file, "egg") == ["binary", "--proof-mode", "off"]
     with pytest.raises(ValueError, match="only supported by egglog"):
         targets.workload_command(Path("binary"), native_file, "egg", "ee")

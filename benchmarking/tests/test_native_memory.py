@@ -10,8 +10,7 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-import native_memory
-from benchmarking import collection, processes
+from benchmarking import collection, native_memory, processes
 from benchmarking.reports.store import ReportStore
 
 from .report_fixtures import make_target
@@ -20,7 +19,7 @@ from .test_collection import planned_run
 
 def test_native_command_uses_explicit_limit_and_fixed_startup_policy() -> None:
     command, env = native_memory.native_memory_command(["engine", "--help"], {"RUST_LOG": "error"})
-    assert command == ["engine", "--memory-limit-bytes=17179869184", "--help"]
+    assert command == ["engine", "--memory-limit-bytes=10737418240", "--help"]
     assert env == {"RUST_LOG": "error", **native_memory.NATIVE_ALLOCATOR_ENV}
     assert native_memory.native_memory_command(["engine"], {}, 123)[0] == ["engine", "--memory-limit-bytes=123"]
 
@@ -34,7 +33,9 @@ def test_native_exit_protocol_does_not_depend_on_diagnostic_text(
         f"#!{sys.executable}\nimport sys\nprint('arbitrary diagnostic',file=sys.stderr)\nsys.exit({code})\n"
     )
     engine.chmod(0o755)
-    result = processes.run_command([str(engine)], tmp_path, 5, native_limit=controlled)
+    result = processes.run_command(
+        [str(engine)], tmp_path, 5, memory_limit_bytes=native_memory.NATIVE_LIMIT_BYTES if controlled else None
+    )
     assert result.status == "failure"
     assert result.stop_collection is stop
     assert result.error is not None and result.error.exit_code == code
@@ -79,16 +80,14 @@ def test_native_outcome_is_retained_before_local_skip_or_invocation_stop(
         collection.collect_rows(store, plan, 120, Console(file=io.StringIO()))
         assert calls == store.row_count == 2
     assert store.records[0]["error_exit_code"] == code
-    assert store.records[0].get("error_memory_limit_bytes") == (
-        native_memory.NATIVE_LIMIT_BYTES if code == 86 else None
-    )
+    assert store.records[0]["memory_limit_bytes"] == native_memory.NATIVE_LIMIT_BYTES
 
 
 def test_older_binary_rejecting_native_option_fails_preflight(tmp_path: Path) -> None:
     engine = tmp_path / "engine"
     engine.write_text(
         f"#!{sys.executable}\nimport sys\n"
-        "assert sys.argv[1] == '--memory-limit-bytes=17179869184'\n"
+        "assert sys.argv[1] == '--memory-limit-bytes=10737418240'\n"
         "print('unsupported native option',file=sys.stderr)\nsys.exit(2)\n"
     )
     engine.chmod(0o755)

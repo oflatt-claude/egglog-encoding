@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import statistics
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Literal, NamedTuple, cast
 
 from scipy import stats
@@ -169,8 +170,26 @@ def analyze_pair(
 ) -> PairReportViewData:
     """Return every presentation row requested for one exact endpoint pair."""
 
+    files = tuple(
+        replace(file, exclusions=store.exclusions_by_input.get(file.sha256, file.exclusions))
+        for file in comparison.files
+    )
+    comparison = replace(comparison, files=files)
     observations = _selected_observations(store, comparison)
-    issues = {key: _selection_issue(rows, comparison.rounds) for key, rows in observations.items()}
+    issues = {
+        (endpoint_order, file_order): (
+            f"excluded ({excluded.kind}): {excluded.reason}"
+            if (
+                excluded := file.exclusion_for(
+                    endpoint.treatment, endpoint.disequality_encoding, memory_limit_bytes=endpoint.memory_limit_bytes
+                )
+            )
+            is not None
+            else _selection_issue(observations[(endpoint_order, file_order)], comparison.rounds)
+        )
+        for endpoint_order, endpoint in enumerate((comparison.baseline, comparison.candidate))
+        for file_order, file in enumerate(comparison.files)
+    }
     t_critical = None if comparison.rounds < 2 else float(stats.t.ppf(0.975, comparison.rounds - 1))
     estimates = _metric_estimates(observations, issues, t_critical)
     file_rows = _file_comparisons(comparison, estimates, t_critical)
@@ -181,7 +200,7 @@ def analyze_pair(
     if detail == "files":
         return PairReportViewData(summary, file_rows, ())
 
-    timing = _timing_breakdowns(comparison, observations, issues, estimates)
+    timing = _timing_breakdowns(comparison, observations, estimates)
     return PairReportViewData(summary, file_rows, timing)
 
 
@@ -192,9 +211,17 @@ def _selected_observations(
     selected: dict[_ObservationKey, tuple[IndexedRecord, ...]] = {}
     for endpoint_order, endpoint in enumerate((comparison.baseline, comparison.candidate)):
         for file_order, file in enumerate(comparison.files):
+            if (
+                file.exclusion_for(
+                    endpoint.treatment, endpoint.disequality_encoding, memory_limit_bytes=endpoint.memory_limit_bytes
+                )
+                is not None
+            ):
+                selected[(endpoint_order, file_order)] = ()
+                continue
             key = CacheKey.for_endpoint(endpoint, file)
             selected[(endpoint_order, file_order)] = store.latest_records(
-                key, comparison.rounds, comparison.timeout_sec, comparison.memory_limit_bytes
+                key, comparison.rounds, comparison.timeout_sec
             )
     return selected
 
@@ -255,7 +282,7 @@ def _ratio_estimate(
 ) -> RatioEstimate:
     baseline_mean = baseline.estimate.point
     candidate_mean = candidate.estimate.point
-    issue = baseline.issue or candidate.issue
+    issue = "; ".join(dict.fromkeys(item for item in (baseline.issue, candidate.issue) if item is not None)) or None
     if issue is not None:
         return RatioEstimate(Estimate(None, None, None), "invalid", issue)
     if baseline_mean is None or candidate_mean is None:
@@ -304,8 +331,8 @@ def _summary_rows(
     first_issue = next(
         (
             issue
-            for baseline_estimate, candidate_estimate in zip(baseline, candidate, strict=True)
-            if (issue := baseline_estimate.issue or candidate_estimate.issue) is not None
+            for row in file_rows
+            if row.metric == "wall_sec" and row.ratio.estimate.point is None and (issue := row.ratio.issue) is not None
         ),
         None,
     )
@@ -360,7 +387,6 @@ def _summary_rows(
 def _timing_breakdowns(
     comparison: ComparisonSpec,
     observations: dict[_ObservationKey, tuple[IndexedRecord, ...]],
-    issues: dict[_ObservationKey, str | None],
     metric_estimates: dict[_MetricKey, _MetricEstimate],
 ) -> tuple[FileTimingBreakdown, ...]:
     if any(
@@ -375,7 +401,10 @@ def _timing_breakdowns(
         candidate = means[(1, file_order)]
         baseline_wall = metric_estimates[(0, file_order, "wall_sec")]
         candidate_wall = metric_estimates[(1, file_order, "wall_sec")]
-        issue = issues[(0, file_order)] or issues[(1, file_order)] or baseline_wall.issue or candidate_wall.issue
+        issue = (
+            "; ".join(dict.fromkeys(item for item in (baseline_wall.issue, candidate_wall.issue) if item is not None))
+            or None
+        )
         wall_delta_ns = (
             None
             if issue is not None or baseline_wall.estimate.point is None or candidate_wall.estimate.point is None

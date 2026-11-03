@@ -9,13 +9,14 @@ from typing import cast
 import pytest
 from rich.console import Console
 
-from benchmarking import benchmark, collection, models, targets, workloads
+from benchmarking import benchmark, collection, models, processes, targets, workloads
 from benchmarking.engines import Engine, Treatment
 from benchmarking.reports.analysis import analyze_pair
 from benchmarking.reports.presentation import build_report_catalog
 from benchmarking.reports.render import render_markdown_report_document
 from benchmarking.reports.store import CacheKey, ReportStore, serialize_report_record
-from tests.report_fixtures import make_record, make_target
+
+from .report_fixtures import make_record, make_target
 
 METHODS: tuple[Treatment, ...] = ("egg-de", "egg-ee", "egg-nee", "egg-oee")
 
@@ -42,14 +43,11 @@ def test_native_command_uses_the_physical_input(treatment: Treatment, tmp_path: 
     assert benchmark.endpoint_requests(args)[1].treatment == treatment
 
 
-def test_registered_workload_binds_native_file_with_its_own_hash(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_registered_workload_binds_native_file_with_its_own_hash(tmp_path: Path) -> None:
     egglog = tmp_path / "parameter-analysis.egg"
     native = egglog.with_suffix(".in")
     egglog.write_text("(check-contradiction)\n")
     native.write_text("1\n2\n")
-    monkeypatch.setattr(workloads, "PARAMETER_WORKLOAD_PATH", egglog)
     (logical,) = workloads.resolve_files([egglog.name], tmp_path)
     assert logical.sha256 == targets.sha256_file(egglog)
     assert logical.for_engine("egglog") == logical
@@ -94,6 +92,31 @@ def test_native_nonzero_exit_is_a_retained_process_failure(tmp_path: Path) -> No
     assert observation.result.error is not None
     assert observation.result.error.exit_code == 7
     assert observation.timing_summary is None
+
+
+@pytest.mark.parametrize("treatment,suffix", [("egg-ee", ".in"), ("slotted-ref-multi", ".ref")])
+def test_logical_request_rejects_a_native_input_changed_during_execution(
+    treatment: Treatment, suffix: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / ("fixture" + suffix)
+    source.write_text('{"multi": "frozen reference"}' if suffix == ".ref" else "1\n2\n")
+    physical = models.FileSpec(source.name, source, targets.sha256_file(source))
+    egglog = source.with_suffix(".egg")
+    egglog.write_text("(check (= 1 1))")
+    logical = models.FileSpec(
+        egglog.name,
+        egglog,
+        targets.sha256_file(egglog),
+        engine_inputs=((cast(Engine, "slotted" if suffix == ".ref" else treatment), physical),),
+    )
+
+    def mutate(*_args: object, **_kwargs: object) -> processes.TimingResult:
+        source.write_text("changed")
+        return processes.TimingResult("success", processes.TimingRow(wall_sec=1), None)
+
+    monkeypatch.setattr(collection, "run_command", mutate)
+    with pytest.raises(ValueError, match="workload changed during execution: fixture"):
+        collection.run_process(tmp_path / "driver", tmp_path, logical, treatment, 10)
 
 
 def test_native_cache_and_plan_use_physical_input_identity(tmp_path: Path) -> None:

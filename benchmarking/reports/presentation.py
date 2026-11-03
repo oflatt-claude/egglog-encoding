@@ -187,9 +187,14 @@ def _comparison_caption(
     file_labels: dict[FileSpec, str],
 ) -> str:
     selected_files = ", ".join(_file_with_facts(file, file_labels[file]) for file in comparison.files)
+    profiles = [
+        "uncapped" if endpoint.memory_limit_bytes is None else f"{endpoint.memory_limit_bytes / 1024**3:g} GiB cap"
+        for endpoint in (comparison.baseline, comparison.candidate)
+    ]
+    allocator = profiles[0] if profiles[0] == profiles[1] else f"baseline {profiles[0]}, candidate {profiles[1]}"
     return (
         f"{len(comparison.files)} file(s): {selected_files} · {comparison.rounds} round(s) per endpoint/file · "
-        f"{comparison.timeout_sec} s timeout per run · Report: {report_path}"
+        f"{comparison.timeout_sec} s timeout per run · Allocator: {allocator} · Report: {report_path}"
     )
 
 

@@ -180,9 +180,9 @@ def test_profile_encodings_are_recorded_and_cached_separately(
     recorded: list[dict[str, Any]] = []
 
     def calibrate(
-        command: list[str], checkout_path: Path, timeout_sec: int, *, native_limit: bool = False
+        command: list[str], checkout_path: Path, timeout_sec: int, *, memory_limit_bytes: int | None = None
     ) -> processes.TimingResult:
-        assert native_limit
+        assert memory_limit_bytes == profile_runner.NATIVE_LIMIT_BYTES
         calibrated.append(command)
         return processes.TimingResult("success", processes.TimingRow(wall_sec=2.0), None)
 
@@ -494,7 +494,7 @@ def test_samply_mutated_workload_is_not_promoted(monkeypatch: pytest.MonkeyPatch
 
 
 def test_samply_limits_controlled_workload_inside_wrapper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from native_memory import NATIVE_ALLOCATOR_ENV, NATIVE_LIMIT_BYTES
+    from benchmarking.native_memory import NATIVE_ALLOCATOR_ENV, NATIVE_LIMIT_BYTES
 
     def recorded(command: list[str], **kwargs: Any) -> None:
         assert command[0] == "samply"

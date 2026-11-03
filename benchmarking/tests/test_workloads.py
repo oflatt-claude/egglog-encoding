@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -203,3 +204,151 @@ def test_egg_treatments_reject_other_workloads_and_fact_directories(tmp_path: Pa
     )
     with pytest.raises(ValueError, match="does not support --fact-directory"):
         validate_engine_workload(math, "egg-proofs")
+
+
+@pytest.mark.parametrize("prefix", ["", '; input include prove "\n', '(let message "text; not a comment")\n'])
+def test_complete_input_closure_tracks_invocation_relative_includes(tmp_path: Path, prefix: str) -> None:
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "main.egg").write_text(prefix + '(; comment before command\ninclude "sub/rules.egg")')
+    rules = tmp_path / "sub/rules.egg"
+    rules.write_text('(include "facts.egg")')
+    facts = tmp_path / "facts.egg"
+    facts.write_text("(check (= 1 1))")
+    first = workloads.resolve_files(["main.egg"], tmp_path)[0]
+    assert first.working_directory == tmp_path.resolve()
+    assert first.sha256 != targets.sha256_file(first.absolute_path)
+    facts.write_text("(check (= 2 2))")
+    second = workloads.resolve_files(["main.egg"], tmp_path)[0]
+    assert first.sha256 != second.sha256
+    with pytest.raises(ValueError, match="workload changed"):
+        workloads.require_workload_unchanged(first)
+    facts.write_text("(prove (= 2 2))")
+    with pytest.raises(ValueError, match="explicit prove command"):
+        workloads.resolve_files(["main.egg"], tmp_path)
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_standalone_identity_ignores_control_words_in_comments(tmp_path: Path, newline: str) -> None:
+    path = tmp_path / "main.egg"
+    source = '; input include prove "\n(datatype T (A))\n(check (= (A) (A)))'
+    path.write_bytes(source.replace("\n", newline).encode())
+    assert workloads.complete_input_sha256(path, tmp_path) == targets.sha256_file(path)
+
+
+def test_proof_after_quoted_semicolon_is_not_hidden(tmp_path: Path) -> None:
+    path = tmp_path / "main.egg"
+    path.write_text('(let note "not; a comment") (prove (= 1 1))')
+    with pytest.raises(ValueError, match="explicit prove command"):
+        workloads.complete_input_sha256(path, tmp_path)
+
+
+def test_shared_exclusions_match_logical_and_physical_configuration(tmp_path: Path) -> None:
+    import json
+
+    (tmp_path / "slotted").mkdir()
+    (tmp_path / "slotted/a.egg").write_text("(check (= 1 1))")
+    (tmp_path / "slotted/a.ref").write_text("{}")
+    ignore = tmp_path / "ignore.json"
+    ignore.write_text(
+        json.dumps(
+            [
+                {
+                    "file": "slotted/*.egg",
+                    "treatments": ["slotted-ref-nested"],
+                    "kind": "unsupported",
+                    "reason": "fixture has no nested representation",
+                    "evidence": "a.ref",
+                }
+            ]
+        )
+    )
+    file = workloads.resolve_files(["slotted/a.egg"], tmp_path, ignore_file=ignore)[0]
+    assert file.exclusion_for("slotted", memory_limit_bytes=None) is None
+    rule = file.exclusion_for("slotted-ref-nested", memory_limit_bytes=None)
+    assert rule is not None and rule.kind == "unsupported"
+    assert file.for_engine("slotted").exclusion_for("slotted-ref-nested", memory_limit_bytes=None) == rule
+
+
+def test_cap_specific_exclusions_do_not_suppress_uncapped_results(tmp_path: Path) -> None:
+    import json
+
+    (tmp_path / "a.egg").write_text("(check (= 1 1))")
+    ignore = tmp_path / "ignore.json"
+    ignore.write_text(
+        json.dumps(
+            [
+                {
+                    "file": "a.egg",
+                    "treatments": ["proof-testing"],
+                    "kind": "resource",
+                    "reason": "recorded address-space cap stop",
+                    "evidence": "exit 86 in a fresh process",
+                    "memory_limit_bytes": 10 * 1024**3,
+                }
+            ]
+        )
+    )
+    file = workloads.resolve_files(["a.egg"], tmp_path, ignore_file=ignore)[0]
+    assert file.exclusion_for("proof-testing", memory_limit_bytes=10 * 1024**3) is not None
+    assert file.exclusion_for("proof-testing", memory_limit_bytes=8 * 1024**3) is not None
+    assert file.exclusion_for("proof-testing", memory_limit_bytes=None) is None
+    assert file.exclusion_for("proof-testing", memory_limit_bytes=16 * 1024**3) is None
+    assert file.exclusion_for("off", memory_limit_bytes=10 * 1024**3) is None
+
+
+@pytest.mark.parametrize("sizes", [None, {}, {"A": [1]}, {"A": [1, True]}, {"A": [-1, 2]}, {"A": [1, 1]}])
+def test_expected_failure_requires_a_precise_table_size_difference(tmp_path: Path, sizes: object) -> None:
+    source = tmp_path / "case.egg"
+    source.write_text("(check (= 1 1))")
+    policy = tmp_path / "ignore.json"
+    policy.write_text(
+        json.dumps(
+            [
+                {
+                    "file": "case.egg",
+                    "kind": "expected-failure",
+                    "treatments": ["term"],
+                    "reason": "tracked bug",
+                    "evidence": "issue",
+                    "expected_table_sizes": sizes,
+                }
+            ]
+        )
+    )
+    with pytest.raises(ValueError, match="expected failures require"):
+        workloads.resolve_files([str(source)], tmp_path, ignore_file=policy)
+
+
+def test_expected_failure_is_quarantined_only_for_its_treatment(tmp_path: Path) -> None:
+    source = tmp_path / "case.egg"
+    source.write_text("(check (= 1 1))")
+    policy = tmp_path / "ignore.json"
+    policy.write_text(
+        json.dumps(
+            [
+                {
+                    "file": "case.egg",
+                    "kind": "expected-failure",
+                    "treatments": ["term"],
+                    "reason": "tracked bug",
+                    "evidence": "issue",
+                    "expected_table_sizes": {"A": [1, 2]},
+                }
+            ]
+        )
+    )
+    (file,) = workloads.resolve_files([str(source)], tmp_path, ignore_file=policy)
+    excluded = file.exclusion_for("term", memory_limit_bytes=None)
+    assert excluded is not None and excluded.kind == "expected-failure"
+    assert file.exclusion_for("off", memory_limit_bytes=None) is None
+    assert file.exclusion_for("proof-testing", memory_limit_bytes=None) is None
+
+
+def test_overlapping_exclusions_reject_ambiguous_execution_policy(tmp_path: Path) -> None:
+    resource = models.Exclusion("resource", "cap", "capture", ("term",), memory_limit_bytes=10 * 1024**3)
+    expected = models.Exclusion("expected-failure", "bug", "issue", ("term",))
+    file = models.FileSpec("file.egg", tmp_path / "file.egg", "sha256:file", exclusions=(resource, expected))
+    with pytest.raises(ValueError, match="overlapping benchmark exclusions"):
+        file.exclusion_for("term", memory_limit_bytes=10 * 1024**3)
+    assert file.exclusion_for("term", memory_limit_bytes=None) == expected
+    assert file.exclusion_for("off", memory_limit_bytes=10 * 1024**3) is None

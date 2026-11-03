@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from benchmarking import collection, models, processes, targets, workloads
-from benchmarking.reports.store import ReportStore
-from scripts import nightly_bench as nightly
+from benchmarking import collection, models, nightly, processes, targets, workloads
+from benchmarking.reports.store import GroupedExclusion, ReportStore
 
 from .report_fixtures import make_target, make_timing_summary
 
@@ -67,6 +67,18 @@ def test_collects_checked_and_off_once_and_renders_cached_reports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nightly_case: dict[str, Any]
 ) -> None:
     output = tmp_path / "output"
+    exclusions: list[GroupedExclusion] = [
+        {
+            "file_sha256": "sha256:archived-file",
+            "treatments": ["term"],
+            "disequality_encoding": "nee",
+            "kind": "expected-failure",
+            "reason": "known count bug outside initial nightly selection",
+            "evidence": "issue",
+            "memory_limit_bytes": None,
+        }
+    ]
+    monkeypatch.setattr(workloads, "exclusion_bindings", lambda _files: exclusions)
     assert nightly.main([str(output)]) == 0
     assert nightly_case["builds"] == ["branch", "main"]
     assert nightly_case["fetches"] == [["git", "fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"]]
@@ -85,9 +97,11 @@ def test_collects_checked_and_off_once_and_renders_cached_reports(
         (nightly_case["file"],),
     )
     assert store.path.read_bytes() == before
-    assert (output / "index.html").is_file()
+    assert 'id="report-envelope"' in (output / "index.html").read_text()
     assert "proof-testing" in (output / "branch-vs-main.md").read_text()
-    assert json.loads((output / "index-grouped.json").read_text())["groups"]
+    grouped = json.loads((output / "index-grouped.json").read_text())
+    assert grouped["groups"]
+    assert grouped["exclusions"] == exclusions
 
 
 @pytest.mark.parametrize("after_rows", [0, 1, 2])
@@ -230,8 +244,14 @@ def test_render_failure_preserves_rows_and_status(
 
 
 def test_nightly_preserves_its_fixture_roster_and_make_bootstrap() -> None:
-    makefile = (nightly.REPO_ROOT / "Makefile").read_text()
-    assert "nightly: nightly-uv nightly-rustup" in makefile
-    assert "nightly-local: nightly-uv nightly-rustup" in makefile
+    commands = subprocess.check_output(
+        ["make", "--no-print-directory", "-n", "nightly", "NIGHTLY_UV=uv"], cwd=nightly.REPO_ROOT, text=True
+    )
+    assert "uv run --locked python -m benchmarking.nightly" in commands
+    assert (
+        commands.index("https://astral.sh/uv/")
+        < commands.index("https://sh.rustup.rs")
+        < commands.index("python -m benchmarking.nightly")
+    )
     assert len(nightly.WORKLOADS) == 7 and len(set(nightly.WORKLOADS)) == 7
     assert all((nightly.REPO_ROOT / path).is_file() for path in nightly.WORKLOADS)

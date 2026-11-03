@@ -19,7 +19,15 @@ from typing import Literal
 from rich.console import Console
 from rich.text import Text
 
-from .engines import TREATMENT_SPECS, Engine, Treatment, math_workload_arguments, validate_engine_workload
+from .engines import (
+    EGGLOG_FLAGS,
+    NATIVE_PARAMETER_ARGUMENTS,
+    TREATMENT_SPECS,
+    Engine,
+    Treatment,
+    math_workload_arguments,
+    validate_engine_workload,
+)
 from .models import EngineBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow
 
 BuildProfile = Literal["release", "profiling"]
@@ -213,12 +221,12 @@ def build_target(
     checkout_path = Path(row.path)
     engine_label = "" if engine == "egglog" else f" · {engine}"
     console.print(Text.assemble(("Building", "bold"), " ", _display_target(row), engine_label))
-    package = {"egglog": "egglog-experimental", "egg": "egg-math-benchmark"}.get(engine)
+    package = {"egglog": "egglog-experimental", "egg": "egg-math-benchmark", "slotted": "slotted-reference"}.get(engine)
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", "target"))
     if not target_dir.is_absolute():
         target_dir = checkout_path / target_dir
     build_args = ["cargo", "build"]
-    if engine == "egglog":
+    if engine in ("egglog", "slotted"):
         build_args.append("--locked")
     if build_profile == "release":
         build_args.append("--release")
@@ -242,6 +250,8 @@ def build_target(
         build_args.extend(("-p", package))
         if engine == "egglog":
             build_args.extend(("--no-default-features", "--features", "bin", "--bin", package))
+        elif engine == "slotted":
+            build_args.extend(("--no-default-features", "--bin", package))
     subprocess.run(build_args, cwd=checkout_path, check=True, stdout=sys.stderr, stderr=sys.stderr)
     binary_stem = package or engine
     binary_name = f"{binary_stem}.exe" if os.name == "nt" else binary_stem
@@ -320,15 +330,14 @@ def workload_command(
         if disequality_encoding != "nee":
             raise ValueError("disequality encoding selection is only supported by egglog treatments")
         validate_engine_workload(file_spec, treatment)
+        if specification.engine == "slotted":
+            return [str(binary_path), *specification.flags, str(file_spec.absolute_path)]
         if specification.engine != "egg":
-            return [str(binary_path), str(file_spec.absolute_path), "100000", "10000"]
+            return [str(binary_path), str(file_spec.absolute_path), *NATIVE_PARAMETER_ARGUMENTS]
         return [str(binary_path), *specification.flags, *math_workload_arguments(file_spec)]
     return [
         str(binary_path),
-        "--mode",
-        "no-messages",
-        "-j",
-        "1",
+        *EGGLOG_FLAGS,
         *(["--disequality-encoding", disequality_encoding] if disequality_encoding != "nee" else []),
         *(["--fact-directory", str(file_spec.fact_directory)] if file_spec.fact_directory is not None else []),
         *specification.flags,

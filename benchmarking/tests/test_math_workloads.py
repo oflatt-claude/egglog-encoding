@@ -6,7 +6,7 @@ import pytest
 
 from benchmarking import engines, targets, workloads
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize(

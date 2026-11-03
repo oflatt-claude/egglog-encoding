@@ -8,12 +8,18 @@ respective command modules.
 
 from __future__ import annotations
 
+import glob
+import hashlib
+import json
+import os
+import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from .engines import PARAMETER_WORKLOAD_PATH, TREATMENT_SPECS
-from .models import FileSpec, validate_unique_file_identities
+from .engines import ENGINE_INPUT_SUFFIXES, TREATMENTS
+from .models import Exclusion, FileSpec, validate_unique_file_identities
+from .reports.store import GroupedExclusion
 from .targets import sha256_directory, sha256_file
 
 
@@ -41,12 +47,15 @@ DEFAULT_WORKLOADS = (
     WorkloadConfig("egglog/tests/papers/speq-preserved-reference-suite.egg"),
     WorkloadConfig("benchmarks/disequality/parameter-analysis.egg"),
 )
+IGNORE_FILE = Path(__file__).resolve().parents[1] / "benchmarks/ignore.json"
 
 
 def resolve_files(
     raw_files: Sequence[str],
     invocation_cwd: Path,
     fact_directory: str | None = None,
+    *,
+    ignore_file: Path = IGNORE_FILE,
 ) -> tuple[FileSpec, ...]:
     """Resolve selected or default workloads relative to the invocation directory."""
 
@@ -56,6 +65,69 @@ def resolve_files(
         if fact_directory is not None:
             raise ValueError("--fact-directory requires at least one explicit benchmark file")
         chosen = DEFAULT_WORKLOADS
+    rules = json.loads(ignore_file.read_text())
+    if not isinstance(rules, list):
+        raise ValueError("benchmark ignore file must contain a list")
+    matched_paths: dict[str, set[Path]] = {}
+    for rule in rules:
+        if (
+            not isinstance(rule, dict)
+            or not {"file", "kind", "reason", "evidence"} <= set(rule)
+            or set(rule)
+            - {
+                "file",
+                "kind",
+                "reason",
+                "evidence",
+                "treatments",
+                "disequality_encoding",
+                "memory_limit_bytes",
+                "expected_table_sizes",
+            }
+            or any(not isinstance(rule[key], str) or not rule[key].strip() for key in ("file", "reason", "evidence"))
+            or rule["kind"] not in ("resource", "unsupported", "expected-failure")
+            or not isinstance(rule.get("treatments", []), list)
+            or any(t not in TREATMENTS for t in rule.get("treatments", []))
+            or rule.get("disequality_encoding") not in (None, "nee", "ee")
+            or (
+                "memory_limit_bytes" in rule
+                and (
+                    type(rule["memory_limit_bytes"]) is not int
+                    or rule["memory_limit_bytes"] < 1
+                    or rule["kind"] != "resource"
+                )
+            )
+        ):
+            raise ValueError(f"invalid benchmark exclusion: {rule!r}")
+        if rule["kind"] == "expected-failure":
+            sizes = rule.get("expected_table_sizes")
+            if (
+                not isinstance(sizes, dict)
+                or not sizes
+                or any(not isinstance(name, str) or not name for name in sizes)
+                or any(
+                    not isinstance(pair, list)
+                    or len(pair) != 2
+                    or any(type(value) is not int or value < 0 for value in pair)
+                    for pair in sizes.values()
+                )
+                or any(pair[0] == pair[1] for pair in sizes.values())
+                or len(rule.get("treatments", [])) != 1
+                or rule["treatments"][0] not in ("term", "proof-testing")
+                or glob.has_magic(rule["file"])
+            ):
+                raise ValueError("expected failures require one exact file/treatment and recorded table-size pairs")
+        elif "expected_table_sizes" in rule:
+            raise ValueError("table-size failure expectations require kind expected-failure")
+        if ".." in Path(rule["file"]).parts or Path(rule["file"]).is_absolute():
+            raise ValueError("exclusion patterns must stay inside benchmarks/")
+        matched_paths[rule["file"]] = {
+            Path(path).resolve()
+            for path in glob.glob(str(ignore_file.parent / rule["file"]), recursive=True)
+            if Path(path).is_file()
+        }
+        if not matched_paths[rule["file"]]:
+            raise ValueError(f"exclusion pattern matched nothing: {rule['file']}")
     files: list[FileSpec] = []
     for workload in chosen:
         display_path = workload.file
@@ -76,38 +148,96 @@ def resolve_files(
             if not resolved_fact_directory.is_dir():
                 raise FileNotFoundError(f"benchmark fact directory does not exist: {workload.fact_directory}")
             fact_directory_sha256 = sha256_directory(resolved_fact_directory)
+        logical_path = absolute_path.with_suffix(".egg")
+        if absolute_path.suffix not in (".ref", ".in") or not logical_path.is_file():
+            logical_path = absolute_path
         files.append(
             FileSpec(
                 display_path=display_path,
                 absolute_path=absolute_path,
-                sha256=sha256_file(absolute_path),
+                sha256=complete_input_sha256(absolute_path, invocation_cwd, resolved_fact_directory),
+                working_directory=invocation_cwd.resolve(),
+                exclusions=tuple(
+                    Exclusion(
+                        rule["kind"],
+                        rule["reason"],
+                        rule["evidence"],
+                        tuple(rule.get("treatments", [])),
+                        rule.get("disequality_encoding"),
+                        rule.get("memory_limit_bytes"),
+                    )
+                    for rule in rules
+                    if logical_path in matched_paths[rule["file"]]
+                ),
                 fact_directory=resolved_fact_directory,
                 fact_directory_sha256=fact_directory_sha256,
             )
         )
-    registered = Path(__file__).resolve().parents[1] / PARAMETER_WORKLOAD_PATH
     for index, file in enumerate(files):
-        if file.absolute_path == registered.resolve():
-            native_path = file.absolute_path.with_suffix(".in")
-            native = FileSpec(
-                display_path=str(Path(file.display_path).with_suffix(".in")),
-                absolute_path=native_path,
-                sha256=sha256_file(native_path),
-                fact_directory=file.fact_directory,
-                fact_directory_sha256=file.fact_directory_sha256,
-            )
-            files[index] = replace(
+        representations = []
+        for engine, suffix in ENGINE_INPUT_SUFFIXES.items():
+            if suffix == file.absolute_path.suffix:
+                continue
+            native_path = file.absolute_path.with_suffix(suffix)
+            if not native_path.is_file():
+                continue
+            native = replace(
                 file,
-                engine_inputs=tuple(
-                    (spec.engine, native) for spec in TREATMENT_SPECS.values() if spec.engine not in ("egglog", "egg")
-                ),
+                display_path=str(Path(file.display_path).with_suffix(suffix)),
+                absolute_path=native_path,
+                sha256=complete_input_sha256(native_path, invocation_cwd, file.fact_directory),
             )
+            representations.append((engine, native))
+        files[index] = replace(file, engine_inputs=tuple(representations))
     resolved = tuple(files)
     validate_workloads(resolved)
     return resolved
 
 
-def _egglog_tokens(source: str) -> Iterator[str | None]:
+def exclusion_bindings(files: Sequence[FileSpec]) -> list[GroupedExclusion]:
+    """Freeze the current policy for every excluded input, including later retargeting.
+
+    Exclusions belong to the invocation's grouped snapshot, never synthetic raw
+    observations. Hash only the small explicit ignore list beyond selected files.
+    """
+    rules = json.loads(IGNORE_FILE.read_text())
+    paths = dict.fromkeys(
+        path for rule in rules for path in glob.glob(str(IGNORE_FILE.parent / rule["file"]), recursive=True)
+    )
+    excluded_files = [*files]
+    resolved_paths = {
+        physical.absolute_path
+        for logical in files
+        for physical in (logical, *(file for _, file in logical.engine_inputs))
+    }
+    for path in paths:
+        if Path(path).resolve() in resolved_paths:
+            continue
+        excluded_files.extend(resolve_files([path], IGNORE_FILE.parent.parent))
+    bindings = []
+    seen = set()
+    for logical in excluded_files:
+        for physical in (logical, *(file for _, file in logical.engine_inputs)):
+            for rule in logical.exclusions:
+                identity = (physical.sha256, rule)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                bindings.append(
+                    GroupedExclusion(
+                        file_sha256=physical.sha256,
+                        treatments=list(rule.treatments),
+                        disequality_encoding=rule.disequality_encoding,
+                        memory_limit_bytes=rule.memory_limit_bytes,
+                        kind=rule.kind,
+                        reason=rule.reason,
+                        evidence=rule.evidence,
+                    )
+                )
+    return bindings
+
+
+def _egglog_tokens(source: str, *, strings: bool = False) -> Iterator[str | None]:
     """Yield parentheses and atoms while hiding comments and string contents."""
 
     index = 0
@@ -121,6 +251,7 @@ def _egglog_tokens(source: str) -> Iterator[str | None]:
             index = len(source) if newline == -1 else newline + 1
             continue
         if character == '"':
+            start = index
             index += 1
             while index < len(source):
                 if source[index] == "\\":
@@ -130,7 +261,7 @@ def _egglog_tokens(source: str) -> Iterator[str | None]:
                     break
                 else:
                     index += 1
-            yield None
+            yield json.loads(source[start:index]) if strings else None
             continue
         if character in "()":
             yield character
@@ -166,11 +297,74 @@ def file_contains_executable_prove_command(path: Path) -> bool:
     return False
 
 
+def complete_input_sha256(path: Path, cwd: Path, fact_directory: Path | None = None) -> str:
+    """Hash the invocation-relative include/input closure, rejecting hidden proof work.
+
+    Egglog resolves includes against its process directory, including nested
+    includes. Use that same directory for hashing and execution, independent of
+    the selected executable's checkout. Standalone fixtures retain their raw SHA.
+    """
+    dependencies: dict[str, str] = {}
+    active: set[Path] = set()
+
+    def visit(current: Path) -> None:
+        if current in active:
+            raise ValueError(f"cyclic workload include: {current}")
+        active.add(current)
+        source = current.read_text(encoding="utf-8")
+        # Without quotes, every semicolon starts a comment. Otherwise retain
+        # full tokenization, including string validation and escaped quotes.
+        if '"' not in source:
+            uncommented = re.sub(r";[^\n]*", "", source)
+            if not any(word in uncommented for word in ("include", "input", "prove")):
+                active.remove(current)
+                return
+        if file_contains_executable_prove_command(current):
+            raise ValueError(f"{current} contains an explicit prove command")
+        depth = 0
+        command: list[str | None] = []
+        for token in _egglog_tokens(source, strings=True):
+            if token == "(":
+                depth += 1
+            elif token == ")":
+                depth -= 1
+                if depth == 0 and command and command[0] in ("include", "input"):
+                    name = command[-1]
+                    if not isinstance(name, str):
+                        raise ValueError(f"invalid {command[0]} path in {current}")
+                    base = fact_directory if command[0] == "input" and fact_directory is not None else cwd
+                    dependency = (base / name).resolve()
+                    identity = os.path.relpath(dependency, cwd)
+                    if identity not in dependencies:
+                        dependencies[identity] = sha256_file(dependency)
+                        if command[0] == "include":
+                            visit(dependency)
+                if depth == 0:
+                    command = []
+            elif depth == 1:
+                command.append(token)
+        active.remove(current)
+
+    if path.suffix == ".egg":
+        visit(path)
+    digest = sha256_file(path)
+    if not dependencies:
+        return digest
+    closure = [digest, sorted(dependencies.items())]
+    return "sha256:" + hashlib.sha256(json.dumps(closure, separators=(",", ":")).encode()).hexdigest()
+
+
 def require_workload_unchanged(file_spec: FileSpec) -> None:
     """Reject an observation if its mutable inputs no longer match their cache identity."""
 
     try:
-        file_sha256 = sha256_file(file_spec.absolute_path) if file_spec.absolute_path.is_file() else None
+        file_sha256 = (
+            complete_input_sha256(
+                file_spec.absolute_path, file_spec.working_directory or Path.cwd(), file_spec.fact_directory
+            )
+            if file_spec.absolute_path.is_file()
+            else None
+        )
         if file_spec.fact_directory is None:
             fact_directory_sha256 = ""
         elif file_spec.fact_directory.is_dir():
@@ -188,7 +382,7 @@ def validate_workloads(files: Sequence[FileSpec]) -> None:
 
     validate_unique_file_identities(files)
     for file_spec in files:
-        if file_contains_executable_prove_command(file_spec.absolute_path):
+        if file_spec.working_directory is None and file_contains_executable_prove_command(file_spec.absolute_path):
             raise ValueError(
                 f"{file_spec.display_path} contains an explicit prove command; "
                 "benchmark files should use check or extract so the selected treatment controls proof extraction"

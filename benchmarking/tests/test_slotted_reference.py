@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-syntax = importlib.import_module("slotted.reference")
-driver = importlib.import_module("slotted.test_program")
-LANGUAGES = Path(__file__).resolve().parents[1] / "egglog-experimental/tests/slotted/languages"
+syntax = importlib.import_module("benchmarks.reproduction.slotted.reference")
+driver = importlib.import_module("benchmarks.reproduction.slotted.differential_source")
+LANGUAGES = Path(__file__).resolve().parents[2] / "egglog-experimental/tests/slotted/languages"
 
 
 @pytest.mark.parametrize(
