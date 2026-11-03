@@ -43,9 +43,9 @@ instrumenting a separate copy. See `resolve_command_before_proofs` and
 | Responsibility | Ordinary proofs | Slotted proofs |
 | --- | --- | --- |
 | Primitive validators | Attached during type resolution | Attached during source resolution using the query's visible binder declarations |
-| Guard normal form | A compiler pass over resolved queries | Shared `proof_form_fact` helper, called while lifting and checking each rule application |
+| Guard normal form | A compiler pass over resolved queries | Prepared with the checking context using `proof_form_fact`; rule steps instantiate bindings |
 | Checking context | Prepared for the proof traversal | One context reused for ordinary steps and expanded source rules |
-| Preserved source | Resolved commands retained before instrumentation | Source syntax recorded through `slotted-source` and resolved during extraction |
+| Preserved source | Resolved commands retained before instrumentation | Resolved source and flattened rules retained by compilation at each proof query |
 | Flattening | Ordinary query normalization precedes instrumentation | Forward transformation and proof unflattening live together in `slotted/flatten/` |
 
 Both encodings replace implicit equality maintenance with generated tables and
@@ -57,31 +57,25 @@ remain necessary even with a cleaner compiler interface.
 The ordinary proof pass's saved source is already the lowered slotted program.
 Slotted must preserve its own typed input before its own lowering pass.
 
-The main architectural mismatch is the compiler boundary, not primitive
-validation. `Compiler::compile` returns text. Its `rewrite` method discards the
-flattened rewrite returned by `lower_rewrite`; `RecordSource` later invokes a
-second compiler to reconstruct it. Original commands are kept as `Sexp`s and
-resolved when a proof is extracted. `prove-slotted` also carries slot and query
-name maps as JSON strings. Generating egglog code is legitimate; reconstructing
-discarded pass outputs through that code is avoidable.
+The compiler returns a `CompiledProgram` with lowered commands, resolved source
+programs, flattened rewrites, generated-name mappings, and structured proof
+requests. `run` handles proof queries in command order, using the retained source
+visible at each query. Text output serializes only lowered commands. Encoded
+replay supplies the original source through `--slotted-source`, following the
+ordinary proof mode's explicit checking-program contract.
 
-Further simplifications, in dependency order:
+Compiler-boundary cleanup:
 
-- [ ] Give compilation a structured result: the original resolved program,
-  flattened rewrites and their generated-name mappings, typed proof queries,
-  and lowered commands. Preserve each result when its pass produces it.
-- [ ] Execute that result directly and retain the checking program with the
-  e-graph, following ordinary proof mode. Preserve command order, push/pop,
-  successive inputs, and declaration-scoped globals. Remove `slotted-source`,
-  source-datum transport, and the replay compiler.
-- [ ] Prepare normalized rule bodies and the expansion of `RenamingEq` once per
-  source program. Keep original rules for source-level proofs; instantiate only
-  auxiliary bindings and premise representatives for each rule application.
-- [ ] Make text output a serialization of the lowered commands. Replayed proof
-  programs need their original checking program, as ordinary desugared proof
-  tests supply through `set_proof_checking_program`. The existing standalone
-  `--slotted-encoded` proof path currently gets that program from embedded records;
-  account for this interface when removing them.
+- [x] Retain original resolved programs and flattening outputs during compilation.
+- [x] Execute compiled inputs through the shared CLI, preserving push/pop,
+  successive inputs, command order, and declaration-scoped globals.
+- [x] Remove source records, source-datum transport, JSON query metadata, and the
+  replay compiler. Proof requests refer to retained data by ID.
+- [x] Prepare proof-normal-form rule bodies and `RenamingEq` expansion with the
+  checking context, leaving only proof-specific bindings and premises to each step.
+- [x] Support encoded replay with an explicit original source program.
+- [x] Validate the compiler boundary, unchanged proof snapshots, scopes, replay,
+  and rejection of altered checking programs with root `make check`.
 
 Binding-aware Alpha, Equivariance, and fresh-slot validation remain slotted
 semantics. The ordinary checker continues to own rule and equality validation.

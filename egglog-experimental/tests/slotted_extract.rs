@@ -19,8 +19,8 @@ fn extract_with_mode(source: &str, proof_mode: ProofMode) -> Vec<(u64, String)> 
     } else {
         new_egraph_with_proofs()
     };
-    let program = compiler.compile(None, source).unwrap();
-    let outputs = graph.parse_and_run_program(None, &program).unwrap();
+    let program = compiler.compile_program(None, source).unwrap();
+    let outputs = program.run(&mut graph).unwrap();
     let extracted: Vec<_> = outputs
         .into_iter()
         .filter_map(|output| {
@@ -33,14 +33,14 @@ fn extract_with_mode(source: &str, proof_mode: ProofMode) -> Vec<(u64, String)> 
         .collect();
     for (_, term) in &extracted {
         let check = compiler
-            .compile(
+            .compile_program(
                 None,
                 &format!(
                     "(push) (let reconstructed {term}) (check (= result reconstructed)) (pop)"
                 ),
             )
             .unwrap();
-        graph.parse_and_run_program(None, &check).unwrap();
+        check.run(&mut graph).unwrap();
     }
     extracted
 }

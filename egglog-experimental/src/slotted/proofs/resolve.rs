@@ -2,7 +2,7 @@
 
 use super::HashMap;
 use super::bindings::GlobalNames;
-use super::context::{ColumnKind, Constructor, ProofContext, SourceError, check_term_sort};
+use super::context::{ColumnKind, Constructor, ProofContext, SourceError};
 use super::guards::{self, GUARDS, validator_name};
 use super::program::ResolvedSlottedProgram;
 use crate::slotted::frontend::{
@@ -10,6 +10,8 @@ use crate::slotted::frontend::{
 };
 use crate::slotted::syntax::{self, Form};
 use crate::slotted::var_sort::VarSort;
+#[cfg(test)]
+use egglog::TermDag;
 use egglog::ast::{
     Action, Expr, Fact, FunctionDecl, GenericAction, GenericActions, ResolvedExpr, ResolvedExprExt,
     ResolvedFact, ResolvedNCommand, ResolvedRule, ResolvedVar, Rule, Schema, Sexp, Span,
@@ -17,7 +19,7 @@ use egglog::ast::{
 use egglog::prelude::BaseSort;
 use egglog::sort::{EqSort, UnitSort};
 use egglog::util::{FreshGen, INTERNAL_SYMBOL_PREFIX, IndexMap, SymbolGen};
-use egglog::{Context, EGraph, ResolvedCall, TermDag};
+use egglog::{Context, EGraph, ResolvedCall};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::sync::Arc;
@@ -29,6 +31,7 @@ struct Scope {
     globals: IndexMap<String, String>,
 }
 
+#[cfg(test)]
 pub(super) fn resolve_rewrite(
     context: &ProofContext,
     dag: &TermDag,
@@ -43,7 +46,8 @@ pub(super) fn resolve_rewrite(
             .map(|(name, &term)| {
                 Ok((
                     name.clone(),
-                    check_term_sort(context, dag, term, None).map_err(SourceError)?,
+                    super::context::check_term_sort(context, dag, term, None)
+                        .map_err(SourceError)?,
                 ))
             })
             .collect::<Result<_, SourceError>>()?,
@@ -346,38 +350,6 @@ fn is_guard(name: &str) -> bool {
     GUARDS.contains(&name)
 }
 
-// A rule's operands can contain any constructor visible at the proof query,
-// including ones declared after that rule or in a later active scope.
-fn guard_context(forms: &[(Form, Span)]) -> Result<ProofContext, SourceError> {
-    let mut sorts = Vec::new();
-    let mut constructors = Vec::new();
-    let mut scopes = Vec::new();
-    for (form, _) in forms {
-        match form.call().map_err(SourceError)? {
-            ("push", _) => scopes.push((sorts.len(), constructors.len())),
-            ("pop", _) => {
-                let (sorts_len, constructors_len) = scopes
-                    .pop()
-                    .ok_or_else(|| SourceError("pop without a corresponding push".into()))?;
-                sorts.truncate(sorts_len);
-                constructors.truncate(constructors_len);
-            }
-            _ => declarations(form, &mut sorts, &mut constructors).map_err(SourceError)?,
-        }
-    }
-    let mut program = ProofContext::default();
-    for form in constructors {
-        let op = source_constructor(
-            &form,
-            sorts.iter().map(String::as_str),
-            program.constructors.values(),
-        )
-        .map_err(SourceError)?;
-        program.constructors.insert(op.name.clone(), op);
-    }
-    Ok(program)
-}
-
 /// Resolve the original slotted source visible at a proof query.
 /// Rewrites become typed rules with their original conditions and nested terms.
 /// Includes resolve from the working directory; push/pop determines the visible scope.
@@ -390,13 +362,7 @@ pub fn resolve_program<'a>(
         .collect();
     let forms =
         expand_includes(forms, &mut BTreeSet::new()).map_err(|e| SourceError(e.to_string()))?;
-    let mut reader = Reader {
-        guards: Arc::new(guard_context(&forms)?),
-        scope: Scope::default(),
-        resolved: ResolvedSlottedProgram::default(),
-        rules: 0,
-        rule_names: BTreeSet::new(),
-    };
+    let mut reader = Reader::default();
     let mut scopes = Vec::new();
     let mut start = 0;
     for (i, (form, _)) in forms.iter().enumerate() {
@@ -416,11 +382,11 @@ pub fn resolve_program<'a>(
         }
     }
     reader.region(&forms[start..])?;
-    Ok(reader.resolved)
+    reader.snapshot()
 }
 
-struct Reader {
-    guards: Arc<ProofContext>,
+#[derive(Clone, Default)]
+pub(in crate::slotted) struct Reader {
     scope: Scope,
     resolved: ResolvedSlottedProgram,
     rules: usize,
@@ -429,6 +395,17 @@ struct Reader {
 
 impl Reader {
     fn region(&mut self, forms: &[(Form, Span)]) -> Result<(), SourceError> {
+        self.declare(forms)?;
+        for (form, span) in forms {
+            self.command(form, span)?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::slotted) fn declare(
+        &mut self,
+        forms: &[(Form, Span)],
+    ) -> Result<(), SourceError> {
         let mut sorts = Vec::new();
         let mut constructors = Vec::new();
         for (form, _) in forms {
@@ -495,60 +472,134 @@ impl Reader {
                 .push(ResolvedNCommand::Function(decl));
             self.scope.constructors.insert(op.name.clone(), op);
         }
-        for (form, span) in forms {
-            let (head, args) = form.call().map_err(SourceError)?;
-            let command = match (head, args) {
-                ("sort" | "constructor" | "datatype" | "datatype*", _) => continue,
-                ("let", [name, value]) => {
-                    let name = name.symbol().map_err(SourceError)?;
-                    if name.starts_with('$') || self.scope.globals.contains_key(name) {
-                        return Err(SourceError(format!("invalid or duplicate global {name}")));
-                    }
-                    let value = value.expr().map_err(SourceError)?;
-                    let action = self
-                        .scope
-                        .resolve_action(span, Action::Let(span.clone(), name.into(), value))?;
-                    let GenericAction::Let(_, _, value) = &action else {
-                        unreachable!("resolved let")
-                    };
-                    self.scope
-                        .globals
-                        .insert(name.into(), value.output_type().name().to_owned());
-                    ResolvedNCommand::CoreAction(action)
-                }
-                ("union", [lhs, rhs]) => {
-                    let lhs = lhs.expr().map_err(SourceError)?;
-                    let rhs = rhs.expr().map_err(SourceError)?;
-                    let action = self
-                        .scope
-                        .resolve_action(span, Action::Union(span.clone(), lhs, rhs))?;
-                    let GenericAction::Union(_, lhs, _) = &action else {
-                        unreachable!("resolved union")
-                    };
-                    if !self.scope.sorts.contains(lhs.output_type().name()) {
-                        return Err(SourceError(
-                            "union requires terms in an equality sort".into(),
-                        ));
-                    }
-                    ResolvedNCommand::CoreAction(action)
-                }
-                ("rewrite", _) => {
-                    let mut rule = source_rewrite(args).map_err(SourceError)?;
-                    name_rewrite(&mut rule, self.rules, Some(&mut self.rule_names));
-                    self.rules += 1;
-                    ResolvedNCommand::NormRule {
-                        rule: self.scope.resolve_rewrite(&rule, &self.guards)?,
-                    }
-                }
-                (
-                    "run" | "check" | "fail" | "extract" | "print-size" | "print-function"
-                    | "print-stats" | "slotted-export" | "set-option",
-                    _,
-                ) => continue,
-                _ => return Err(SourceError(format!("unsupported source command {head}"))),
-            };
-            self.resolved.commands.push(command);
-        }
         Ok(())
+    }
+
+    pub(in crate::slotted) fn command(
+        &mut self,
+        form: &Form,
+        span: &Span,
+    ) -> Result<(), SourceError> {
+        let (head, args) = form.call().map_err(SourceError)?;
+        let command = match (head, args) {
+            ("sort" | "constructor" | "datatype" | "datatype*", _) => return Ok(()),
+            ("let", [name, value]) => {
+                let name = name.symbol().map_err(SourceError)?;
+                if name.starts_with('$') || self.scope.globals.contains_key(name) {
+                    return Err(SourceError(format!("invalid or duplicate global {name}")));
+                }
+                let value = value.expr().map_err(SourceError)?;
+                let action = self
+                    .scope
+                    .resolve_action(span, Action::Let(span.clone(), name.into(), value))?;
+                let GenericAction::Let(_, _, value) = &action else {
+                    unreachable!("resolved let")
+                };
+                self.scope
+                    .globals
+                    .insert(name.into(), value.output_type().name().to_owned());
+                ResolvedNCommand::CoreAction(action)
+            }
+            ("union", [lhs, rhs]) => {
+                let lhs = lhs.expr().map_err(SourceError)?;
+                let rhs = rhs.expr().map_err(SourceError)?;
+                let action = self
+                    .scope
+                    .resolve_action(span, Action::Union(span.clone(), lhs, rhs))?;
+                let GenericAction::Union(_, lhs, _) = &action else {
+                    unreachable!("resolved union")
+                };
+                if !self.scope.sorts.contains(lhs.output_type().name()) {
+                    return Err(SourceError(
+                        "union requires terms in an equality sort".into(),
+                    ));
+                }
+                ResolvedNCommand::CoreAction(action)
+            }
+            ("rewrite", _) => {
+                let mut rule = source_rewrite(args).map_err(SourceError)?;
+                name_rewrite(&mut rule, self.rules, Some(&mut self.rule_names));
+                self.rules += 1;
+                ResolvedNCommand::NormRule {
+                    rule: self.resolve_rewrite(&rule)?,
+                }
+            }
+            (
+                "run" | "check" | "fail" | "extract" | "print-size" | "print-function"
+                | "print-stats" | "slotted-export" | "set-option",
+                _,
+            ) => return Ok(()),
+            _ => return Err(SourceError(format!("unsupported source command {head}"))),
+        };
+        self.resolved.commands.push(command);
+        Ok(())
+    }
+
+    pub(in crate::slotted) fn resolve_rewrite(
+        &self,
+        source: &egglog::ast::Rewrite,
+    ) -> Result<ResolvedRule, SourceError> {
+        self.scope
+            .resolve_rewrite(source, &Arc::new(self.guard_context()))
+    }
+
+    pub(in crate::slotted) fn add_rewrite(
+        &mut self,
+        source: &egglog::ast::Rewrite,
+    ) -> Result<(), SourceError> {
+        let rule = self.resolve_rewrite(source)?;
+        self.resolved
+            .commands
+            .push(ResolvedNCommand::NormRule { rule });
+        Ok(())
+    }
+
+    fn guard_context(&self) -> ProofContext {
+        ProofContext {
+            constructors: self.scope.constructors.clone(),
+            ..Default::default()
+        }
+    }
+
+    pub(in crate::slotted) fn snapshot(&self) -> Result<ResolvedSlottedProgram, SourceError> {
+        let mut program = self.resolved.clone();
+        let mut graph = self.scope.source_types(&egglog::span!())?;
+        guards::register(&mut graph, &Arc::new(self.guard_context()));
+        // Earlier rules may receive terms built with later constructor declarations.
+        // Refresh only the primitive registrations; preserve their resolved arguments.
+        for command in &mut program.commands {
+            let ResolvedNCommand::NormRule { rule } = command else {
+                continue;
+            };
+            let mut error = None;
+            *rule = rule.clone().visit_exprs(&mut |expr| {
+                let ResolvedExpr::Call(span, ResolvedCall::Primitive(head), args) = expr else {
+                    return expr;
+                };
+                let types: Vec<_> = head
+                    .input()
+                    .iter()
+                    .cloned()
+                    .chain([head.output().clone()])
+                    .collect();
+                match ResolvedCall::from_resolution(
+                    head.name(),
+                    &types,
+                    graph.type_info(),
+                    Context::Read,
+                    &span,
+                ) {
+                    Ok(head) => ResolvedExpr::Call(span, head, args),
+                    Err(e) => {
+                        error = Some(SourceError(e.to_string()));
+                        ResolvedExpr::Call(span, ResolvedCall::Primitive(head), args)
+                    }
+                }
+            });
+            if let Some(error) = error {
+                return Err(error);
+            }
+        }
+        Ok(program)
     }
 }

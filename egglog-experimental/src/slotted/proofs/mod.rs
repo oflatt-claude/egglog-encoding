@@ -9,10 +9,11 @@ pub(super) mod coordinates;
 pub mod format;
 pub(super) mod guards;
 mod lift_slots;
+mod normal_form;
 mod normalize;
 pub(crate) mod pipeline;
 mod program;
-mod resolve;
+pub(super) mod resolve;
 pub mod terms;
 
 pub use checker::{SlottedCheckError, check_claim, check_proof};

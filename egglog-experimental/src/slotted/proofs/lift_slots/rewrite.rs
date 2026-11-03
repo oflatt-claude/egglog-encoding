@@ -29,10 +29,8 @@ impl SlotLifter<'_> {
         let rhs_pattern = pattern_term(&mut self.out.term_dag, rhs_expr);
         let names = self
             .names
-            .rules
             .get(name)
             .ok_or_else(|| format!("no generated names for rule {name}"))?;
-        let names = &names.names;
         let root_name = match self.out.term_dag.get(lhs_pattern) {
             Term::Var(v) => v.clone(),
             _ => names.patterns[0][0].1.clone(),

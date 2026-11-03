@@ -2,15 +2,11 @@
 
 use super::context::{ProofContext, SourceFact, check_term_sort, pattern_term};
 use super::format::{Claim, ClaimKind, RulePremise, RuleProof, SlottedProof, SlottedProofStore};
-use super::guards::proof_body;
 use super::program::ResolvedSlottedProgram;
 use super::terms::{Renaming, all_slots, rename, slot_of, slot_term, term_renaming};
 use super::{HashMap, HashSet};
-use egglog::ast::{
-    Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact, ResolvedNCommand, ResolvedVar,
-};
+use egglog::ast::{Literal, ResolvedExpr, ResolvedExprExt, ResolvedFact};
 use egglog::proof::{Justification, Proof, ProofCheckContext, ProofId, ProofStore, Proposition};
-use egglog::util::{FreshGen, INTERNAL_SYMBOL_PREFIX, SymbolGen};
 use egglog::{Term, TermDag};
 use egglog_numeric_id::NumericId;
 use std::collections::BTreeSet;
@@ -438,7 +434,8 @@ fn check_rule(
         }
     }
 
-    let (facts, auxiliary) = proof_body(rule, dag, &bindings).map_err(&fail)?;
+    let facts = &rule.normal.body;
+    let auxiliary = rule.normal.bindings(dag, &bindings).map_err(&fail)?;
     if premise_proofs.len() != facts.len() {
         return Err(SlottedCheckError::PremiseCount {
             proof: id,
@@ -450,12 +447,6 @@ fn check_rule(
     let mut substitution = substitution.clone();
     substitution.extend(rule.globals.clone());
     substitution.extend(auxiliary);
-    let mut prefix = format!("{INTERNAL_SYMBOL_PREFIX}slotted-guard-");
-    while substitution.keys().any(|name| name.starts_with(&prefix)) {
-        prefix.push('-');
-    }
-    let mut symbols = SymbolGen::new(prefix);
-    let mut body = Vec::new();
     let mut premises = Vec::new();
     let equality = |premise: &RulePremise| {
         let RulePremise::Equality(id) = premise else {
@@ -465,46 +456,33 @@ fn check_rule(
         };
         Ok(&checked[id])
     };
-    for (fact, premise) in facts.iter().zip(premise_proofs) {
+    for (i, (fact, premise)) in facts.iter().zip(premise_proofs).enumerate() {
         if let ResolvedFact::Fact(ResolvedExpr::Call(
-            span,
+            _,
             egglog::ResolvedCall::Primitive(head),
             args,
         )) = fact
         {
-            let (arguments, result) = if head.name() == "renaming-=" {
+            let result = if head.name() == "renaming-=" {
                 let RulePremise::RenamingEq { left, right } = premise else {
                     return Err(fail("renaming-= requires a RenamingEq premise".into()));
                 };
-                let mut variables = Vec::new();
-                for (arg, &p) in args.iter().zip([left, right]) {
+                for ((arg, &p), variable) in args
+                    .iter()
+                    .zip([left, right])
+                    .zip(&rule.normal.renaming_args[&i])
+                {
                     let p = &checked[&p];
                     check_term_sort(program, dag, p.rhs, Some(arg.output_type().name()))
                         .map_err(&fail)?;
-                    let variable = symbols.fresh("argument");
-                    substitution.insert(variable.clone(), p.rhs);
-                    let var = ResolvedExpr::Var(
-                        arg.span(),
-                        ResolvedVar {
-                            name: variable,
-                            sort: arg.output_type().clone(),
-                            is_global_ref: false,
-                        },
-                    );
-                    body.push(ResolvedFact::Eq(arg.span(), arg.clone(), var.clone()));
+                    substitution.insert(variable.name.clone(), p.rhs);
                     premises.push(p.clone());
-                    variables.push(var);
                 }
                 let unit = dag.lit(Literal::Unit);
-                (variables, Proposition::new(unit, unit))
+                Proposition::new(unit, unit)
             } else {
-                (args.clone(), equality(premise)?.clone())
+                equality(premise)?.clone()
             };
-            body.push(ResolvedFact::Fact(ResolvedExpr::Call(
-                span.clone(),
-                egglog::ResolvedCall::Primitive(head.clone()),
-                arguments,
-            )));
             premises.push(result);
         } else {
             let checked = equality(premise)?;
@@ -513,15 +491,9 @@ fn check_rule(
             };
             check_term_sort(program, dag, checked.lhs, Some(condition_sort.name()))
                 .map_err(&fail)?;
-            body.push(fact.clone());
             premises.push(checked.clone());
         }
     }
-    let native_rule = egglog::ast::ResolvedRule {
-        body,
-        ..rule.rule.clone()
-    };
-    let commands = [ResolvedNCommand::NormRule { rule: native_rule }];
     let native_proof = Proof::new(
         claimed.clone(),
         Justification::Rule {
@@ -531,7 +503,7 @@ fn check_rule(
         },
     );
     let proven = ordinary
-        .check_step(id, &native_proof, &commands, context, |_, p| {
+        .check_step(id, &native_proof, &rule.normal.commands, context, |_, p| {
             Ok(premises[p.index()].clone())
         })
         .map_err(|e| fail(e.to_string()))?;

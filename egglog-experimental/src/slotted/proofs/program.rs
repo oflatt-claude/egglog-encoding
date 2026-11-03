@@ -47,6 +47,23 @@ impl ResolvedSlottedProgram {
         dag: &mut TermDag,
         names: BTreeMap<String, i64>,
     ) -> Result<ProofContext, SourceError> {
+        self.materialize(dag, names, false)
+    }
+
+    pub(super) fn flattened_context(
+        &self,
+        dag: &mut TermDag,
+        names: BTreeMap<String, i64>,
+    ) -> Result<ProofContext, SourceError> {
+        self.materialize(dag, names, true)
+    }
+
+    fn materialize(
+        &self,
+        dag: &mut TermDag,
+        names: BTreeMap<String, i64>,
+        refresh: bool,
+    ) -> Result<ProofContext, SourceError> {
         let mut fresh = FreshSlots::new(
             (0..dag.size())
                 .filter_map(|t| slot_of(dag, t))
@@ -98,11 +115,24 @@ impl ResolvedSlottedProgram {
                 }
                 ResolvedNCommand::CoreAction(GenericAction::Let(_, name, expr)) => {
                     let term = ground(&mut program, dag, &mut fresh, expr)?;
+                    let term = if refresh {
+                        program.refresh_binders(dag, term)
+                    } else {
+                        term
+                    };
                     program.lets.insert(name.name.clone(), term);
                 }
                 ResolvedNCommand::CoreAction(GenericAction::Union(_, lhs, rhs)) => {
                     let lhs = ground(&mut program, dag, &mut fresh, lhs)?;
                     let rhs = ground(&mut program, dag, &mut fresh, rhs)?;
+                    let (lhs, rhs) = if refresh {
+                        (
+                            program.refresh_binders(dag, lhs),
+                            program.refresh_binders(dag, rhs),
+                        )
+                    } else {
+                        (lhs, rhs)
+                    };
                     program.unions.push(Union { lhs, rhs });
                 }
                 ResolvedNCommand::NormRule { rule } => {

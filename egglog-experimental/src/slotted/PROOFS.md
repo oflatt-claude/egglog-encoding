@@ -225,18 +225,19 @@ The proof-compatible encoding represents these operations as follows:
   `(Invocation c name a)`, and `invocation-merge` unions two members under one name.
 - *Merge behavior.* The `:no-merge` tables are `Unit`- or container-valued.
   Source-term extraction uses the same cost model and decoder in both modes.
-- *Claims.* Supported equality checks compile to `prove-slotted` over the shared
+- *Claims.* Supported equality checks compile to `slotted-prove` over the shared
   query compiler's facts. The command extracts an existence proof, reconstructs
   the matched source terms, and checks their equality. Other checks use the same
   queries without proof extraction. `--slotted-proof-checks` runs this encoding
   with ordinary checks for comparison.
 
-**Source recording.** `(slotted-source command)` retains declarations, globals,
-unions, and original rewrites as native source syntax. Records execute in source
-order and follow `push`/`pop`; later declarations cannot change earlier axioms or
-a rewrite's captured globals. Rewrites retain nested expressions and the
-original `:when` order. Unnamed rewrites receive names unique across scopes and
-successive inputs.
+**Retained programs.** `Compiler::compile_program` returns lowered commands with
+resolved source programs and flattened rewrites. Each proof request captures the
+source visible at its query, including declaration-scoped globals and original
+`:when` conditions. Compiler state follows `push`/`pop` and successive inputs;
+unnamed rewrites receive names unique across those inputs and scopes.
+`CompiledProgram::run` executes the lowered commands and checks each extracted
+proof against its retained source program.
 
 The public `check_proof` and `check_claim` functions take a
 `ResolvedSlottedProgram`, together with the proof store and root `ProofId`.
@@ -260,10 +261,12 @@ metadata.
 
 # Proof lifting
 
-The source recorder uses the compiler's lowering to reconstruct flattened rules
-and their generated pattern, class, reading, and frame names. Claims carry the
-corresponding names for their compiled queries. These mappings belong to lifting;
-the source checker does not consult them.
+Flattening retains its native rules and generated pattern, class, reading, and
+frame names. Proof requests retain the corresponding names for their compiled
+queries. These mappings belong to lifting; the source checker does not consult
+them. Source rule bodies are prepared in proof normal form when constructing the
+checking context. Rule steps instantiate auxiliary bindings and expand their
+`RenamingEq` premises against that prepared rule.
 
 The pass in [`proofs/lift_slots`](proofs/lift_slots) produces proofs over those
 flattened rewrites. A separate pass in [`flatten/unflatten.rs`](flatten/unflatten.rs)
@@ -355,9 +358,14 @@ globals, slots, and literal payloads. Checks with term or payload pattern variab
 multiple facts, negation, or other predicates are checked without printing a proof.
 
 To replay lowered code, use
-`egglog-experimental --slotted-encoded --proofs encoded.egg`.
-From Rust, compile with `Options { proof_mode: ProofMode::Prove, ..Default::default() }`
-and evaluate the result with `new_egraph_with_proofs()`.
+`egglog-experimental --slotted-encoded --proofs --slotted-source source.egg encoded.egg`.
+The original source and matching mode must match the compilation that produced
+the lowered commands. Include `--slotted-no-aliasing` if it was used for compilation.
+From Rust, use `Compiler::compile_program` with
+`Options { proof_mode: ProofMode::Prove, ..Default::default() }`, then call
+`CompiledProgram::run` on `new_egraph_with_proofs()`. `run_encoded` checks replayed
+commands against the same retained source programs. Serialized commands contain
+proof request IDs; they do not contain their checking programs.
 `make slotted-proof-tests` runs the supported source corpus through the Rust API
 and checks the generated benchmark goals and seeded fuzz cases with proofs.
 The benchmark checks use the same workload generators and iteration budgets as
@@ -373,6 +381,5 @@ Sources using `subst` are ignored because it has no proof translation;
 the CLI refuses them. `--slotted-proof-checks` runs the same encoding with ordinary
 checks for comparison.
 
-The command and source recorder use egglog's extension APIs. Their state is stored
-on the e-graph and restored by `push`/`pop`. The core crate has no slotted commands,
-claim types, proof state or CLI flags.
+The CLI accepts compiled inputs through egglog's `CliProgram` interface.
+The core crate has no slotted commands, claim types, proof state, or CLI flags.

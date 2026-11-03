@@ -501,13 +501,13 @@ least one term. `free-names-are` takes one term and zero or more slot names.
 use egglog_experimental::slotted::{Compiler, new_egraph};
 
 let mut compiler = Compiler::default();
-let program = compiler.compile(None, r#"
+let program = compiler.compile_program(None, r#"
     (datatype Expr (V Var) (Lam Var Expr :binder 0))
     (let id (Lam $a (V $a)))
     (check (= id (Lam $b (V $b))))
 "#)?;
 let mut egraph = new_egraph();
-egraph.parse_and_run_program(None, &program)?;
+program.run(&mut egraph)?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

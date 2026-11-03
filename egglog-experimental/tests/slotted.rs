@@ -621,7 +621,7 @@ fn proofs_keep_reused_rule_names_distinct_across_scopes() {
         ..Default::default()
     });
     let program = compiler
-        .compile(
+        .compile_program(
             None,
             r#"
         (datatype U (V Var) (Num i64) (Wrap U))
@@ -640,9 +640,7 @@ fn proofs_keep_reused_rule_names_distinct_across_scopes() {
     "#,
         )
         .unwrap();
-    let outputs = new_egraph_with_proofs()
-        .parse_and_run_program(None, &program)
-        .unwrap();
+    let outputs = program.run(&mut new_egraph_with_proofs()).unwrap();
     assert_eq!(
         outputs
             .iter()

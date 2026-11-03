@@ -292,3 +292,42 @@ fn subst_is_refused() {
         .unwrap_err();
     assert!(err.0.contains("subst"));
 }
+
+impl ProofContext {
+    pub(super) fn add_let_expr(
+        &mut self,
+        dag: &mut TermDag,
+        name: &str,
+        expr: &Expr,
+    ) -> Result<(), SourceError> {
+        let term = self.ground_term(dag, expr)?;
+        self.lets.insert(name.to_string(), term);
+        Ok(())
+    }
+
+    pub(super) fn add_union_expr(
+        &mut self,
+        dag: &mut TermDag,
+        lhs: &Expr,
+        rhs: &Expr,
+    ) -> Result<(), SourceError> {
+        let lhs = self.ground_term(dag, lhs)?;
+        let rhs = self.ground_term(dag, rhs)?;
+        self.unions.push(Union { lhs, rhs });
+        Ok(())
+    }
+
+    pub(super) fn add_rewrite_ast(
+        &mut self,
+        dag: &mut TermDag,
+        source: &egglog::ast::Rewrite,
+    ) -> Result<String, SourceError> {
+        let name = source.name.clone();
+        let rule = SourceRule::capture(
+            crate::slotted::proofs::resolve::resolve_rewrite(self, dag, source)?,
+            &self.lets,
+        );
+        self.rewrites.insert(name.clone(), rule);
+        Ok(name)
+    }
+}

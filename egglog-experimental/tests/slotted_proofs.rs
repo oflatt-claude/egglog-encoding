@@ -11,10 +11,10 @@ fn compiler(mode: ProofMode) -> Compiler {
 }
 
 fn prove(compiler: &mut Compiler, graph: &mut EGraph, source: &str) -> Vec<String> {
-    let encoded = compiler.compile(None, source).unwrap();
-    let count = encoded.matches("(prove-slotted ").count();
-    let outputs = graph
-        .parse_and_run_program(None, &encoded)
+    let program = compiler.compile_program(None, source).unwrap();
+    let count = program.to_string().matches("(slotted-prove ").count();
+    let outputs = program
+        .run(graph)
         .unwrap_or_else(|error| panic!("{source}\n{error}"));
     let proofs = outputs
         .into_iter()
@@ -418,45 +418,44 @@ fn source_state_restores_with_scopes_and_successive_inputs() {
 
 #[test]
 fn encoded_claim_is_checked_against_its_source() {
-    let mut compiler = compiler(ProofMode::Prove);
-    let encoded = compiler
-        .compile(
-            None,
-            r#"
+    let source = r#"
         (datatype U (V Var) (Num i64) (F U))
         (let x (F (V $alpha)))
         (rewrite (F _p) _p)
         (run 1)
         (check (= x (V $alpha)))
-    "#,
-        )
+    "#;
+    let program = compiler(ProofMode::Prove)
+        .compile_program(None, source)
         .unwrap();
-    for table in [
+    let encoded = program.to_string();
+    for metadata in [
+        "slotted-source",
+        "rule-names",
         "SlottedRuleSource",
         "SlottedLetSource",
         "SlottedUnionSource",
-        "(relation SlottedCarrier ",
-        "rule-names",
     ] {
-        assert!(!encoded.contains(table), "source metadata table {table}");
+        assert!(!encoded.contains(metadata), "embedded metadata: {metadata}");
     }
-    assert!(encoded.contains("(slotted-source (rewrite (F _p) _p :when () :name"));
-    let mut graph = new_egraph_with_proofs();
-    let printed = graph
-        .parse_program(None, &encoded)
-        .unwrap()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    graph.parse_and_run_program(None, &printed).unwrap();
-    // Leave the encoded query true while changing only its surface claim.
-    let corrupt = encoded.replace("(prove-slotted (= (x ", "(prove-slotted (= ((Num 2) ");
-    assert_ne!(corrupt, encoded);
+    program
+        .run_encoded(&mut new_egraph_with_proofs(), None, &encoded)
+        .unwrap();
+    let corrupt = source.replace("(check (= x (V $alpha)))", "(check (= (Num 2) (V $alpha)))");
+    let wrong_source = compiler(ProofMode::Prove)
+        .compile_program(None, &corrupt)
+        .unwrap();
     assert!(
-        new_egraph_with_proofs()
-            .parse_and_run_program(None, &corrupt)
+        wrong_source
+            .run_encoded(&mut new_egraph_with_proofs(), None, &encoded)
             .is_err()
+    );
+    let error = new_egraph_with_proofs()
+        .parse_and_run_program(None, &encoded)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("missing checking program"),
+        "{error}"
     );
 }
 
@@ -500,24 +499,17 @@ fn original_guards_are_checked_independently_of_flattening() {
 (rewrite (F (V $s)) (G (V $s)) :when ((free $s (F (V $s)))) :name "guard")
 (run 1)
 (check (= input (G (V $a))))"#;
-    let encoded = compiler(ProofMode::Prove).compile(None, source).unwrap();
-    new_egraph_with_proofs()
-        .parse_and_run_program(None, &encoded)
+    let program = compiler(ProofMode::Prove)
+        .compile_program(None, source)
         .unwrap();
-    let corrupt = encoded
-        .lines()
-        .map(|line| {
-            if line.starts_with("(slotted-source (rewrite ") {
-                line.replace("(free $s (F (V $s)))", "(not-free $s (F (V $s)))")
-            } else {
-                line.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_ne!(encoded, corrupt);
-    let error = new_egraph_with_proofs()
-        .parse_and_run_program(None, &corrupt)
+    let encoded = program.to_string();
+    program.run(&mut new_egraph_with_proofs()).unwrap();
+    let corrupt = source.replace("(free $s (F (V $s)))", "(not-free $s (F (V $s)))");
+    let wrong_source = compiler(ProofMode::Prove)
+        .compile_program(None, &corrupt)
+        .unwrap();
+    let error = wrong_source
+        .run_encoded(&mut new_egraph_with_proofs(), None, &encoded)
         .unwrap_err();
     assert!(
         error
@@ -656,7 +648,7 @@ fn constructor_and_guard_with_the_same_name_resolve_in_context() {
 }
 
 #[test]
-fn native_variable_names_survive_source_replay() {
+fn native_variable_names_survive_lowering() {
     for source in [
         r#"(datatype U (V Var) (F U) (K)) (let p (F (V $a)))
         (rewrite (F _) (K)) (run 1) (check (= p (K)))"#,

@@ -29,6 +29,7 @@ pub struct SourceRule {
     pub rule: ResolvedRule,
     /// Captured globals keyed by their resolved identities.
     pub globals: IndexMap<String, TermId>,
+    pub(in crate::slotted) normal: super::normal_form::NormalRule,
 }
 
 pub(super) trait SourceFact {
@@ -120,7 +121,12 @@ impl SourceRule {
             .iter()
             .map(|(name, &term)| (aliases[name].clone(), term))
             .collect();
-        Self { rule, globals }
+        let normal = super::normal_form::NormalRule::new(&rule);
+        Self {
+            rule,
+            globals,
+            normal,
+        }
     }
 
     pub(in crate::slotted) fn endpoints(&self) -> (&ResolvedExpr, &ResolvedExpr) {
@@ -167,29 +173,6 @@ impl SourceRule {
 }
 
 impl ProofContext {
-    pub(super) fn add_let_expr(
-        &mut self,
-        dag: &mut TermDag,
-        name: &str,
-        expr: &Expr,
-    ) -> Result<(), SourceError> {
-        let term = self.ground_term(dag, expr)?;
-        self.lets.insert(name.to_string(), term);
-        Ok(())
-    }
-
-    pub(super) fn add_union_expr(
-        &mut self,
-        dag: &mut TermDag,
-        lhs: &Expr,
-        rhs: &Expr,
-    ) -> Result<(), SourceError> {
-        let lhs = self.ground_term(dag, lhs)?;
-        let rhs = self.ground_term(dag, rhs)?;
-        self.unions.push(Union { lhs, rhs });
-        Ok(())
-    }
-
     pub(super) fn claim_expr(
         &self,
         dag: &mut TermDag,
@@ -205,20 +188,6 @@ impl ProofContext {
         let lhs = self.ground_term(dag, lhs)?;
         let rhs = self.ground_term(dag, rhs)?;
         Ok(Claim { kind, lhs, rhs })
-    }
-
-    pub(super) fn add_rewrite_ast(
-        &mut self,
-        dag: &mut TermDag,
-        source: &egglog::ast::Rewrite,
-    ) -> Result<String, SourceError> {
-        let name = source.name.clone();
-        let rule = SourceRule::capture(
-            super::resolve::resolve_rewrite(self, dag, source)?,
-            &self.lets,
-        );
-        self.rewrites.insert(name.clone(), rule);
-        Ok(name)
     }
 
     /// Resolve a ground source expression against its globals and slot names.

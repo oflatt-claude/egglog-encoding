@@ -2,7 +2,6 @@
 use crate::slotted::proofs::context::{ProofContext, pattern_term};
 use crate::slotted::proofs::coordinates::Coordinates;
 use crate::slotted::proofs::format::{ProofId, RulePremise, SlottedProof, SlottedProofStore};
-use crate::slotted::proofs::guards::proof_body;
 use crate::slotted::proofs::terms::{Renaming, term_renaming};
 use crate::slotted::proofs::{HashMap, HashSet};
 use egglog::ast::{Literal, ResolvedExpr, ResolvedFact};
@@ -186,7 +185,8 @@ fn lift_rule(
         .cloned()
         .chain(rule.globals.iter().map(|(v, &t)| (v.clone(), t)))
         .collect();
-    let (body, auxiliary) = proof_body(rule, &mut store.term_dag, &sigma)?;
+    let body = &rule.normal.body;
+    let auxiliary = rule.normal.bindings(&mut store.term_dag, &sigma)?;
     sigma.extend(auxiliary);
     let instance = |store: &mut SlottedProofStore, expr| -> Result<TermId> {
         let term = pattern_term(&mut store.term_dag, expr);

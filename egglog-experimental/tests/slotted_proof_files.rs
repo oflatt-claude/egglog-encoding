@@ -25,7 +25,7 @@ fn main() {
                 no_aliasing: path.starts_with("egglog-experimental/tests/slotted/nested"),
                 proof_mode: ProofMode::Prove,
             });
-            let encoded = compiler.compile(Some(path.display().to_string()), &source);
+            let encoded = compiler.compile_program(Some(path.display().to_string()), &source);
             // Keep unsupported fixtures visible; all other compilation errors fail.
             let unsupported = matches!(
                 &encoded,
@@ -43,7 +43,7 @@ fn main() {
                 Trial::test(format!("proofs/slotted/{name}"), move || {
                     let encoded = encoded?;
                     let expected = coverage::expected_proofs(&source).map_err(|e| e.to_string())?;
-                    let outputs = new_egraph_with_proofs().parse_and_run_program(None, &encoded)?;
+                    let outputs = encoded.run(&mut new_egraph_with_proofs())?;
                     let proofs = outputs
                         .iter()
                         .filter(|output| matches!(output, CommandOutput::UserDefined(_)))

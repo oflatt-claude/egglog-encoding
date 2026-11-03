@@ -4,6 +4,7 @@
 use egglog::EGraph;
 
 mod check;
+mod compiled;
 mod errors;
 pub mod export;
 mod extract;
@@ -18,13 +19,14 @@ mod rewrite;
 mod slots;
 mod syntax;
 pub(crate) mod var_sort;
+pub use compiled::CompiledProgram;
 pub use errors::{CompileError, UnsupportedProofFeature};
 pub use frontend::{Compiler, Options, ProofMode};
 
 mod runtime;
 
 /// An e-graph with the slotted runtime and egglog's built-in schedule semantics.
-/// Evaluate [`Compiler::compile`]'s output with this graph.
+/// Execute [`Compiler::compile_program`]'s output with this graph.
 pub fn new_egraph() -> EGraph {
     let mut graph =
         crate::new_experimental_egraph_with_options(false, crate::DisequalityEncoding::default());

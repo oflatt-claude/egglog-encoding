@@ -38,8 +38,8 @@ fn check_inputs(sources: &[&str]) {
             new_egraph()
         };
         for source in sources {
-            let encoded = compiler.compile(None, source).unwrap();
-            graph.parse_and_run_program(None, &encoded).unwrap();
+            let encoded = compiler.compile_program(None, source).unwrap();
+            encoded.run(&mut graph).unwrap();
             if proof_mode == ProofMode::Disabled {
                 egglog_experimental::slotted::export::export(&graph).unwrap();
             }
@@ -78,10 +78,10 @@ fn a_variable_constructor_can_be_added_later_and_is_scoped() {
 fn a_second_variable_constructor_is_rejected_across_inputs() {
     let mut compiler = Compiler::default();
     compiler
-        .compile(None, "(datatype Expr (Name Var))")
+        .compile_program(None, "(datatype Expr (Name Var))")
         .unwrap();
     let error = compiler
-        .compile(None, "(constructor AnotherName (Var) Expr)")
+        .compile_program(None, "(constructor AnotherName (Var) Expr)")
         .unwrap_err();
     assert!(
         error
@@ -99,8 +99,8 @@ fn substitution_without_a_variable_constructor_preserves_closed_bodies() {
         (run 1)
         (check (= call (Lambda $z (Num 1))))
     "#;
-    let encoded = Compiler::default().compile(None, source).unwrap();
-    new_egraph().parse_and_run_program(None, &encoded).unwrap();
+    let encoded = Compiler::default().compile_program(None, source).unwrap();
+    encoded.run(&mut new_egraph()).unwrap();
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn bare_names_cannot_be_used_as_carrier_equalities() {
     ] {
         let source = format!("(datatype Math (V Var)) {command}");
         assert!(
-            Compiler::default().compile(None, &source).is_err(),
+            Compiler::default().compile_program(None, &source).is_err(),
             "{command}"
         );
     }
@@ -123,7 +123,7 @@ fn bare_names_cannot_be_used_as_carrier_equalities() {
 #[test]
 fn builtin_var_sort_name_is_reserved() {
     let error = Compiler::default()
-        .compile(None, "(datatype Math (Var Var))")
+        .compile_program(None, "(datatype Math (Var Var))")
         .unwrap_err();
     assert!(error.to_string().contains("reserved"));
 }

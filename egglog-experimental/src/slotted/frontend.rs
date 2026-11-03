@@ -1,13 +1,17 @@
 //! An explicit slotted-source to ordinary-egglog pass. Evaluation stays in egglog.
+use super::compiled::{CompiledProgram, ProofRequests};
 use super::errors::{CompileError, UnsupportedProofFeature};
+use super::proofs::pipeline::{EncodingNames, ProofRequest, SlottedClaim};
+use super::proofs::resolve::Reader;
 use super::{
     flatten, maintenance,
     model::*,
     query, rewrite,
-    syntax::{self, Form, quote},
+    syntax::{self, Form},
 };
-use egglog::ast::{ParseError, Rewrite as SourceRewrite, Sexp, Span};
+use egglog::ast::{ParseError, ResolvedNCommand, ResolvedRule, Rewrite as SourceRewrite, Span};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 /// Whether to emit native checks or translate proofs of slotted claims.
@@ -61,9 +65,17 @@ impl Pattern {
     }
 }
 
+#[derive(Clone, Default)]
+struct ProofCompiler {
+    source: Reader,
+    names: EncodingNames,
+    flattened: BTreeMap<String, ResolvedRule>,
+}
+
 #[derive(Clone)]
 struct State {
     lang: Language,
+    proofs: Option<ProofCompiler>,
     initialized: bool,
     dirty: bool,
     rules: usize,
@@ -76,6 +88,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             lang: Language::default(),
+            proofs: None,
             initialized: false,
             dirty: false,
             rules: 0,
@@ -109,6 +122,8 @@ pub struct Compiler {
     next_rule: usize,
     used_rule_names: BTreeSet<String>,
     next_check: usize,
+    next_proof: usize,
+    proof_requests: ProofRequests,
 }
 
 impl Compiler {
@@ -116,26 +131,58 @@ impl Compiler {
     pub fn new(options: Options) -> Self {
         Self {
             options,
+            state: State {
+                proofs: (options.proof_mode == ProofMode::Prove).then(ProofCompiler::default),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
 
-    /// Compile a program without evaluating it. Includes resolve from the process
-    /// working directory.
-    /// A failed compilation leaves this compiler unchanged.
+    /// Compile to lowered egglog text. Includes resolve from the working directory.
+    /// Proof replay requires the original source; use [`Self::compile_program`] to
+    /// retain it for execution. A failed compilation leaves this compiler unchanged.
     pub fn compile(
         &mut self,
         filename: Option<String>,
         source: &str,
     ) -> Result<String, CompileError> {
         let mut next = self.clone();
+        let (text, _) = next.compile_inner(filename, source)?;
+        *self = next;
+        Ok(text)
+    }
+
+    /// Compile commands and retain the original resolved programs for proof checking.
+    /// Includes resolve from the working directory. A failure leaves this compiler unchanged.
+    pub fn compile_program(
+        &mut self,
+        filename: Option<String>,
+        source: &str,
+    ) -> Result<CompiledProgram, CompileError> {
+        let mut next = self.clone();
+        let (text, proofs) = next.compile_inner(filename.clone(), source)?;
+        let mut graph = super::new_egraph();
+        super::proofs::pipeline::register(&mut graph);
+        let commands = graph
+            .parse_program(filename, &text)
+            .map_err(|error| ParseError(egglog::span!(), error.to_string()))?;
+        *self = next;
+        Ok(CompiledProgram { commands, proofs })
+    }
+
+    fn compile_inner(
+        &mut self,
+        filename: Option<String>,
+        source: &str,
+    ) -> Result<(String, ProofRequests), CompileError> {
         let forms = read(filename, source, &mut BTreeSet::new())?;
         if self.options.proof_mode == ProofMode::Prove {
             UnsupportedProofFeature::check(&forms)?;
         }
-        let result = next.program(&forms)?;
-        *self = next;
-        Ok(result)
+        let result = self.program(&forms)?;
+        let proofs = std::mem::take(&mut self.proof_requests);
+        Ok((result, proofs))
     }
 
     fn program(&mut self, forms: &[(Form, Span)]) -> Result<String, ParseError> {
@@ -198,7 +245,6 @@ impl Compiler {
                 maintenance::carrier(&s, self.options.proof_mode != ProofMode::Disabled),
                 Some(&sort),
             );
-            out.push(self.source_record(format!("(sort {sort})")));
             self.state.lang.carriers.push(s);
         }
         for f in ctors {
@@ -214,7 +260,6 @@ impl Compiler {
                 ),
                 Some(&op.name),
             );
-            out.push(self.source_record(f.render()));
             self.state.lang.constructors.insert(op.name.clone(), op);
         }
         self.state.declared.extend(declared);
@@ -228,6 +273,12 @@ impl Compiler {
                 fallback,
                 format!("declaration {name:?} is reserved by the slotted encoding"),
             ));
+        }
+        if let Some(proofs) = &mut self.state.proofs {
+            proofs
+                .source
+                .declare(forms)
+                .map_err(|e| ParseError(fallback.clone(), e.to_string()))?;
         }
         for (f, span) in forms {
             let head = f.call().map_err(|e| ParseError(span.clone(), e))?.0;
@@ -246,6 +297,14 @@ impl Compiler {
                 self.maintain(&mut out);
             }
             let command = self.command(f).map_err(|e| ParseError(span.clone(), e))?;
+            if matches!(head, "let" | "union")
+                && let Some(proofs) = &mut self.state.proofs
+            {
+                proofs
+                    .source
+                    .command(f, span)
+                    .map_err(|e| ParseError(span.clone(), e.to_string()))?;
+            }
             match head {
                 "run" | "extract" => self.state.dirty = false,
                 "let" | "union" if !command.is_empty() => self.state.dirty = true,
@@ -320,7 +379,7 @@ impl Compiler {
                     format!("(let ${name} {})", self.state.lang.encode(&t))
                 };
                 self.state.lang.globals.insert(name.into(), t);
-                Ok(format!("{encoded}{}", self.source_record(f.render())))
+                Ok(encoded)
             }
             "union" => {
                 if args.len() != 2 {
@@ -334,10 +393,9 @@ impl Compiler {
                     );
                 }
                 Ok(format!(
-                    "(union {} {}){}",
+                    "(union {} {})",
                     self.state.lang.encode(&terms[0]),
-                    self.state.lang.encode(&terms[1]),
-                    self.source_record(f.render())
+                    self.state.lang.encode(&terms[1])
                 ))
             }
             "rewrite" => self.rewrite(args),
@@ -737,18 +795,6 @@ impl Compiler {
         Ok(())
     }
 
-    fn source_record(&self, command: impl std::fmt::Display) -> String {
-        if self.options.proof_mode != ProofMode::Prove {
-            return String::new();
-        }
-        let option = if self.options.no_aliasing {
-            ":no-aliasing "
-        } else {
-            ""
-        };
-        format!("\n(slotted-source {option}{command})")
-    }
-
     fn rewrite(&mut self, args: &[Form]) -> Result<String, String> {
         let mut source = source_rewrite(args)?;
         name_rewrite(
@@ -756,18 +802,21 @@ impl Compiler {
             self.next_rule,
             (self.options.proof_mode != ProofMode::Disabled).then_some(&mut self.used_rule_names),
         );
-        let (encoded, _) = self.lower_rewrite(&source)?;
+        let (encoded, flattened) = self.lower_rewrite(&source)?;
+        if let Some(proofs) = &mut self.state.proofs {
+            proofs
+                .source
+                .add_rewrite(&source)
+                .map_err(|e| e.to_string())?;
+            let resolved = proofs
+                .source
+                .resolve_rewrite(&flattened.rule)
+                .map_err(|e| e.to_string())?;
+            proofs.flattened.insert(source.name.clone(), resolved);
+            proofs.names.insert(source.name.clone(), flattened.names);
+        }
         self.next_rule += 1;
-        Ok(format!(
-            "{encoded}{}",
-            self.source_record(format!(
-                "(rewrite {} {} :when ({}) :name {})",
-                source.lhs,
-                source.rhs,
-                egglog_ast::util::ListDisplay(&source.conditions, " "),
-                quote(&source.name),
-            ))
-        ))
+        Ok(encoded)
     }
 
     pub(super) fn lower_rewrite(
@@ -835,40 +884,6 @@ impl Compiler {
         Ok((encoded, flattened))
     }
 
-    pub(super) fn retain_source(
-        &mut self,
-        source: &Sexp,
-        no_aliasing: bool,
-    ) -> Result<Option<flatten::Rewrite>, String> {
-        self.options = Options {
-            no_aliasing,
-            proof_mode: ProofMode::Prove,
-        };
-        let form = syntax::convert(source);
-        let (head, args) = form.call()?;
-        match (head, args) {
-            ("sort", [name]) => {
-                let sort = name.symbol()?;
-                self.state
-                    .lang
-                    .carriers
-                    .push(Symbols::new(sort, self.state.lang.carriers.len()));
-            }
-            ("constructor", _) => {
-                let op = self.constructor(&form)?;
-                self.state.lang.constructors.insert(op.name.clone(), op);
-            }
-            ("let", [name, value]) => {
-                let value = self.term(value, true, None)?;
-                self.state.lang.globals.insert(name.symbol()?.into(), value);
-            }
-            ("union", [_, _]) => {}
-            ("rewrite", _) => return Ok(Some(self.lower_rewrite(&source_rewrite(args)?)?.1)),
-            _ => return Err(format!("unsupported source record {head}")),
-        }
-        Ok(None)
-    }
-
     fn proof_claim(&mut self, fact: &Form) -> Result<Option<String>, String> {
         fn ground(term: &Term) -> bool {
             match term {
@@ -918,26 +933,41 @@ impl Compiler {
         p.proof_names.classes = q.classes.iter().cloned().collect();
         p.proof_names.readings = q.readings.clone();
         p.proof_names.frame = q.frame.clone();
-        let proof = format!(
-            "(prove-slotted ({kind} ({} {}) ({} {}) {} {}) {})",
-            terms[0].render(),
-            roots[0],
-            terms[1].render(),
-            roots[1],
-            quote(
-                &serde_json::to_string(
-                    &self
-                        .state
-                        .lang
-                        .slot_names
-                        .entries()
-                        .collect::<BTreeMap<_, _>>()
-                )
-                .unwrap()
-            ),
-            quote(&serde_json::to_string(&p.proof_names).unwrap()),
-            q.body.join(" "),
+        let proofs = self.state.proofs.as_ref().expect("proof compilation state");
+        let source = proofs.source.snapshot().map_err(|e| e.to_string())?;
+        let mut flattened = source.clone();
+        for command in &mut flattened.commands {
+            if let ResolvedNCommand::NormRule { rule } = command {
+                *rule = proofs.flattened[&rule.name].clone();
+            }
+        }
+        let claim = SlottedClaim {
+            kind: kind.into(),
+            lhs: terms[0].expr()?,
+            rhs: terms[1].expr()?,
+            lhs_root: roots[0].clone(),
+            rhs_root: roots[1].clone(),
+            slot_names: self
+                .state
+                .lang
+                .slot_names
+                .entries()
+                .map(|(name, id)| (name.to_owned(), id))
+                .collect(),
+            names: p.proof_names,
+        };
+        let id = self.next_proof;
+        self.next_proof += 1;
+        self.proof_requests.insert(
+            id,
+            Arc::new(ProofRequest {
+                source,
+                flattened,
+                names: proofs.names.clone(),
+                claim,
+            }),
         );
+        let proof = format!("(slotted-prove {id} {})", q.body.join(" "));
         Ok(Some(self.refine_check(&q, &proof)?))
     }
 

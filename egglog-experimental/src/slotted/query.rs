@@ -2,11 +2,10 @@
 use super::flatten::Atom;
 use super::model::*;
 use super::syntax::quote;
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Compiler-generated names used to reconstruct source rules and query witnesses.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ProofNames {
     /// Patterns in source order, empty for terms without constructor atoms.
     pub patterns: Vec<Vec<(Vec<usize>, String)>>,
