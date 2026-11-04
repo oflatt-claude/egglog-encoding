@@ -49,8 +49,7 @@ def add_memory_limit_options(parser: argparse.ArgumentParser, *, default: int | 
         const=NATIVE_LIMIT_BYTES,
         dest="memory_limit_bytes",
         help=(
-            f"apply the configured {NATIVE_LIMIT_BYTES / 1024**3:g} GiB allocator cap "
-            f"(default: {default_description})"
+            f"apply the configured {NATIVE_LIMIT_BYTES / 1024**3:g} GiB allocator cap (default: {default_description})"
         ),
     )
     group.add_argument(
