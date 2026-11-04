@@ -426,8 +426,11 @@ The remaining collection options are:
 - `--rounds N`: selected observations required for every endpoint/file;
   default `6`.
 - `--timeout-sec N`: per-process guard; the shared default is 500 seconds.
-- `--memory-limit-bytes N`: allocator/address-space guard; the shared default
-  is 10 GiB. `--no-memory-limit` removes it. Both defaults live in
+- `--memory-limit-gib N`: allocator/address-space guard in GiB; fractions are
+  accepted, for example `--memory-limit-gib 2.5`. The cap is enabled at 10 GiB
+  without any memory flag. `--memory-limit` selects that default explicitly;
+  `--no-memory-limit` opts out. `--memory-limit-bytes` remains available for
+  existing scripts. Resource defaults live in
   `benchmarking/config.py` and are shared by comparisons, figures, nightly,
   profiling, and paper tests.
 - `--force-run`: append `N` fresh rows for both endpoints before selecting the

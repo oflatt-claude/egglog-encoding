@@ -8,6 +8,7 @@ mimalloc can reserve memory before main, too early for CLI parsing or option set
 from __future__ import annotations
 
 import argparse
+import math
 from collections.abc import Mapping, Sequence
 
 from .config import DEFAULT_MEMORY_LIMIT_BYTES as NATIVE_LIMIT_BYTES
@@ -31,22 +32,48 @@ def add_memory_limit_options(parser: argparse.ArgumentParser, *, default: int | 
             raise argparse.ArgumentTypeError("memory limit must be positive")
         return limit
 
+    def positive_gib(value: str) -> int:
+        try:
+            limit = float(value) * 1024**3
+        except ValueError:
+            raise argparse.ArgumentTypeError("memory limit must be a positive finite number of GiB") from None
+        if not math.isfinite(limit) or limit < 1:
+            raise argparse.ArgumentTypeError("memory limit must be a positive finite number of GiB (at least one byte)")
+        return int(limit)
+
+    default_description = "uncapped" if default is None else f"{default / 1024**3:g} GiB"
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--memory-limit",
         action="store_const",
         const=NATIVE_LIMIT_BYTES,
         dest="memory_limit_bytes",
-        help=f"apply the configured local allocator cap ({NATIVE_LIMIT_BYTES} bytes)",
+        help=(
+            f"apply the configured {NATIVE_LIMIT_BYTES / 1024**3:g} GiB allocator cap "
+            f"(default: {default_description})"
+        ),
+    )
+    group.add_argument(
+        "--memory-limit-gib",
+        type=positive_gib,
+        dest="memory_limit_bytes",
+        metavar="GiB",
+        help="apply a custom allocator cap in GiB (fractions accepted)",
     )
     group.add_argument(
         "--memory-limit-bytes",
         type=positive_bytes,
         dest="memory_limit_bytes",
         metavar="BYTES",
-        help="apply a custom local allocator cap",
+        help=argparse.SUPPRESS,
     )
-    group.add_argument("--no-memory-limit", action="store_const", const=None, dest="memory_limit_bytes")
+    group.add_argument(
+        "--no-memory-limit",
+        action="store_const",
+        const=None,
+        dest="memory_limit_bytes",
+        help="run without the allocator/address-space cap",
+    )
     parser.set_defaults(memory_limit_bytes=default)
 
 

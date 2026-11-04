@@ -5,12 +5,13 @@ from __future__ import annotations
 import io
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
-from benchmarking import benchmark, collection, config, figures, native_memory, processes, profile
+from benchmarking import benchmark, collection, config, figures, native_memory, nightly, processes, profile
 from benchmarking.reports.store import ReportStore
 
 from .report_fixtures import make_target
@@ -19,7 +20,14 @@ from .test_collection import planned_run
 
 @pytest.mark.parametrize(
     "arguments,expected",
-    [([], native_memory.NATIVE_LIMIT_BYTES), (["--no-memory-limit"], None), (["--memory-limit-bytes", "12345"], 12345)],
+    [
+        ([], native_memory.NATIVE_LIMIT_BYTES),
+        (["--memory-limit"], native_memory.NATIVE_LIMIT_BYTES),
+        (["--no-memory-limit"], None),
+        (["--memory-limit-gib", "0.5"], 536870912),
+        (["--memory-limit-gib", "1.25"], 1342177280),
+        (["--memory-limit-bytes", "12345"], 12345),
+    ],
 )
 def test_comparison_memory_budget_reaches_both_endpoints(arguments: list[str], expected: int | None) -> None:
     args = benchmark.parse_benchmark_args(["example.egg", *arguments])
@@ -28,9 +36,54 @@ def test_comparison_memory_budget_reaches_both_endpoints(arguments: list[str], e
 
 
 def test_figure_memory_budget_preserves_positional_names() -> None:
-    args, _ = figures.parse_args(["--memory-limit-bytes", "12345", "math-runtime"])
+    args, _ = figures.parse_args(["--memory-limit-gib", "1.25", "math-runtime"])
     assert args.names == ["math-runtime"]
-    assert args.memory_limit_bytes == 12345
+    assert args.memory_limit_bytes == 1342177280
+    assert profile.parse_profile_args(["example.egg", "--memory-limit-gib", "1.25"]).memory_limit_bytes == 1342177280
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "-inf", "1e309", "1e300", "invalid", "1e-12"])
+def test_invalid_gib_limits_are_argument_errors(value: str, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        benchmark.parse_benchmark_args([f"--memory-limit-gib={value}"])
+    assert error.value.code == 2
+    captured = capsys.readouterr()
+    assert "--memory-limit-gib" in captured.err and "positive finite" in captured.err
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--memory-limit", "--memory-limit-gib", "2.5"],
+        ["--memory-limit", "--memory-limit-bytes", "12345"],
+        ["--memory-limit", "--no-memory-limit"],
+        ["--memory-limit-gib", "2.5", "--memory-limit-bytes", "12345"],
+        ["--memory-limit-gib", "2.5", "--no-memory-limit"],
+        ["--memory-limit-bytes", "12345", "--no-memory-limit"],
+    ],
+)
+def test_memory_limit_options_remain_mutually_exclusive(arguments: list[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        benchmark.parse_benchmark_args(arguments)
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "parse", [benchmark.parse_benchmark_args, figures.parse_args, profile.parse_profile_args, nightly.main]
+)
+def test_memory_help_uses_gib_and_hides_byte_compatibility_option(
+    parse: Callable[[list[str]], object], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        parse(["--help"])
+    assert error.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "--memory-limit-gib GiB" in help_text
+    assert "default: 10 GiB" in help_text
+    assert "--no-memory-limit" in help_text
+    assert "--memory-limit-bytes" not in help_text
+    assert str(native_memory.NATIVE_LIMIT_BYTES) not in help_text
 
 
 def test_native_command_uses_explicit_limit_and_fixed_startup_policy() -> None:

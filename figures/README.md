@@ -94,8 +94,11 @@ Use `--rounds 1` and a temporary report for CLI smoke checks.
 
 Figures share the resource defaults in `benchmarking/config.py` with comparisons,
 nightly, profiling, and paper tests: 500 seconds and a 10 GiB allocator/address-space
-cap where supported. `--timeout-sec N` and `--memory-limit-bytes N` override them.
-Use `--no-memory-limit` for uncapped final collection. Peak RSS is measured
+cap where supported, enabled without any memory flag. `--timeout-sec N` and
+`--memory-limit-gib N` override them; fractional GiB values such as `2.5` are
+accepted. `--memory-limit` selects the 10 GiB default explicitly, and
+`--no-memory-limit` opts out for uncapped collection. `--memory-limit-bytes`
+remains available for existing scripts. Peak RSS is measured
 independently; the original native disequality drivers do not implement a cap.
 Use three rounds and temporary report/output paths for verification. Retain the
 machine and environment description with the final ten-observation results.
