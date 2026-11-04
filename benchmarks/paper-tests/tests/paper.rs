@@ -2,7 +2,7 @@
 //! Trials run in isolated processes. Native Math references run uncapped;
 //! source executions retain the configured local allocator cap.
 use egglog::{CommandOutput, Read};
-use egglog_experimental::{DisequalityEncoding, EGraph, new_experimental_egraph_with_options};
+use egglog_experimental::{EGraph, new_experimental_egraph_with_options};
 use libtest_mimic::Trial;
 use serde::Deserialize;
 use std::{
@@ -60,13 +60,8 @@ struct Observations {
     comparison_in_root_class: Vec<Option<bool>>,
 }
 
-fn observe(
-    file: &Path,
-    mode: &str,
-    encoding: DisequalityEncoding,
-    expected: Option<&Observations>,
-) -> Observations {
-    let mut graph = new_experimental_egraph_with_options(mode == "off", encoding);
+fn observe(file: &Path, mode: &str, expected: Option<&Observations>) -> Observations {
+    let mut graph = new_experimental_egraph_with_options(mode == "off");
     graph.set_num_threads(1);
     graph = match mode {
         "off" => graph,
@@ -228,7 +223,6 @@ fn check_case(root: &Path, file: &Path, requested: &BTreeSet<String>) {
         }
         return;
     }
-    let encoding = DisequalityEncoding::Nee;
     let policy: Vec<Ignore> = serde_json::from_str(
         &std::fs::read_to_string(root.join("benchmarks/ignore.json")).unwrap(),
     )
@@ -264,7 +258,7 @@ fn check_case(root: &Path, file: &Path, requested: &BTreeSet<String>) {
         }
         eprintln!("Validating {mode}");
         let reference = if mode == "off" { "term" } else { "off" };
-        let observed = observe(file, mode, encoding, observations.get(reference));
+        let observed = observe(file, mode, observations.get(reference));
         observations.insert(mode, observed);
     }
     for mode in ["term", "proof-testing"] {
@@ -296,7 +290,7 @@ fn check_case(root: &Path, file: &Path, requested: &BTreeSet<String>) {
                     && rule
                         .disequality_encoding
                         .as_deref()
-                        .is_none_or(|value| value == "nee")
+                        .is_none_or(|value| value == "ee")
                     && root
                         .join("benchmarks")
                         .join(&rule.file)
@@ -370,8 +364,7 @@ fn check_case(root: &Path, file: &Path, requested: &BTreeSet<String>) {
                 (&counts.0, Some(counts.1)),
                 "native Math constructor/class counts differ"
             );
-            let mut graph =
-                new_experimental_egraph_with_options(policy == ProofMode::Off, encoding);
+            let mut graph = new_experimental_egraph_with_options(policy == ProofMode::Off);
             graph.set_num_threads(1);
             if policy == ProofMode::Check {
                 graph = graph.with_proofs_enabled().with_proof_testing();
@@ -748,7 +741,7 @@ fn main() {
                     && rule
                         .disequality_encoding
                         .as_ref()
-                        .is_none_or(|value| value == "nee")
+                        .is_none_or(|value| value == "ee")
                     && rule.memory_limit_bytes.is_none_or(|bound| {
                         // These modes run in a separate uncapped child below.
                         !(native_math && mode.starts_with("egg"))
