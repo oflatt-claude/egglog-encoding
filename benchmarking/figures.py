@@ -350,8 +350,8 @@ def render_figures(
                     excluded, rows = selection.exclusion, selection.rows
                     correctness_mode = PROOF_ORACLES.get(treatment, treatment)
                     if correctness_mode != treatment:
-                        # The recording sample keeps its own identity, but inherits
-                        # the strict oracle's reviewed quarantine before plotting.
+                        # Recording inherits correctness exclusions, while resource
+                        # deferrals apply to the timed treatment's own samples.
                         strict = select_observations(
                             grouped,
                             replace(endpoint, treatment=correctness_mode),
@@ -359,7 +359,8 @@ def render_figures(
                             config.rounds,
                             config.timeout_sec,
                         )
-                        excluded = excluded or strict.exclusion
+                        if strict.exclusion is not None and strict.exclusion.kind != "resource":
+                            excluded = excluded or strict.exclusion
                         if excluded is not None:
                             rows = ()
                     validation_issue = (

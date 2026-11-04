@@ -349,7 +349,20 @@ test('Slotted interval/point alignment and status glyphs stay inside their workl
     assert.ok(status.bounds.x1>=0&&status.bounds.x2<=status.mark.group.width,'missing status must fit horizontally');
     assert.ok(status.bounds.y1>=0&&status.bounds.y2<=status.mark.group.height,'missing status must fit its row');
     assert.match(status.text,/Native: 0\/3 runs; missing\nEncoding: 0\/3 runs; missing/);
+    assert.equal(status.dy,-5,'two endpoint messages keep multiline positioning');
   }
+  for(const [endpoint,selected] of [
+    ['Encoding',groups.filter(g=>g.key.treatment.includes('ref-'))],
+    ['Native',groups.filter(g=>!g.key.treatment.includes('ref-'))]
+  ]) {
+    const standalone=await evaluate('slotted-runtime',inputs,selected,3);
+    for(const status of find(standalone,'slotted_ratio_status')) {
+      assert.equal(status.text,endpoint+': 0/3 runs; missing');
+      assert.equal(status.dy,0,'a standalone status is one centered line');
+      assert.ok(status.bounds.y1>=0&&status.bounds.y2<=status.mark.group.height);
+    }
+  }
+
 });
 
 test('CDF domains fit each metric, magnify compact data and separate heavy tails without changing ranks',async()=>{

@@ -282,6 +282,66 @@ def test_recording_aliases_inherit_strict_exclusions_before_collection_and_expor
     assert result["conditions"][1]["selected_row_indices"] == [2, 3]
 
 
+@pytest.mark.parametrize("strict_cached", [False, True])
+def test_cached_recording_survives_strict_resource_deferral(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, strict_cached: bool
+) -> None:
+    config = figures.load_config(catalog_fixture(tmp_path))
+    rule = Exclusion(
+        "resource", "strict proof cap", "probe", ("proof-testing",), memory_limit_bytes=config.memory_limit_bytes
+    )
+    logical = FileSpec("case.egg", tmp_path / "case.egg", "sha256:file", exclusions=(rule,))
+    logical.absolute_path.write_text("(check true)\n")
+    monkeypatch.setattr(figures, "resolve_files", lambda *_args: (logical,))
+    resolved = figures.resolve_figures(config, [], tmp_path)[0]
+    figure = replace(resolved.figure, treatments=("off", "proofs"))
+    report = tmp_path / "report.jsonl"
+    rows = [
+        make_record(
+            i,
+            started_at=f"2026-10-01T00:00:0{i}Z",
+            treatment=cast(Treatment, t),
+            target_label="figures",
+            max_rss_bytes=1048576,
+        )
+        for i, t in enumerate(("off", "off", "proofs", "proofs"))
+    ]
+    if strict_cached:
+        rows.extend(
+            make_record(
+                i,
+                started_at=f"2026-10-01T00:00:0{i}Z",
+                treatment="proof-testing",
+                target_label="figures",
+                status="memory-limited",
+            )
+            for i in (4, 5)
+        )
+    write_report(report, *rows)
+    before = report.read_bytes()
+
+    def render(command: list[str], **_kwargs: Any) -> None:
+        Path(command[command.index("--base") - 1]).write_bytes(b"rendered")
+
+    monkeypatch.setattr(figures.subprocess, "run", render)
+    figures.render_figures(
+        [figures.ResolvedFigure(figure, resolved.files, resolved.spec)],
+        config,
+        ReportStore(report).grouped_report(),
+        report,
+        make_target(target_label="figures"),
+        tmp_path / "out",
+        Console(file=io.StringIO()),
+        {"workloads": [], "unavailable_cases": []},
+    )
+    result = json.loads((tmp_path / "out/runtime.results.json").read_text())
+    recording = result["conditions"][1]
+    assert recording["selected_row_indices"] == [2, 3]
+    assert recording["exclusion"] is None and recording["validation_issue"] == ""
+    assert recording["metrics"]["runtime"]["mean"] == 1
+    assert report.read_bytes() == before
+
+
 def test_recording_alias_manifest_validation_failure_vetoes_exported_successes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

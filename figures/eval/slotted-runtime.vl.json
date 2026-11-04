@@ -90,7 +90,7 @@
     {"calculate": "isValid(datum.ratio) && isFinite(datum.ratio) && rounds > 1 && datum.a > 0 && datum.radicand >= 0", "as": "bounded"},
     {"calculate": "datum.bounded ? (datum.baseline.mean * datum.candidate.mean - sqrt(datum.radicand)) / datum.a : null", "as": "ratio_low"},
     {"calculate": "datum.bounded ? (datum.baseline.mean * datum.candidate.mean + sqrt(datum.radicand)) / datum.a : null", "as": "ratio_high"},
-    {"calculate": "!isValid(datum.ratio) ? (!isValid(datum.baseline) ? 'Native missing' : !datum.baseline.complete ? 'Native: ' + datum.baseline.issue : datum.baseline.mean <= 0 ? 'Native mean ≤0' : '') + (!isValid(datum.candidate) || !datum.candidate.complete ? '\\nEncoding: ' + (isValid(datum.candidate) ? datum.candidate.issue : 'missing') : '') : rounds === 1 ? 'n=1; CI unavailable' : !datum.bounded ? 'CI unbounded or unavailable' : ''", "as": "summary"},
+    {"calculate": "!isValid(datum.ratio) ? (!isValid(datum.baseline) ? 'Native missing' : !datum.baseline.complete ? 'Native: ' + datum.baseline.issue : datum.baseline.mean <= 0 ? 'Native mean ≤0' : '') + (!isValid(datum.candidate) || !datum.candidate.complete ? (!isValid(datum.baseline) || !datum.baseline.complete || datum.baseline.mean <= 0 ? '\\n' : '') + 'Encoding: ' + (isValid(datum.candidate) ? datum.candidate.issue : 'missing') : '') : rounds === 1 ? 'n=1; CI unavailable' : !datum.bounded ? 'CI unbounded or unavailable' : ''", "as": "summary"},
     {"calculate": "max(1, isValid(datum.ratio) ? datum.ratio : 0, isValid(datum.ratio_high) ? datum.ratio_high : 0)", "as": "ratio_upper"},
     {"calculate": "min(0, isValid(datum.ratio_low) ? datum.ratio_low : 0)", "as": "ratio_lower"},
     {"extent": "ratio_lower", "param": "ratio_low_extent"},
