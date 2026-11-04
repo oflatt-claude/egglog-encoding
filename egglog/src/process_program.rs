@@ -1,13 +1,69 @@
-//! Shared program processing.
+//! Source and AST input state and the shared program driver.
 
 use crate::*;
 
+// Keep materialized commands inline; only one item is retained by dispatch.
+#[allow(clippy::large_enum_variant)]
+pub(super) enum ProgramItem<'a> {
+    /// Parsed command whose command macros have not run.
+    Command(Command),
+    /// Command produced by command macros; do not apply those macros again.
+    Expanded(Command),
+    /// Lexed source form awaiting command parsing and command macros.
+    Source(Sexp<'a>),
+}
+
+pub(super) struct ProgramSource<'a> {
+    pub(super) source: Option<SexpParser<'a>>,
+    pub(super) commands: std::vec::IntoIter<Command>,
+    pub(super) expanded: std::vec::IntoIter<Command>,
+}
+
+impl<'a> ProgramSource<'a> {
+    pub(super) fn from_commands(commands: std::vec::IntoIter<Command>) -> Self {
+        Self {
+            source: None,
+            commands,
+            expanded: Vec::new().into_iter(),
+        }
+    }
+
+    pub(super) fn from_text(filename: Option<String>, input: &'a str) -> Self {
+        Self {
+            source: Some(SexpParser::new(filename, input)),
+            commands: Vec::new().into_iter(),
+            expanded: Vec::new().into_iter(),
+        }
+    }
+}
+
 impl EGraph {
+    /// Reading and lexing acquire no signatures or backend handles. Parser
+    /// and command macros run later, after committing the completed prefix.
+    pub(super) fn next_program_item<'s>(
+        &mut self,
+        program: &mut ProgramSource<'s>,
+    ) -> Result<Option<ProgramItem<'s>>, Error> {
+        if let Some(command) = program.expanded.next() {
+            return Ok(Some(ProgramItem::Expanded(command)));
+        }
+        if let Some(command) = program.commands.next() {
+            return Ok(Some(ProgramItem::Command(command)));
+        }
+        if let Some(source) = &mut program.source {
+            let timer = Instant::now();
+            let form = source.next_sexp();
+            self.overall_report.frontend_parse += timer.elapsed();
+            return Ok(form?.map(ProgramItem::Source));
+        }
+        Ok(None)
+    }
+
     /// Run a program and return its outputs, or resolve it without execution.
     /// Only resolution retains the lowered commands in the returned value.
     pub(super) fn process_program_internal(
         &mut self,
-        program: Vec<Command>,
+        program: ProgramSource<'_>,
         run_commands: bool,
     ) -> Result<ResolvedNCommandsWithOutput, Error> {
         let mut pending = crate::action_execution::GroundActionBatch::default();
@@ -19,83 +75,105 @@ impl EGraph {
 
     pub(super) fn process_program_batched(
         &mut self,
-        program: Vec<Command>,
+        mut program: ProgramSource<'_>,
         run_commands: bool,
         pending: &mut crate::action_execution::GroundActionBatch,
     ) -> Result<ResolvedNCommandsWithOutput, Error> {
+        let stream_includes = run_commands && program.source.is_some();
         let mut outputs = Vec::new();
         let mut desugared_before_proofs = Vec::new();
         let mut desugared = Vec::new();
-        for command in program {
-            let callback_free = self
-                .command_macros
-                .can_typecheck_without_callbacks(&command, &self.type_info);
-            let expanded = if callback_free {
-                // The capability also certifies that no macros are registered.
-                vec![command]
-            } else {
-                {
+        while let Some(item) = self.next_program_item(&mut program)? {
+            let expanded = matches!(&item, ProgramItem::Expanded(_));
+            match item {
+                ProgramItem::Source(form) => {
                     self.flush_ground_actions(pending)?;
-                    let types = self
-                        .proof_state
-                        .original_typechecking
-                        .as_ref()
-                        .map(|original| &original.type_info)
-                        .unwrap_or(&self.type_info);
-                    let timer = Instant::now();
-                    let result =
-                        self.command_macros
-                            .apply(command, &mut self.parser.symbol_gen, types);
-                    self.overall_report.frontend_other += timer.elapsed();
-                    result
-                }?
-            };
-            for command in expanded {
-                if let Command::Include(span, file) = &command {
-                    self.flush_ground_actions(pending)?;
-                    let resolved = {
-                        let include_timer = Instant::now();
-                        let s = std::fs::read_to_string(file)
-                            .map_err(|e| Error::IoError(file.clone().into(), e, span.clone()));
-                        self.overall_report.frontend_other += include_timer.elapsed();
-                        let included_program = self.parse_program_timed(Some(file.clone()), &s?)?;
-                        // run program internal on these include commands
-                        self.process_program_internal(included_program, run_commands)
+                    let commands = {
+                        let timer = Instant::now();
+                        let commands = self.parser.parse_command(&form);
+                        self.overall_report.frontend_parse += timer.elapsed();
+                        commands.map_err(Error::from)
                     }?;
-                    outputs.extend(resolved.outputs);
-                    desugared.extend(resolved.resolved);
-                    desugared_before_proofs.extend(resolved.resolved_before_proofs);
-                } else {
-                    let resolved = if callback_free
-                        || matches!(&command, Command::Action(action)
-                                if self.type_info.typecheck_closed_constructor_action(action).is_some())
-                    {
-                        self.resolve_command(command)?
-                    } else {
+                    program.commands = commands.into_iter();
+                }
+                ProgramItem::Command(command) | ProgramItem::Expanded(command) => {
+                    let callback_free = self
+                        .command_macros
+                        .can_typecheck_without_callbacks(&command, &self.type_info);
+                    if !expanded && !callback_free {
                         self.flush_ground_actions(pending)?;
-                        self.resolve_command(command)?
-                    };
-                    // Execution callers discard resolved trees; retaining them here
-                    // duplicates large proof programs. Keep only the checker's history.
-                    if run_commands {
-                        if self.are_proofs_enabled() {
-                            self.proof_check_program
-                                .extend(resolved.desugared_before_proofs);
-                        }
+                        let expanded = {
+                            let types = self
+                                .proof_state
+                                .original_typechecking
+                                .as_ref()
+                                .map(|original| &original.type_info)
+                                .unwrap_or(&self.type_info);
+                            let timer = Instant::now();
+                            let expanded = self.command_macros.apply(
+                                command,
+                                &mut self.parser.symbol_gen,
+                                types,
+                            );
+                            self.overall_report.frontend_other += timer.elapsed();
+                            expanded
+                        }?;
+                        program.expanded = expanded.into_iter();
+                    } else if let Command::Include(span, file) = &command {
+                        self.flush_ground_actions(pending)?;
+                        let resolved = {
+                            let include_timer = Instant::now();
+                            let s = std::fs::read_to_string(file)
+                                .map_err(|e| Error::IoError(file.clone().into(), e, span.clone()));
+                            self.overall_report.frontend_other += include_timer.elapsed();
+                            let s = s?;
+                            let included_program = if stream_includes && !self.are_proofs_enabled()
+                            {
+                                ProgramSource::from_text(Some(file.clone()), &s)
+                            } else {
+                                ProgramSource::from_commands(
+                                    self.parse_program_timed(Some(file.clone()), &s)?
+                                        .into_iter(),
+                                )
+                            };
+                            // run program internal on these include commands
+                            self.process_program_internal(included_program, run_commands)
+                        }?;
+                        outputs.extend(resolved.outputs);
+                        desugared.extend(resolved.resolved);
+                        desugared_before_proofs.extend(resolved.resolved_before_proofs);
                     } else {
-                        desugared_before_proofs.extend(resolved.desugared_before_proofs);
-                        desugared.extend(resolved.desugared.clone());
-                    }
-                    for processed in resolved.desugared {
-                        // even in desugar mode we still run push and pop
-                        if run_commands
-                            || matches!(
-                                processed,
-                                ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
-                            )
+                        let resolved = if callback_free
+                            || matches!(&command, Command::Action(action)
+                                    if self.type_info.typecheck_closed_constructor_action(action).is_some())
                         {
-                            let result = self.run_command(processed, Some(pending))?;
-                            outputs.extend(result);
+                            self.resolve_command(command)?
+                        } else {
+                            self.flush_ground_actions(pending)?;
+                            self.resolve_command(command)?
+                        };
+                        // Execution callers discard resolved trees; retaining them here
+                        // duplicates large proof programs. Keep only the checker's history.
+                        if run_commands {
+                            if self.are_proofs_enabled() {
+                                self.proof_check_program
+                                    .extend(resolved.desugared_before_proofs);
+                            }
+                        } else {
+                            desugared_before_proofs.extend(resolved.desugared_before_proofs);
+                            desugared.extend(resolved.desugared.clone());
+                        }
+                        for processed in resolved.desugared {
+                            // even in desugar mode we still run push and pop
+                            if run_commands
+                                || matches!(
+                                    processed,
+                                    ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
+                                )
+                            {
+                                let result = self.run_command(processed, Some(pending))?;
+                                outputs.extend(result);
+                            }
                         }
                     }
                 }
@@ -464,3 +542,6 @@ impl EGraph {
         Ok(vec![])
     }
 }
+
+#[cfg(test)]
+mod tests;

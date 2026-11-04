@@ -56,6 +56,7 @@ use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
+use process_program::ProgramSource;
 #[doc(hidden)]
 pub use proofs::proof_certificate::{CertificateVerdict, check_certificates};
 pub use proofs::proof_encoding_helpers::{
@@ -1372,7 +1373,8 @@ impl EGraph {
         if proof_testing {
             proof_check_eg = proof_check_eg.with_proof_testing();
         }
-        let resolved = proof_check_eg.process_program_internal(prog, false)?;
+        let resolved = proof_check_eg
+            .process_program_internal(ProgramSource::from_commands(prog.into_iter()), false)?;
 
         self.proof_check_program = resolved.resolved_before_proofs;
         Ok(())
@@ -2620,7 +2622,8 @@ impl EGraph {
     /// recovery rebuild leaves the database canonical and reusable. Rust panics
     /// in extension code unwind normally instead of becoming [`enum@Error`] values.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
-        let res = self.process_program_internal(program, true)?;
+        let res =
+            self.process_program_internal(ProgramSource::from_commands(program.into_iter()), true)?;
         Ok(res.outputs)
     }
 
@@ -2633,7 +2636,8 @@ impl EGraph {
         input: &str,
     ) -> Result<Vec<ResolvedCommand>, Error> {
         let parsed = self.parse_program_timed(filename, input)?;
-        let res = self.process_program_internal(parsed, false)?;
+        let res =
+            self.process_program_internal(ProgramSource::from_commands(parsed.into_iter()), false)?;
         Ok(res.resolved.into_iter().map(|c| c.to_command()).collect())
     }
 
@@ -2646,7 +2650,13 @@ impl EGraph {
         self.parse_program_timed(filename, input)
     }
 
-    /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
+    /// Parse and execute source commands, returning their messages.
+    ///
+    /// With proofs disabled, commands execute incrementally: earlier commands
+    /// remain executed if a later form fails to parse, and parser extensions
+    /// installed by a command are available to subsequent source forms.
+    /// Proof inputs are parsed in full before execution. To request eager parsing
+    /// in any mode, call [`Self::parse_program`] followed by [`Self::run_program`].
     ///
     /// `filename` is an optional argument to indicate the source of
     /// the program for error reporting. If `filename` is `None`,
@@ -2656,12 +2666,16 @@ impl EGraph {
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<CommandOutput>, Error> {
-        let parsed = self.parse_program_timed(filename, input)?;
-        self.run_program(parsed)
+        let source = if self.are_proofs_enabled() {
+            ProgramSource::from_commands(self.parse_program_timed(filename, input)?.into_iter())
+        } else {
+            ProgramSource::from_text(filename, input)
+        };
+        Ok(self.process_program_internal(source, true)?.outputs)
     }
 
-    /// Parse through the single accounting boundary shared by source, include,
-    /// and generated term-encoding text.
+    /// Parse eagerly and account for parsing time. The streaming reader records
+    /// its parsing work in the same report counter.
     pub(crate) fn parse_program_timed(
         &mut self,
         filename: Option<String>,
@@ -3700,7 +3714,9 @@ mod tests {
                 graph = graph.with_proofs_enabled().with_proof_testing();
             }
             let program = graph.parse_program(None, source).unwrap();
-            let result = graph.process_program_internal(program, true).unwrap();
+            let result = graph
+                .process_program_internal(ProgramSource::from_commands(program.into_iter()), true)
+                .unwrap();
             assert!(result.resolved.is_empty());
             assert!(result.resolved_before_proofs.is_empty());
             assert_eq!(!graph.proof_check_program.is_empty(), proofs);
@@ -3712,7 +3728,9 @@ mod tests {
                 graph = graph.with_proofs_enabled();
             }
             let program = graph.parse_program(None, source).unwrap();
-            let result = graph.process_program_internal(program, false).unwrap();
+            let result = graph
+                .process_program_internal(ProgramSource::from_commands(program.into_iter()), false)
+                .unwrap();
             assert!(!result.resolved.is_empty());
             assert_eq!(!result.resolved_before_proofs.is_empty(), proofs);
             assert!(graph.proof_check_program.is_empty());

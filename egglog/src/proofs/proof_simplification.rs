@@ -357,7 +357,10 @@ mod tests {
             );
             let parsed = egraph.parse_program(None, &source).unwrap();
             let program = egraph
-                .process_program_internal(parsed, false)
+                .process_program_internal(
+                    crate::process_program::ProgramSource::from_commands(parsed.into_iter()),
+                    false,
+                )
                 .unwrap()
                 .resolved;
             let mut dag = TermDag::default();
@@ -430,7 +433,10 @@ mod tests {
             )
             .unwrap();
         let program = egraph
-            .process_program_internal(program, false)
+            .process_program_internal(
+                crate::process_program::ProgramSource::from_commands(program.into_iter()),
+                false,
+            )
             .unwrap()
             .resolved;
         let mut dag = TermDag::default();
