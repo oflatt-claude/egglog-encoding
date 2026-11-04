@@ -11,6 +11,25 @@ use std::sync::Arc;
 
 /// A command macro that can transform commands during desugaring
 pub trait CommandMacro: Send + Sync {
+    /// Allow execution to skip `transform` for eligible constructor actions.
+    /// Returning `true` promises that `transform` would return the original whole
+    /// command exactly once (`Ok(vec![command])`), without error or side effects.
+    /// This includes the entire expression or both sides of a union, not just a
+    /// constructor subexpression.
+    ///
+    /// Eligible expressions have constructor calls at their roots and contain
+    /// only constructor calls and primitive literals. For a constructor `Num`
+    /// taking an `i64`, `(Num 1)` is covered; `(Num (+ 1 2))` still calls
+    /// `transform` normally, as do expressions containing variables.
+    ///
+    /// The argument is `None` for a union and `Some(head)` for an expression's
+    /// outermost call name. Ordinary parser precedence and constructor type
+    /// checks must also pass before skipping `transform`. This capability query
+    /// itself must have no side effects; it may run before those checks finish.
+    fn preserves_closed_constructor_action(&self, _expression_head: Option<&str>) -> bool {
+        false
+    }
+
     /// Transform the command, potentially using type information.
     /// Returns the transformed commands. If the macro doesn't apply,
     /// it should return vec![command] unchanged.
@@ -39,20 +58,13 @@ impl CommandMacroRegistry {
         self.macros.push(macro_impl);
     }
 
-    /// Delay the preceding commit only when command macros and general
-    /// constraint inference cannot invoke extension callbacks.
-    pub(crate) fn can_typecheck_without_callbacks(
+    pub(crate) fn preserves_closed_constructor_action(
         &self,
-        command: &Command,
-        types: &TypeInfo,
+        expression_head: Option<&str>,
     ) -> bool {
-        if !self.macros.is_empty() {
-            return false;
-        }
-        match command {
-            Command::Action(action) => types.typecheck_closed_constructor_action(action).is_some(),
-            _ => false,
-        }
+        self.macros
+            .iter()
+            .all(|mac| mac.preserves_closed_constructor_action(expression_head))
     }
 
     /// Apply all registered macros to a command in sequence

@@ -38,8 +38,8 @@ impl<'a> ProgramSource<'a> {
 }
 
 impl EGraph {
-    /// Reading and lexing acquire no signatures or backend handles. Parser
-    /// and command macros run later, after committing the completed prefix.
+    /// Reading and lexing acquire no signatures or backend handles. Dispatch
+    /// checks candidates before parsing or expanding them through callbacks.
     pub(super) fn next_program_item<'s>(
         &mut self,
         program: &mut ProgramSource<'s>,
@@ -84,30 +84,72 @@ impl EGraph {
         let mut desugared_before_proofs = Vec::new();
         let mut desugared = Vec::new();
         while let Some(item) = self.next_program_item(&mut program)? {
+            let can_prepare = run_commands && self.proof_state.original_typechecking.is_none();
             let expanded = matches!(&item, ProgramItem::Expanded(_));
             match item {
                 ProgramItem::Source(form) => {
-                    self.flush_ground_actions(pending)?;
-                    let commands = {
-                        let timer = Instant::now();
-                        let commands = self.parser.parse_command(&form);
-                        self.overall_report.frontend_parse += timer.elapsed();
-                        commands.map_err(Error::from)
-                    }?;
-                    program.commands = commands.into_iter();
+                    // A source form enters ordinary parser/macro dispatch only
+                    // if preparation declines it. Successful actions build no Expr tree.
+                    if can_prepare
+                        && let Some((head, action)) = self.parser.closed_action(&form)
+                        && self
+                            .command_macros
+                            .preserves_closed_constructor_action(head)
+                        && let Some(prepared) = self.prepare_action(action, true, pending)
+                    {
+                        self.queue_ground_action(prepared, pending)?;
+                    } else {
+                        self.flush_ground_actions(pending)?;
+                        let commands = {
+                            let timer = Instant::now();
+                            let commands = self.parser.parse_command(&form);
+                            self.overall_report.frontend_parse += timer.elapsed();
+                            commands.map_err(Error::from)
+                        }?;
+                        program.commands = commands.into_iter();
+                    }
                 }
                 ProgramItem::Command(command) | ProgramItem::Expanded(command) => {
-                    let callback_free = self
-                        .command_macros
-                        .can_typecheck_without_callbacks(&command, &self.type_info);
-                    if !expanded && !callback_free {
+                    let prepared = if can_prepare && let Command::Action(action) = &command {
+                        // A transparent macro cannot observe or change this action.
+                        // Already-expanded actions never invoke their macros again.
+                        let permitted = expanded
+                            || match action {
+                                Action::Expr(_, Expr::Call(_, head, _)) => self
+                                    .command_macros
+                                    .preserves_closed_constructor_action(Some(head)),
+                                Action::Union(..) => self
+                                    .command_macros
+                                    .preserves_closed_constructor_action(None),
+                                _ => false,
+                            };
+                        let action = match action {
+                            Action::Expr(_, expr) => Some(typechecking::ClosedAction::Expr(expr)),
+                            Action::Union(_, left, right) => {
+                                Some(typechecking::ClosedAction::Union(left, right))
+                            }
+                            _ => None,
+                        };
+                        if permitted && let Some(action) = action {
+                            self.prepare_action(action, false, pending)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(prepared) = prepared {
+                        self.queue_ground_action(prepared, pending)?;
+                    } else if !expanded {
+                        // All other callbacks see the already-committed prefix. Their
+                        // APIs cannot replace signatures or tables, so metadata stays valid.
                         self.flush_ground_actions(pending)?;
                         let expanded = {
                             let types = self
                                 .proof_state
                                 .original_typechecking
                                 .as_ref()
-                                .map(|original| &original.type_info)
+                                .map(|source| &source.type_info)
                                 .unwrap_or(&self.type_info);
                             let timer = Instant::now();
                             let expanded = self.command_macros.apply(
@@ -143,15 +185,8 @@ impl EGraph {
                         desugared.extend(resolved.resolved);
                         desugared_before_proofs.extend(resolved.resolved_before_proofs);
                     } else {
-                        let resolved = if callback_free
-                            || matches!(&command, Command::Action(action)
-                                    if self.type_info.typecheck_closed_constructor_action(action).is_some())
-                        {
-                            self.resolve_command(command)?
-                        } else {
-                            self.commit_ground_actions(pending)?;
-                            self.resolve_command(command)?
-                        };
+                        self.commit_ground_actions(pending)?;
+                        let resolved = self.resolve_command(command)?;
                         // Execution callers discard resolved trees; retaining them here
                         // duplicates large proof programs. Keep only the checker's history.
                         if run_commands {
@@ -227,7 +262,8 @@ impl EGraph {
         let calls = pending
             .as_deref_mut()
             .map_or(&mut calls, |pending| &mut pending.calls);
-        let prepared = action.and_then(|action| self.prepare_ground_action(action, calls));
+        let prepared =
+            action.and_then(|action| self.prepare_ground_action(action, calls, |_| true));
         let result = if let Some(prepared) = prepared {
             match pending {
                 Some(pending) => self.queue_ground_action(prepared, pending),

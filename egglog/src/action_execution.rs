@@ -45,6 +45,22 @@ impl EGraph {
         Ok(())
     }
 
+    /// Reading a candidate does not select an executor. Dispatch performs the
+    /// complete preparation before queueing any action effects.
+    pub(super) fn prepare_action<Node: typechecking::CallView>(
+        &mut self,
+        action: typechecking::ClosedAction<&Node>,
+        source: bool,
+        pending: &mut GroundActionBatch,
+    ) -> Option<GroundActions> {
+        let timer = Instant::now();
+        let prepared = self.prepare_ground_action(action, &mut pending.calls, |head| {
+            !source || self.parser.can_parse_constructor_call(head)
+        });
+        self.overall_report.typecheck += timer.elapsed();
+        prepared
+    }
+
     /// Cache only unambiguous constructor signatures. Resolved calls with a
     /// primitive alternative retain the compiler and cannot seed source typing.
     fn constructor_call(
@@ -77,19 +93,21 @@ impl EGraph {
         call
     }
 
-    /// Check AST or resolved calls and select native tables in one pure walk.
+    /// Check source, AST, or resolved calls and select native tables in one pure walk.
     /// Preparation allocates no IDs or rows; a decline keeps the original form
-    /// for ordinary typing and compilation.
+    /// for ordinary parsing, typing, and compilation.
     pub(super) fn prepare_ground_action<Node: typechecking::CallView>(
         &self,
         action: typechecking::ClosedAction<&Node>,
         calls: &mut GroundActionCache,
+        permit_call: impl Fn(&str) -> bool,
     ) -> Option<GroundActions> {
         fn prepare_expr<Node: typechecking::CallView>(
             graph: &EGraph,
             expr: &Node,
             prepared: &mut GroundActions,
             calls: &mut GroundActionCache,
+            permit_call: &impl Fn(&str) -> bool,
         ) -> Option<(usize, ArcSort)> {
             let (node, sort) = match expr.view()? {
                 typechecking::CallOrLiteral::Literal(literal) => (
@@ -97,13 +115,17 @@ impl EGraph {
                     sort::literal_sort(literal),
                 ),
                 typechecking::CallOrLiteral::Call(head, args) => {
+                    // Parser macros can change even when their expansion is empty.
+                    if !permit_call(head) {
+                        return None;
+                    }
                     let (func, table) = graph.constructor_call(head, calls)?;
                     if func.input.len() != args.len() {
                         return None;
                     }
                     let mut checked_args = SmallVec::new();
                     for (arg, expected) in args.iter().zip(&func.input) {
-                        let (value, sort) = prepare_expr(graph, arg, prepared, calls)?;
+                        let (value, sort) = prepare_expr(graph, arg, prepared, calls, permit_call)?;
                         if !Arc::ptr_eq(&sort, expected) && sort.name() != expected.name() {
                             return None;
                         }
@@ -132,7 +154,7 @@ impl EGraph {
                 if !matches!(expr.view()?, typechecking::CallOrLiteral::Call(..)) {
                     return None;
                 }
-                prepare_expr(self, expr, &mut prepared, calls)?;
+                prepare_expr(self, expr, &mut prepared, calls, &permit_call)?;
             }
             typechecking::ClosedAction::Union(left, right) => {
                 if !matches!(left.view()?, typechecking::CallOrLiteral::Call(..))
@@ -140,8 +162,10 @@ impl EGraph {
                 {
                     return None;
                 }
-                let (left, left_sort) = prepare_expr(self, left, &mut prepared, calls)?;
-                let (right, right_sort) = prepare_expr(self, right, &mut prepared, calls)?;
+                let (left, left_sort) =
+                    prepare_expr(self, left, &mut prepared, calls, &permit_call)?;
+                let (right, right_sort) =
+                    prepare_expr(self, right, &mut prepared, calls, &permit_call)?;
                 if (!Arc::ptr_eq(&left_sort, &right_sort) && left_sort.name() != right_sort.name())
                     || !self.type_info.is_sort_unionable(&left_sort)
                 {
@@ -244,7 +268,10 @@ impl EGraph {
     ) -> Result<(), Error> {
         if prepared.union.is_some() {
             self.flush_ground_actions(pending)?;
-            self.eval_ground_actions(vec![prepared])
+            let timer = Instant::now();
+            let result = self.eval_ground_actions(vec![prepared]);
+            self.overall_report.commands_actions += timer.elapsed();
+            result
         } else {
             pending.nodes += prepared.nodes.len();
             pending.pending.push(prepared);

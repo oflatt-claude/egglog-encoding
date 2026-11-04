@@ -311,7 +311,7 @@ fn ground_actions_check_eligibility_before_mutation() {
                     _ => return false,
                 };
                 graph
-                    .prepare_ground_action(action, &mut GroundActionCache::default())
+                    .prepare_ground_action(action, &mut GroundActionCache::default(), |_| true)
                     .is_some()
             });
             assert_eq!(
@@ -334,7 +334,11 @@ fn ground_actions_check_eligibility_before_mutation() {
                             _ => return false,
                         };
                         graph
-                            .prepare_ground_action(action, &mut GroundActionCache::default())
+                            .prepare_ground_action(
+                                action,
+                                &mut GroundActionCache::default(),
+                                |_| true,
+                            )
                             .is_some()
                     })
                 })
@@ -861,5 +865,213 @@ fn nullary_results_are_reused_only_within_each_transaction() {
             .parse_and_run_program(None, "(check (= (F (A)) (F (B))))")
             .unwrap();
         assert_eq!(graph.get_size("F"), 1);
+    }
+}
+
+#[test]
+fn expanded_constructor_actions_keep_batches_and_metadata_across_callbacks() {
+    struct Emit(Vec<Command>);
+    impl CommandMacro for Emit {
+        fn transform(
+            &self,
+            command: Command,
+            _: &mut SymbolGen,
+            _: &TypeInfo,
+        ) -> Result<Vec<Command>, Error> {
+            if matches!(&command, Command::Action(Action::Expr(_, Expr::Call(_, head, _)))
+                if head == "emit")
+            {
+                Ok(self.0.clone())
+            } else {
+                Ok(vec![command])
+            }
+        }
+    }
+    for materialized in [false, true] {
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(None, "(datatype T (A) (B) (F T))")
+            .unwrap();
+        let emitted = graph
+            .parse_program(None, "(F (A)) (F (A)) (union (A) (B)) (F (B)) (F (B))")
+            .unwrap();
+        graph.command_macros.register(Arc::new(Emit(emitted)));
+        BATCH_EVENTS.with(|events| *events.borrow_mut() = Some(Vec::new()));
+        let result = if materialized {
+            let commands = graph.parse_program(None, "(emit) (emit)").unwrap();
+            graph.run_program(commands)
+        } else {
+            graph.parse_and_run_program(None, "(emit) (emit)")
+        };
+        let events = BATCH_EVENTS.with(|events| events.borrow_mut().take().unwrap());
+        result.unwrap();
+        assert_eq!(
+            events.iter().map(|(count, _)| *count).collect::<Vec<_>>(),
+            [2, 1, 2, 2, 1, 2]
+        );
+        // First-action lookups repeat [A,F], [A,B], [B,F] across callbacks.
+        assert!(Rc::ptr_eq(&events[0].1[0], &events[1].1[0]));
+        assert!(Rc::ptr_eq(&events[0].1[0], &events[3].1[0]));
+        assert!(Rc::ptr_eq(&events[0].1[1], &events[2].1[1]));
+        assert!(Rc::ptr_eq(&events[0].1[1], &events[5].1[1]));
+        assert!(Rc::ptr_eq(&events[1].1[1], &events[2].1[0]));
+        assert!(Rc::ptr_eq(&events[1].1[1], &events[4].1[1]));
+        assert_eq!(graph.get_size("F"), 1);
+    }
+}
+
+#[test]
+fn one_macro_expansion_preserves_scope_changes_and_literals() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Emit {
+        commands: Vec<Command>,
+        calls: Arc<AtomicUsize>,
+    }
+    impl CommandMacro for Emit {
+        fn transform(
+            &self,
+            _: Command,
+            _: &mut SymbolGen,
+            _: &TypeInfo,
+        ) -> Result<Vec<Command>, Error> {
+            assert_eq!(self.calls.fetch_add(1, Ordering::SeqCst), 0);
+            Ok(self.commands.clone())
+        }
+    }
+    let expansion = "
+        (F (A))
+        (print-size F)
+        (push)
+        (constructor Reused () T)
+        (constructor Changing () T)
+        (F (Reused)) (F (Changing))
+        (print-size F)
+        (Num 7)
+        (print-size Num)
+        (F (Reused)) (F (Changing))
+        (pop)
+        (print-size F)
+        (print-size Num)
+        (constructor Padding () T)
+        (constructor Reused () T)
+        (constructor Changing (T) T)
+        (F (Reused)) (F (Changing (B)))
+        (Num 8)
+        (print-size F)
+        (print-size Num)
+        (F (B))
+        (print-size F)
+        (print-size Padding)
+    ";
+    for materialized in [false, true] {
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(None, "(datatype T (A) (B) (F T) (Num i64))")
+            .unwrap();
+        let mut compiled = graph.clone();
+        let expected = run_ground_action_oracle(&mut compiled, expansion, false).unwrap();
+        let commands = graph.parse_program(None, expansion).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        graph.command_macros.register(Arc::new(Emit {
+            commands,
+            calls: calls.clone(),
+        }));
+        let outputs = if materialized {
+            let commands = graph.parse_program(None, "(emit)").unwrap();
+            graph.run_program(commands)
+        } else {
+            graph.parse_and_run_program(None, "(emit)")
+        }
+        .unwrap();
+        let actual = outputs.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual,
+            [
+                "1\n", "3\n", "1\n", "1\n", "0\n", "3\n", "1\n", "4\n", "0\n"
+            ]
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            graph
+                .type_info
+                .get_func_type("Changing")
+                .unwrap()
+                .input
+                .len(),
+            1
+        );
+        assert_eq!(graph.get_size("Reused"), 1);
+        assert_eq!(graph.get_size("Changing"), 1);
+        assert_eq!(graph.get_size("Padding"), 0);
+        assert_action_graphs_equal(&graph, &compiled);
+    }
+}
+
+#[test]
+fn resolved_constructor_cache_preserves_later_primitive_ambiguity() {
+    #[derive(Clone)]
+    struct AlsoA;
+    impl Primitive for AlsoA {
+        fn name(&self) -> &str {
+            "A"
+        }
+        fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+            SimpleTypeConstraint::new(self.name(), vec![I64Sort.to_arcsort()], span.clone())
+                .into_box()
+        }
+    }
+    impl PurePrim for AlsoA {
+        fn apply(&self, state: PureState<'_, '_>, _: &[Value]) -> Option<Value> {
+            Some(state.base_values().get(7_i64))
+        }
+    }
+    for materialized in [false, true] {
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(None, "(datatype T (A) (F T))")
+            .unwrap();
+        graph.add_pure_primitive(AlsoA, None);
+        let source = "(F (A)) (A)";
+        let result = if materialized {
+            let program = graph.parse_program(None, source).unwrap();
+            graph.run_program(program)
+        } else {
+            graph.parse_and_run_program(None, source)
+        };
+        assert!(
+            result.is_err(),
+            "the final bare A must retain overload ambiguity"
+        );
+        assert_eq!(graph.get_size("F"), 1);
+        assert_eq!(graph.get_size("A"), 1);
+    }
+}
+
+#[test]
+fn source_and_ast_candidates_defer_typing_and_physical_preparation() {
+    let mut graph = EGraph::default();
+    graph
+        .parse_and_run_program(None, "(datatype T (A) (B) (F T))")
+        .unwrap();
+    for source in ["(F (A))", "(union (A) (B))", "(F (missing))"] {
+        let program = graph.parse_program(None, source).unwrap();
+        for mut reader in [
+            ProgramSource::from_text(None, source),
+            ProgramSource::from_commands(program.into_iter()),
+        ] {
+            let item = graph.next_program_item(&mut reader).unwrap();
+            assert!(matches!(
+                item,
+                Some(
+                    process_program::ProgramItem::Source(..)
+                        | process_program::ProgramItem::Command(..)
+                )
+            ));
+            assert_eq!(graph.get_size("A"), 0);
+            assert_eq!(graph.get_size("B"), 0);
+            assert_eq!(graph.get_size("F"), 0);
+            assert!(!graph.backend.flush_updates());
+        }
     }
 }

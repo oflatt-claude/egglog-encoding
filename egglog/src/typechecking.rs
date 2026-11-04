@@ -57,6 +57,20 @@ impl CallView for ResolvedExpr {
     }
 }
 
+impl CallView for Sexp<'_> {
+    fn view(&self) -> Option<CallOrLiteral<'_, Self>> {
+        match self {
+            Sexp::Literal(literal, _) => Some(CallOrLiteral::Literal(literal)),
+            Sexp::List(items, _) => match items.as_slice() {
+                [] => Some(CallOrLiteral::Literal(&Literal::Unit)),
+                [Sexp::Atom(head, _), args @ ..] => Some(CallOrLiteral::Call(head, args)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
 // `ExternalFunction` wrapper for `PurePrim`. Holds the primitive
 // directly so the dispatch chain `external_funcs[id].invoke(...)` →
 // `T::apply(...)` is just one vtable hop plus a direct call — no
