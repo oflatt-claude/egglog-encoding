@@ -50,6 +50,69 @@ fn resolved_dispatch_uses_native_actions_and_falls_back_for_primitives() {
 }
 
 #[test]
+fn constructor_literal_leaves_use_native_actions_and_match_the_compiler() {
+    for entrypoint in ["source", "ast", "resolved"] {
+        let mut graph = EGraph::default();
+        graph
+            .parse_and_run_program(
+                None,
+                "(datatype T (Num i64) (Flag bool) (Text String) (Real f64)
+                             (Token Unit) (Pair T T))",
+            )
+            .unwrap();
+        let mut compiled = graph.clone();
+        for source in [
+            "(Num -9223372036854775808)",
+            "(Num 9223372036854775807)",
+            "(Flag true)",
+            "(Flag false)",
+            r#"(Text "a \"quoted\" string")"#,
+            "(Real 1.5)",
+            "(Real NaN)",
+            "(Real inf)",
+            "(Real -inf)",
+            "(Token ())",
+            "(Pair (Num 7) (Pair (Flag true) (Text \"same\")))",
+            "(Pair (Num 7) (Pair (Flag true) (Text \"same\")))",
+            "(union (Num 7) (Token ()))",
+            "(Pair (Num 7) (Token ()))",
+        ] {
+            let before = GROUND_ACTIONS_EXECUTED.get();
+            let actual = match entrypoint {
+                "source" => graph.parse_and_run_program(None, source),
+                "ast" => {
+                    let commands = graph.parse_program(None, source).unwrap();
+                    graph.run_program(commands)
+                }
+                "resolved" => {
+                    let mut outputs = Vec::new();
+                    for command in graph.parse_program(None, source).unwrap() {
+                        for command in graph.resolve_command(command).unwrap().desugared {
+                            outputs.extend(graph.run_command(command, None).unwrap());
+                        }
+                    }
+                    Ok(outputs)
+                }
+                _ => unreachable!(),
+            }
+            .unwrap();
+            assert_eq!(
+                GROUND_ACTIONS_EXECUTED.get() - before,
+                1,
+                "{entrypoint}: {source}",
+            );
+            let expected = run_ground_action_oracle(&mut compiled, source, false).unwrap();
+            assert_eq!(
+                actual.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                expected,
+                "{entrypoint}: {source}",
+            );
+            assert_action_graphs_equal(&graph, &compiled);
+        }
+    }
+}
+
+#[test]
 fn resolved_dispatch_preserves_proof_and_term_execution() {
     for (mut graph, proofs) in [
         (EGraph::new_with_term_encoding(), false),
@@ -61,8 +124,8 @@ fn resolved_dispatch_preserves_proof_and_term_execution() {
         graph
             .parse_and_run_program(
                 None,
-                "(datatype T (A) (B) (F T))
-                 (F (A)) (union (A) (B))
+                "(datatype T (A) (B) (F T) (Num i64))
+                 (F (A)) (Num 1) (union (A) (B))
                  (check (= (F (A)) (F (B))))",
             )
             .unwrap();
@@ -220,7 +283,11 @@ fn ground_actions_check_eligibility_before_mutation() {
             ("(Pair (N1) (missing))", false),
             ("(union (N1) (+ 1 2))", false),
             ("(union (A) (Pair (A) (A)))", true),
-            ("(Num 1)", false),
+            ("(Num 1)", true),
+            ("(Num \"wrong sort\")", false),
+            ("(Num (+ 1 2))", false),
+            ("(Pair (Num 1) (Num \"wrong sort\"))", false),
+            ("(Pair (Num 1) (Num (+ 1 2)))", false),
             ("(+ 1 2)", false),
             ("(custom (A))", false),
             ("(Pair $global (A))", false),
@@ -233,20 +300,50 @@ fn ground_actions_check_eligibility_before_mutation() {
             }
             let before = graph.clone();
             let commands = graph.parse_program(None, source).unwrap();
-            let accepted = commands.into_iter().any(|command| {
+            let ast_accepted = commands.iter().any(|command| {
+                let action = match command {
+                    Command::Action(Action::Expr(_, expr)) => {
+                        typechecking::ClosedAction::Expr(expr)
+                    }
+                    Command::Action(Action::Union(_, left, right)) => {
+                        typechecking::ClosedAction::Union(left, right)
+                    }
+                    _ => return false,
+                };
+                graph
+                    .prepare_ground_action(action, &mut GroundActionCache::default())
+                    .is_some()
+            });
+            assert_eq!(
+                ast_accepted,
+                admitted && mode == 0,
+                "AST mode {mode}: {source}"
+            );
+            assert_action_graphs_equal(&graph, &before);
+            assert!(!graph.backend.flush_updates());
+            let resolved_accepted = commands.into_iter().any(|command| {
                 graph.resolve_command(command).is_ok_and(|commands| {
-                    commands.desugared.iter().any(|command| match command {
-                        ResolvedNCommand::CoreAction(action) => graph
-                            .prepare_resolved_ground_action(
-                                action,
-                                &mut GroundActionCache::default(),
-                            )
-                            .is_some(),
-                        _ => false,
+                    commands.desugared.iter().any(|command| {
+                        let action = match command {
+                            ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, expr)) => {
+                                typechecking::ClosedAction::Expr(expr)
+                            }
+                            ResolvedNCommand::CoreAction(ResolvedAction::Union(_, left, right)) => {
+                                typechecking::ClosedAction::Union(left, right)
+                            }
+                            _ => return false,
+                        };
+                        graph
+                            .prepare_ground_action(action, &mut GroundActionCache::default())
+                            .is_some()
                     })
                 })
             });
-            assert_eq!(accepted, admitted && mode == 0, "mode {mode}: {source}");
+            assert_eq!(
+                resolved_accepted,
+                admitted && mode == 0,
+                "resolved mode {mode}: {source}"
+            );
             assert_action_graphs_equal(&graph, &before);
             assert!(!graph.backend.flush_updates());
         }

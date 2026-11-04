@@ -1,24 +1,35 @@
 //! Prepare restricted constructor actions without effects; execute them through
 //! the same command dispatch as resolved actions. Only insertion-only runs share
-//! a commit. Unions retain an individual rebuild boundary.
+//! a commit. Unions retain an individual rebuild boundary. Constructor calls may
+//! contain literal leaves, which are interned only after the whole action passes
+//! admission; unsupported forms retain the ordinary compiler.
 
 use crate::*;
 use smallvec::SmallVec;
 use std::rc::Rc;
 
+// Semantic and physical metadata are acquired together, only during dispatch.
+// Entries expire before any command can change a signature or table ID.
 /// Constructor metadata keyed by function name; `None` records functions
 /// that cannot use prepared constructor actions.
-type GroundActionCache = HashMap<String, Option<Rc<egglog_bridge::TableAction>>>;
+type GroundActionCache = HashMap<String, Option<(Arc<FuncType>, Rc<egglog_bridge::TableAction>)>>;
+
+enum GroundExpr {
+    Literal(Literal),
+    Lookup(Rc<egglog_bridge::TableAction>, SmallVec<[usize; 4]>),
+}
 
 pub(super) struct GroundActions {
-    lookups: Vec<(Rc<egglog_bridge::TableAction>, SmallVec<[usize; 4]>)>,
+    // Postorder nodes; lookup arguments name earlier results. Literals are
+    // interned only during execution, after the complete action is admitted.
+    nodes: Vec<GroundExpr>,
     union: Option<(usize, usize)>,
 }
 
 #[derive(Default)]
 pub(super) struct GroundActionBatch {
     pending: Vec<GroundActions>,
-    lookups: usize,
+    nodes: usize,
     pub(super) calls: GroundActionCache,
 }
 
@@ -34,80 +45,110 @@ impl EGraph {
         Ok(())
     }
 
-    /// Prepare one already-resolved constructor expression or union without
-    /// allocating IDs or writing. Ordinary resolution has already checked types;
-    /// this walk only admits closed calls supported by the physical native tables.
-    /// Literals, variables, primitives, globals, views, indexes and custom sorts
-    /// retain the ordinary compiler.
-    pub(super) fn prepare_resolved_ground_action(
+    /// Cache only unambiguous constructor signatures. Resolved calls with a
+    /// primitive alternative retain the compiler and cannot seed source typing.
+    fn constructor_call(
         &self,
-        action: &ResolvedAction,
+        head: &str,
+        calls: &mut GroundActionCache,
+    ) -> Option<(Arc<FuncType>, Rc<egglog_bridge::TableAction>)> {
+        if let Some(cached) = calls.get(head) {
+            return cached.clone();
+        }
+        let call = self
+            .type_info
+            .closed_constructor_type(head)
+            .and_then(|func| {
+                let function = self.functions.get(&func.name)?;
+                if function.subtype() != FunctionSubtype::Constructor
+                    || function.is_view()
+                    || function.is_let_binding()
+                {
+                    return None;
+                }
+                let table = egglog_bridge::TableAction::for_constructor_insertions(
+                    &self.backend,
+                    function.backend_id,
+                )?;
+
+                (table.input_arity() == func.input.len()).then(|| (func.clone(), Rc::new(table)))
+            });
+        calls.insert(head.into(), call.clone());
+        call
+    }
+
+    /// Check AST or resolved calls and select native tables in one pure walk.
+    /// Preparation allocates no IDs or rows; a decline keeps the original form
+    /// for ordinary typing and compilation.
+    pub(super) fn prepare_ground_action<Node: typechecking::CallView>(
+        &self,
+        action: typechecking::ClosedAction<&Node>,
         calls: &mut GroundActionCache,
     ) -> Option<GroundActions> {
-        fn prepare_expr(
+        fn prepare_expr<Node: typechecking::CallView>(
             graph: &EGraph,
-            expr: &ResolvedExpr,
+            expr: &Node,
             prepared: &mut GroundActions,
             calls: &mut GroundActionCache,
-        ) -> Option<usize> {
-            let GenericExpr::Call(_, ResolvedCall::Func(func), args) = expr else {
-                return None;
-            };
-            let table = if let Some(cached) = calls.get(&func.name) {
-                cached.clone()?
-            } else {
-                let table = (|| {
-                    let function = graph.functions.get(&func.name)?;
-                    if func.subtype != FunctionSubtype::Constructor
-                        || function.subtype() != FunctionSubtype::Constructor
-                        || func.num_outputs() != 1
-                        || func.role.is_global()
-                        || function.is_view()
-                        || function.is_let_binding()
-                        || graph.type_info.indexes.contains_key(&func.name)
-                        || !(func.output().as_ref() as &dyn Any).is::<EqSort>()
-                    {
+        ) -> Option<(usize, ArcSort)> {
+            let (node, sort) = match expr.view()? {
+                typechecking::CallOrLiteral::Literal(literal) => (
+                    GroundExpr::Literal(literal.clone()),
+                    sort::literal_sort(literal),
+                ),
+                typechecking::CallOrLiteral::Call(head, args) => {
+                    let (func, table) = graph.constructor_call(head, calls)?;
+                    if func.input.len() != args.len() {
                         return None;
                     }
-                    let table = egglog_bridge::TableAction::for_constructor_insertions(
-                        &graph.backend,
-                        function.backend_id,
-                    )?;
-
-                    (table.input_arity() == func.input.len()).then(|| Rc::new(table))
-                })();
-                calls.insert(func.name.clone(), table.clone());
-                table?
+                    let mut checked_args = SmallVec::new();
+                    for (arg, expected) in args.iter().zip(&func.input) {
+                        let (value, sort) = prepare_expr(graph, arg, prepared, calls)?;
+                        if !Arc::ptr_eq(&sort, expected) && sort.name() != expected.name() {
+                            return None;
+                        }
+                        checked_args.push(value);
+                    }
+                    (
+                        GroundExpr::Lookup(table, checked_args),
+                        func.output().clone(),
+                    )
+                }
             };
-            if table.input_arity() != args.len() {
-                return None;
-            }
-            let args = args
-                .iter()
-                .map(|arg| prepare_expr(graph, arg, prepared, calls))
-                .collect::<Option<SmallVec<[usize; 4]>>>()?;
-            let index = prepared.lookups.len();
-            prepared.lookups.push((table, args));
-            Some(index)
+            let index = prepared.nodes.len();
+            prepared.nodes.push(node);
+            Some((index, sort))
         }
 
         if self.proof_state.original_typechecking.is_some() {
             return None;
         }
         let mut prepared = GroundActions {
-            lookups: Vec::new(),
+            nodes: Vec::new(),
             union: None,
         };
         match action {
-            ResolvedAction::Expr(_, expr) => {
+            typechecking::ClosedAction::Expr(expr) => {
+                if !matches!(expr.view()?, typechecking::CallOrLiteral::Call(..)) {
+                    return None;
+                }
                 prepare_expr(self, expr, &mut prepared, calls)?;
             }
-            ResolvedAction::Union(_, left, right) => {
-                let left = prepare_expr(self, left, &mut prepared, calls)?;
-                let right = prepare_expr(self, right, &mut prepared, calls)?;
+            typechecking::ClosedAction::Union(left, right) => {
+                if !matches!(left.view()?, typechecking::CallOrLiteral::Call(..))
+                    || !matches!(right.view()?, typechecking::CallOrLiteral::Call(..))
+                {
+                    return None;
+                }
+                let (left, left_sort) = prepare_expr(self, left, &mut prepared, calls)?;
+                let (right, right_sort) = prepare_expr(self, right, &mut prepared, calls)?;
+                if (!Arc::ptr_eq(&left_sort, &right_sort) && left_sort.name() != right_sort.name())
+                    || !self.type_info.is_sort_unionable(&left_sort)
+                {
+                    return None;
+                }
                 prepared.union = Some((left, right));
             }
-            _ => return None,
         }
         Some(prepared)
     }
@@ -127,9 +168,12 @@ impl EGraph {
                         .first()
                         .map(|action| {
                             action
-                                .lookups
+                                .nodes
                                 .iter()
-                                .map(|(table, _)| table.clone())
+                                .filter_map(|node| match node {
+                                    GroundExpr::Lookup(table, _) => Some(table.clone()),
+                                    GroundExpr::Literal(_) => None,
+                                })
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default(),
@@ -147,17 +191,23 @@ impl EGraph {
                 let mut constants = HashMap::default();
                 for action in prepared {
                     values.clear();
-                    for (table, args) in action.lookups {
-                        let value = if args.is_empty() {
-                            *constants.entry(Rc::as_ptr(&table)).or_insert_with(|| {
-                                #[cfg(test)]
-                                tests::NULLARY_LOOKUPS.with(|count| count.set(count.get() + 1));
-                                table.lookup_or_insert(state, &[]).unwrap()
-                            })
-                        } else {
-                            arguments.clear();
-                            arguments.extend(args.iter().map(|index| values[*index]));
-                            table.lookup_or_insert(state, &arguments).unwrap()
+                    for node in action.nodes {
+                        let value = match node {
+                            GroundExpr::Literal(literal) => {
+                                literal_to_value(state.base_values(), &literal)
+                            }
+                            GroundExpr::Lookup(table, args) if args.is_empty() => {
+                                *constants.entry(Rc::as_ptr(&table)).or_insert_with(|| {
+                                    #[cfg(test)]
+                                    tests::NULLARY_LOOKUPS.with(|count| count.set(count.get() + 1));
+                                    table.lookup_or_insert(state, &[]).unwrap()
+                                })
+                            }
+                            GroundExpr::Lookup(table, args) => {
+                                arguments.clear();
+                                arguments.extend(args.iter().map(|index| values[*index]));
+                                table.lookup_or_insert(state, &arguments).unwrap()
+                            }
                         };
                         values.push(value);
                     }
@@ -196,9 +246,9 @@ impl EGraph {
             self.flush_ground_actions(pending)?;
             self.eval_ground_actions(vec![prepared])
         } else {
-            pending.lookups += prepared.lookups.len();
+            pending.nodes += prepared.nodes.len();
             pending.pending.push(prepared);
-            if pending.pending.len() >= 256 || pending.lookups >= 16_384 {
+            if pending.pending.len() >= 256 || pending.nodes >= 16_384 {
                 self.flush_ground_actions(pending)?;
             }
             Ok(())
@@ -210,7 +260,7 @@ impl EGraph {
         &mut self,
         pending: &mut GroundActionBatch,
     ) -> Result<(), Error> {
-        pending.lookups = 0;
+        pending.nodes = 0;
         if !pending.pending.is_empty() {
             let timer = Instant::now();
             let result = self.eval_ground_actions(std::mem::take(&mut pending.pending));

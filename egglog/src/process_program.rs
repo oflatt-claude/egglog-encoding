@@ -214,16 +214,20 @@ impl EGraph {
         let command_timer = Instant::now();
         let process_before = self.overall_report.process_time();
         let iteration_before = self.overall_report.run.iterations.len();
+        let action = match &command {
+            ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, expr)) => {
+                Some(typechecking::ClosedAction::Expr(expr))
+            }
+            ResolvedNCommand::CoreAction(ResolvedAction::Union(_, left, right)) => {
+                Some(typechecking::ClosedAction::Union(left, right))
+            }
+            _ => None,
+        };
         let mut calls = HashMap::default();
         let calls = pending
             .as_deref_mut()
             .map_or(&mut calls, |pending| &mut pending.calls);
-        let prepared = match &command {
-            ResolvedNCommand::CoreAction(action) => {
-                self.prepare_resolved_ground_action(action, calls)
-            }
-            _ => None,
-        };
+        let prepared = action.and_then(|action| self.prepare_ground_action(action, calls));
         let result = if let Some(prepared) = prepared {
             match pending {
                 Some(pending) => self.queue_ground_action(prepared, pending),

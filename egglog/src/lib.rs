@@ -958,7 +958,7 @@ impl EGraph {
     ) -> Result<egglog_bridge::MergeFn, Error> {
         match expr {
             GenericExpr::Lit(_, literal) => {
-                let val = literal_to_value(&self.backend, literal);
+                let val = literal_to_value(self.backend.base_values(), literal);
                 Ok(egglog_bridge::MergeFn::Const(val))
             }
             GenericExpr::Var(span, resolved_var) => {
@@ -3584,13 +3584,13 @@ fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
     }
 }
 
-fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
+fn literal_to_value(base_values: &core_relations::BaseValues, l: &Literal) -> Value {
     match l {
-        Literal::Int(x) => egraph.base_values().get::<i64>(*x),
-        Literal::Float(x) => egraph.base_values().get::<sort::F>(x.into()),
-        Literal::String(x) => egraph.base_values().get::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.base_values().get::<bool>(*x),
-        Literal::Unit => egraph.base_values().get::<()>(()),
+        Literal::Int(x) => base_values.get::<i64>(*x),
+        Literal::Float(x) => base_values.get::<sort::F>(x.into()),
+        Literal::String(x) => base_values.get::<sort::S>(sort::S::new(x.clone())),
+        Literal::Bool(x) => base_values.get::<bool>(*x),
+        Literal::Unit => base_values.get::<()>(()),
     }
 }
 
