@@ -10,7 +10,7 @@ pub(super) enum ProgramItem<'a> {
     /// Command produced by command macros; do not apply those macros again.
     Expanded(Command),
     /// Lexed source form awaiting command parsing and command macros.
-    Source(Sexp<'a>),
+    Source(Sexp<'a, std::ops::Range<usize>>),
 }
 
 pub(super) struct ProgramSource<'a> {
@@ -52,7 +52,7 @@ impl EGraph {
         }
         if let Some(source) = &mut program.source {
             let timer = Instant::now();
-            let form = source.next_sexp();
+            let form = source.next_sexp(|_, range| range);
             self.overall_report.frontend_parse += timer.elapsed();
             return Ok(form?.map(ProgramItem::Source));
         }
@@ -102,7 +102,9 @@ impl EGraph {
                         self.flush_ground_actions(pending)?;
                         let commands = {
                             let timer = Instant::now();
-                            let commands = self.parser.parse_command(&form);
+                            let commands = self
+                                .parser
+                                .parse_command(&form.with_spans(program.source.as_ref().unwrap()));
                             self.overall_report.frontend_parse += timer.elapsed();
                             commands.map_err(Error::from)
                         }?;

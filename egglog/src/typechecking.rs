@@ -57,7 +57,7 @@ impl CallView for ResolvedExpr {
     }
 }
 
-impl CallView for Sexp<'_> {
+impl<S> CallView for Sexp<'_, S> {
     fn view(&self) -> Option<CallOrLiteral<'_, Self>> {
         match self {
             Sexp::Literal(literal, _) => Some(CallOrLiteral::Literal(literal)),
