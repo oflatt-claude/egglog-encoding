@@ -77,13 +77,15 @@ source rule `i`, and `m` a maintenance rule. -/
       \Uparrow\kw{trans}(\kw{sym}(\pi_z),
       \kw{trans}(\kw{cong}_n(\cdots\kw{cong}_1(\pi_b,\pi_1)\cdots,\pi_n),\pi_y))}
   \and
-  \ir{Source}{r_i=(Q\Rightarrow H)\\\rho_j\Uparrow\pi_j\ (\forall j)\\
-    Q\text{ read against }\pi_1,\ldots,\pi_m\text{ gives }\pi'_1,\ldots,\pi'_k\\
+  \ir{Source}{r_i=(p_1\land\cdots\land p_k\Rightarrow H)\\\rho_j\Uparrow\pi_j\ (\forall j)\\
+    p_j\Uparrow\pi'_j:c_j\ (\forall j)\\
     \lceil t\rceil\in\operatorname{facts}_{\sigma|_{\operatorname{FV}(Q)}}(H)}
     {\kw{rule}_{i'}((t=t),\sigma;\rho_1,\ldots,\rho_m)\Uparrow
       \kw{rule}_i(\lceil t\rceil,\sigma|_{\operatorname{FV}(Q)};\pi'_1,\ldots,\pi'_k)}
   \end{mathpar}
-  where $r$ is the row the maintenance firing wrote, and, in \textsc{Cong},
+  where $r$ is the row the maintenance firing wrote; in \textsc{Source} the derivations of
+  $p_j\Uparrow\pi'_j$ take their node, edge and comparison proofs from $\pi_1,\ldots,\pi_m$
+  in the order the compiler emits the atoms; and, in \textsc{Cong},
   $\pi_i=\kw{trans}(\pi_{b_i},\kw{sym}(\pi_{a_i}))$.
   -/)
   (latexEnv := "paperfragment")]
