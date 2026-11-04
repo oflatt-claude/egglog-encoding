@@ -737,3 +737,32 @@ fn opaque_constraint_and_read_observe_the_committed_prefix() {
     let read = order.iter().position(|event| *event == "read").unwrap();
     assert!(commit < constraints && constraints < read, "{order:?}");
 }
+
+thread_local! {
+    pub(super) static NULLARY_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[test]
+fn nullary_results_are_reused_only_within_each_transaction() {
+    for threads in [1, 4] {
+        let mut graph = EGraph::default();
+        graph.backend.set_num_threads(threads);
+        graph
+            .parse_and_run_program(None, "(datatype T (A) (B) (F T))")
+            .unwrap();
+        for (source, expected_lookups) in [
+            ("(F (A)) (F (A))", 1),
+            ("(union (A) (B))", 2),
+            ("(F (A)) (F (B)) (F (A)) (F (B))", 2),
+        ] {
+            let program = graph.parse_program(None, source).unwrap();
+            let before = NULLARY_LOOKUPS.get();
+            graph.run_program(program).unwrap();
+            assert_eq!(NULLARY_LOOKUPS.get() - before, expected_lookups, "{source}");
+        }
+        graph
+            .parse_and_run_program(None, "(check (= (F (A)) (F (B))))")
+            .unwrap();
+        assert_eq!(graph.get_size("F"), 1);
+    }
+}

@@ -142,12 +142,24 @@ impl EGraph {
             .run_actions(Some(&self.type_info), |state| {
                 let mut values = Vec::new();
                 let mut arguments = Vec::new();
+                // Shared handles identify physical tables. Results remain valid
+                // only within this backend transaction, until commit/rebuild.
+                let mut constants = HashMap::default();
                 for action in prepared {
                     values.clear();
                     for (table, args) in action.lookups {
-                        arguments.clear();
-                        arguments.extend(args.iter().map(|index| values[*index]));
-                        values.push(table.lookup_or_insert(state, &arguments).unwrap());
+                        let value = if args.is_empty() {
+                            *constants.entry(Rc::as_ptr(&table)).or_insert_with(|| {
+                                #[cfg(test)]
+                                tests::NULLARY_LOOKUPS.with(|count| count.set(count.get() + 1));
+                                table.lookup_or_insert(state, &[]).unwrap()
+                            })
+                        } else {
+                            arguments.clear();
+                            arguments.extend(args.iter().map(|index| values[*index]));
+                            table.lookup_or_insert(state, &arguments).unwrap()
+                        };
+                        values.push(value);
                     }
                     if let Some((left, right)) = action.union {
                         union.union(state, values[left], values[right]);
