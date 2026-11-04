@@ -41,7 +41,7 @@ figures = resolve_figures(config, [], Path.cwd())
 files = {file.absolute_path: file for figure in figures for file in figure.files}
 inventory = _figure_inventory(Path.cwd(), list(files.values()))
 assert inventory['workloads']
-assert len(figures) == 5
+assert len(figures) == len(config.figures)
 """
     subprocess.run([sys.executable, "-c", source], cwd=ROOT, check=True, capture_output=True, text=True)
 
