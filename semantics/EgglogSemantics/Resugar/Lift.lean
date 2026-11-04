@@ -13,7 +13,30 @@ def sourceSubst (vars : List Var) (σ : Env) : Option Env :=
 /-- A maintenance firing's written row, justified from its premises in query order. Path
 compression chains two edges; a UF collision chains the two parents through their key; a
 congruence firing turns the second application into the first by congruence on each child,
-and chains the two roots through them. The paper shows these with `liftProof` below. -/
+and chains the two roots through them. `m` is the maintenance rule and `r` the row it
+wrote. -/
+@[blueprint "def:lift-rebuild"
+  (statement := /--
+  \begin{mathpar}
+  \ir{Compress}{\rho_1\Uparrow\pi_1:a=b\\\rho_2\Uparrow\pi_2:b=c}
+    {\kw{rule}_{\textsc{Compress}}((\mathtt{UF}(a,c)=\mathtt{UF}(a,c)),\sigma;\rho_1,\rho_2)
+      \Uparrow\kw{trans}(\pi_1,\pi_2):a=c}
+  \and
+  \ir{Collide}{\rho_1\Uparrow\pi_1:a=b\\\rho_2\Uparrow\pi_2:a=c}
+    {\kw{rule}_{\textsc{Collide}}((\mathtt{UF}(c,b)=\mathtt{UF}(c,b)),\sigma;\rho_1,\rho_2,\rho_3)
+      \Uparrow\kw{trans}(\kw{sym}(\pi_2),\pi_1):c=b}
+  \and
+  \ir{Cong}{\rho_b\Uparrow\pi_b:f(b_1,\ldots,b_n)=f(b_1,\ldots,b_n)\\
+    \rho_{a_i}\Uparrow\pi_{a_i}:a_i=r_i\\\rho_{b_i}\Uparrow\pi_{b_i}:b_i=r_i\ (\forall i)\\
+    \rho_y\Uparrow\pi_y:f(a_1,\ldots,a_n)=y\\\rho_z\Uparrow\pi_z:f(b_1,\ldots,b_n)=z}
+    {\kw{rule}_{\textsc{Cong}_f}((\mathtt{UF}(z,y)=\mathtt{UF}(z,y)),\sigma;
+      \rho_a,\rho_b,\rho_{a_1},\rho_{b_1},\ldots,\rho_{a_n},\rho_{b_n},\rho_y,\rho_z,\rho_m)\\
+      \Uparrow\kw{trans}(\kw{sym}(\pi_z),
+      \kw{trans}(\kw{cong}_n(\cdots\kw{cong}_1(\pi_b,\pi_1)\cdots,\pi_n),\pi_y)):z=y}
+  \end{mathpar}
+  where $\pi_i=\kw{trans}(\pi_{b_i},\kw{sym}(\pi_{a_i})):b_i=a_i$.
+  -/)
+  (latexEnv := "paperfragment")]
 def rebuild (P : Program) (kind : Congruence.RebuildOrigin)
     (ps : List Proof) : Option Proof := do
   match kind with
@@ -61,32 +84,14 @@ source rule `i`, and `m` a maintenance rule. -/
 @[blueprint "def:lift"
   (statement := /--
   \begin{mathpar}
-  \ir{Compress}{\rho_1\Uparrow\pi_1\\\rho_2\Uparrow\pi_2}
-    {\kw{rule}_{\textsc{Compress}}((r=r),\sigma;\rho_1,\rho_2,\rho_3)
-      \Uparrow\kw{trans}(\pi_1,\pi_2)}
-  \and
-  \ir{Collide}{\rho_1\Uparrow\pi_1\\\rho_2\Uparrow\pi_2}
-    {\kw{rule}_{\textsc{Collide}}((r=r),\sigma;\rho_1,\ldots,\rho_4)
-      \Uparrow\kw{trans}(\kw{sym}(\pi_2),\pi_1)}
-  \and
-  \ir{Cong}{\rho_b\Uparrow\pi_b\\\rho_{a_i}\Uparrow\pi_{a_i}\\
-    \rho_{b_i}\Uparrow\pi_{b_i}\ (\forall i)\\
-    \rho_y\Uparrow\pi_y\\\rho_z\Uparrow\pi_z}
-    {\kw{rule}_{\textsc{Cong}_f}((r=r),\sigma;\rho_a,\rho_b,\rho_{a_1},\rho_{b_1},\ldots,
-      \rho_{a_n},\rho_{b_n},\rho_y,\rho_z,\ldots)\\
-      \Uparrow\kw{trans}(\kw{sym}(\pi_z),
-      \kw{trans}(\kw{cong}_n(\cdots\kw{cong}_1(\pi_b,\pi_1)\cdots,\pi_n),\pi_y))}
-  \and
   \ir{Source}{r_i=(p_1\land\cdots\land p_k\Rightarrow H)\\\rho_j\Uparrow\pi_j\ (\forall j)\\
     p_j\Uparrow\pi'_j:c_j\ (\forall j)\\
     \lceil t\rceil\in\operatorname{facts}_{\sigma|_{\operatorname{FV}(Q)}}(H)}
     {\kw{rule}_{i'}((t=t),\sigma;\rho_1,\ldots,\rho_m)\Uparrow
       \kw{rule}_i(\lceil t\rceil,\sigma|_{\operatorname{FV}(Q)};\pi'_1,\ldots,\pi'_k)}
   \end{mathpar}
-  where $r$ is the row the maintenance firing wrote; in \textsc{Source} the derivations of
-  $p_j\Uparrow\pi'_j$ take their node, edge and comparison proofs from $\pi_1,\ldots,\pi_m$
-  in the order the compiler emits the atoms; and, in \textsc{Cong},
-  $\pi_i=\kw{trans}(\pi_{b_i},\kw{sym}(\pi_{a_i}))$.
+  where the derivations of $p_j\Uparrow\pi'_j$ take their node, edge and comparison proofs
+  from $\pi_1,\ldots,\pi_m$ in the order the compiler emits the atoms.
   -/)
   (latexEnv := "paperfragment")]
 def liftProof (P : Program) (origins : List Congruence.RuleOrigin) :
