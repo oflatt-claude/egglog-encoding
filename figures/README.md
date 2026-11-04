@@ -4,6 +4,7 @@ From the code repository root:
 
 ```sh
 ./bench.py figures
+cp -R figures/output/eval ../extended-egglog-paper/figures/
 ./bench.py figures --help
 ./bench.py figures math-runtime slotted-runtime
 ./bench.py figures --rounds 3 --memory-limit --report /tmp/figures-quick.jsonl --output-dir /tmp/figure-previews
@@ -17,21 +18,33 @@ pinned standalone `npx` packages: Vega 6.4.0, Vega-Lite 6.4.3, Vega CLI 6.4.0,
 Canvas 3.2.3. No npm project or separate PDF converter is required. PDF text uses
 embedded font subsets. The first run may download the pinned renderer packages.
 
-The five PDFs replace the paper's `figures/eval/` placeholders. SVG, 3x PNG and
-`.bound.vl.json` companions are written alongside them. The bound specifications
-retain the exact executable/settings hashes and selected observation row IDs.
-Absolute artifact paths are printed on
-stderr. The default output directory is each authored specification's directory,
-`figures/eval/` for the bundled catalog. The paper repository is needed only when selecting it
-as the output destination.
+Bare `./bench.py figures` writes one ignored output folder at
+`figures/output/eval/` in this checkout, independent of the invocation directory.
+Each of the six figures has seven companions: PDF, SVG, 3x PNG, `.bound.vl.json`,
+`.results.json`, `.numbers.tex` and `.table.tex`. Authored specifications remain
+under `figures/eval/`. Absolute artifact paths are printed on stderr.
+
+After inspecting the outputs, copy the `eval` folder into the manuscript's
+`figures/` directory with the command above. This preserves existing
+`figures/eval/` PDF and TeX include paths. Generation does not require the paper
+repository. PDF and TeX files are manuscript inputs with no JSON runtime
+dependency; bound specifications retain the original grouped-cache URL and need
+that cache for rerendering. Results JSON includes the selected observations and
+their provenance. `--output-dir PATH` overrides the common output folder;
+relative overrides resolve from the invocation directory.
+
+A subset invocation updates only its selected figure filenames. Outputs from
+removed or renamed catalog entries can remain in the folder. Inspect the folder
+before copying it, and remove obsolete artifacts explicitly when needed.
 
 | Figure | Comparison |
 | --- | --- |
-| `disequality-runtime` | Native DE, EE, NEE, OEE and relation-based Egglog NEE; proofs off |
+| `disequality-runtime` | Runtime/RSS boxplots with outliers for native DE, native NEE and relation-based Egglog NEE; proofs off |
 | `math-runtime` | Twelve-round Math; Egg/Egglog off/checked proofs; time, peak RSS and within-engine overhead |
 | `corpus-congruence-cdf` | Congruence-only time and peak-RSS overhead across the application replays |
-| `corpus-proofs-cdf` | Strict checked-proof time and peak-RSS overhead across the same replays |
-| `slotted-runtime` | Full 44-rule SDQL kernels/phases; native syntactic substitution versus the encoded compatibility policy |
+| `corpus-proof-recording-cdf` | Recording-only proof time and peak-RSS overhead across the same replays; strict correctness coverage retained |
+| `corpus-proofs-cdf` | Full proof recording, extraction and checking time and peak-RSS overhead across the same replays |
+| `slotted-runtime` | Full 44-rule SDQL kernels/phases; aligned runtime/RSS encoding-to-native ratio panels and a table of both metrics |
 
 ## Flat configuration and automatic reuse
 
@@ -97,6 +110,12 @@ ordinary/candidate table counts. Rust executes that case, rejecting unexpected
 passes and other failures. Figure selection quarantines the affected condition,
 including old cached successes; it stays visible in coverage without becoming a
 measured point. All other checks and treatments remain exact.
+The disequality catalog retains EE/OEE under correctness-only `checks`.
+Timed `proofs`/`proof-extraction` aliases inherit `proof-testing` oracles and
+exclusions; native Egg aliases similarly inherit `egg-proof-testing`.
+Rust normalizes these names before registration and ignore filtering. Figure
+collection and selection apply the corresponding strict exclusions, and
+exact-identity strict validation failures veto recording-only measurements too.
 
 The shared collection progress estimates remaining time across all missing runs.
 `ETA ~` prefers current-binary cached and newly measured durations, then the
@@ -131,18 +150,40 @@ from an older executable.
 Native disequality `.in` and logical Egglog `.egg` inputs remain distinct.
 
 The shared selector chooses the newest requested N applicable rows per identity, ordered by
-timestamp and physical row index, including failures. It retains good raw points but
-reports an estimate only when all N rows succeeded and the metric is finite.
+timestamp and physical row index, including failures. Exports retain every selected
+observation; plots report a box or estimate only when all N rows succeeded and the metric is finite.
 Partial observations, timeouts and missing RSS remain explicit. With N >= 2,
 absolute mean intervals use Student's t at 95%. N = 1 permits a mean point but
 no interval. Math overhead uses independent-sample Fieller-style 95% intervals;
 unavailable or unbounded intervals retain their explanation. The t critical
-value is the only statistical scalar supplied by Python: Vega performs means,
+value is the only statistical scalar supplied to the plots: Vega performs means,
 sample variances, ratios, Fieller calculations, cohort selection and ranking.
+The companion exports use the existing Python report estimators; a shared
+fixture checks numerical parity against executed Vega transforms.
+
+Disequality and Math absolute panels use the same gray/black boxes: medians,
+interquartile ranges and 1.5-IQR whiskers. Only generated outliers appear as
+individual points; there is no all-run overlay. These are distributions, not
+confidence intervals for a mean. Incomplete conditions retain explicit status
+without a box. Runtime and RSS use independent absolute scales, and Math labels
+each engine/proof condition directly. Actual arithmetic means and their
+Student-t intervals remain in the exports.
+Disequality ratios and their 95% intervals are exported for prose against the
+fixed native DE baseline, with no ratio panels. Math within-engine ratios and
+Slotted encoding/native ratios use uniform small black squares with capped,
+asymmetric Fieller 95% whiskers and a 1x reference. No lines connect workloads.
+Slotted runtime/RSS panels share the workload order and ratio scale; the
+companion table contains both metrics and their intervals for every kernel/phase.
 
 Whole-process time includes launch, input reading, parsing, lowering, execution
 and requested proof work. Compilation and input conversion occur beforehand.
 Checked proofs include recording, extraction/materialization and checking.
+The corpus `proofs` treatment measures recording only, without extraction or
+verification; its strict correctness oracle remains separate. Math retains the
+checked-proof treatments, absolute costs and within-engine proof-overhead ratios.
+Each corpus title states the timed treatment. Proof recording and full checked
+proofs both include the congruence pass; the shared specification distinguishes
+recording-only `proofs` from full `proof-testing` in its title and subtitle.
 Native Egg materializes explanations in memory with explanation-length
 optimization disabled; these timings do not serialize proof files. Egglog does
 simplify extracted proofs. The two metrics use the same selected executions.
@@ -151,7 +192,7 @@ The corpus contains 486 saved deduplicated replays from Eggcc, HardBoiled,
 MISAAL, Churchroad, DialEgg and Luminal, excluding Math. Select only a complete,
 successful baseline's mean wall time >= 0.2 seconds, with no upper cutoff.
 Memory and candidate outcomes never select membership. Each file has equal
-weight; projects contribute different numbers of files. Both corpus figures
+weight; projects contribute different numbers of files. All three corpus figures
 and both metrics share the selected denominator. Failed/missing/excluded ratios never
 become finite timeouts or disappear from coverage.
 
@@ -159,11 +200,19 @@ Complete data support empirical median/95th-percentile annotations. With
 incomplete outcomes, reached annotations are measured coverage thresholds;
 unreached thresholds are explicitly unestablished. These CDFs are sample
 summaries, not population confidence bands.
+Each corpus metric gets a full-range overview only when its zoom excludes valid
+values. The detail expands to the full maximum when this increases its upper
+bound by at most 20%, avoiding an overview for a marginal tail. The runner binds
+these layout domains from the same exported per-file ratios and omits the whole
+overview composition, including its axes and space, when neither metric needs
+it. Domains are recorded in the bound specification and results provenance.
+Statistical points, intervals, ranks and coverage remain in Vega; changing these
+viewing bounds never changes ranks or denominators.
 
 Corpus metadata is projected lazily for selected published inputs. Aliases,
 preparation blockers and exact-identity strict-validation failures are retained.
 The 156 unavailable source cases are separate from saved replay and baseline
-counts. Strict-proof errors veto the checked-proof series across resource bounds;
+counts. Strict-proof errors veto checked and recording proof series across resource bounds;
 resource-limit outcomes stay in observation reporting. Congruence-only measurements
 remain independent of strict-proof validation. Custom non-corpus figures require no corpus
 validation. Collection never acquires sources, regenerates inputs or invokes
@@ -181,12 +230,34 @@ visible; statistics remain in the authored Vega transforms. Vega resolves other
 relative assets from the authored specification's directory.
 
 Each invocation renders temporary PDF/SVG/PNG files and replaces the previous
-images and bound specification after all three images succeed. The raw JSONL and grouped JSON retain observation
+images, bound specification and numeric exports after all three images succeed.
+The raw JSONL and grouped JSON retain observation
 provenance, including recorded resource bounds, source/binary hashes, statuses and row IDs. Preserve these
 with the catalog, authored specifications, validated Math12 boundary evidence and
 disequality contradiction-agreement results when handing off measurements.
 Fill paper result sentences only from validated measurements, keeping failed
 and missing cases visible.
+
+The per-figure `.results.json` retains full-precision means, bounded CI endpoints,
+ratios, selected row IDs, sample counts, issues, exclusions and source provenance.
+Corpus exports include the common cohort denominator, measured/failed/missing/
+excluded counts and reached 50%/95% coverage thresholds; unestablished values are
+`null`. Invalid or missing measurements never become zero. The named TeX macros
+and ready-to-include tables need no JSON reader or extra LaTeX package:
+
+```tex
+\input{figures/eval/slotted-runtime.numbers.tex}
+\EgglogFigureNumber{slotted-runtime/batax-1st-44rules/slotted-no-aliasing-over-slotted-ref-nested/runtime/ratio}
+\input{figures/eval/slotted-runtime.table.tex}
+```
+
+Keys use the figure, readable workload label, treatment and metric (`runtime` or
+`memory`); suffixes include `mean`, `ratio`, `ci-low`, `ci-high`, and sample
+counts. `.numbers.tex` rounds to three significant digits; JSON retains full
+precision. Missing estimates/endpoints and unknown keys render `unavailable`.
+Tables escape workload labels and report `CI unavailable` when a point lacks a
+bounded interval. Three-round runs are layout previews; retain ten observations
+and the required correctness evidence before using numbers as paper claims.
 
 ```sh
 make check
@@ -194,7 +265,7 @@ make check
 
 The figure tests use synthetic snapshots without writing the benchmark cache.
 They cover sample counts, means/intervals, missing/failing outcomes, label and
-subset selection, cohort boundaries and coverage. Inspect all five PDFs/PNGs at
+subset selection, cohort boundaries and coverage. Inspect all six PDFs/PNGs at
 manuscript width for unclipped labels, tails and uncertainty; use `pdffonts` to
 verify embedding. `make check` includes the catalog-driven Rust correctness suite:
 visible table sizes, stable source results, extraction correspondence and strict proof

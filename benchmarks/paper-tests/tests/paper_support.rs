@@ -11,6 +11,40 @@ mod paper_oracles;
 mod table_comparison;
 
 #[test]
+fn recording_catalog_modes_register_strict_oracles_and_exclusion_names() {
+    let modes = paper_oracles::correctness_modes([
+        "off",
+        "proofs",
+        "proof-extraction",
+        "proof-testing",
+        "egg-proofs",
+        "egg-proof-extraction",
+        "egg-proof-testing",
+    ]);
+    assert_eq!(
+        modes,
+        ["off", "proof-testing", "egg-proof-testing"]
+            .map(str::to_owned)
+            .into_iter()
+            .collect()
+    );
+    // These are the names used by the shared ignore policy, before trial creation.
+    assert!(modes.contains("proof-testing"));
+    assert!(!modes.contains("proofs"));
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    paper_oracles::validate(
+        root,
+        &root.join("benchmarks/corpus/math/math-iteration-12.egg"),
+        &modes,
+    )
+    .unwrap();
+}
+
+#[test]
 fn paper_registration_rejects_unmapped_oracles_and_missing_companions() {
     use std::path::Path;
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))

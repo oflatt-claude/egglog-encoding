@@ -340,13 +340,33 @@ orchestration remains outside the ordinary runner.
 The [paper figures](figures/README.md) use the checked-in
 `benchmarks/corpus/manifest.json` rather than the default workload list.
 Run `./bench.py figures` from this checkout to build the required release engines,
-reuse compatible observations, collect missing runs, and render all five paper
-figures as PDF, SVG, and PNG. Setup requires the Python environment above, the
+reuse compatible observations, collect missing runs, and render all six paper
+figures into the ignored `figures/output/eval/` folder. Each figure has seven
+companions: PDF, SVG, PNG, bound specification, results JSON, numeric TeX macros,
+and a TeX table. Setup requires the Python environment above, the
 pinned Rust toolchain, and Node.js/npm (`npx`); renderer packages are pinned in
-the command. `./bench.py figures --help` lists configured figure names. Outputs
-default to `figures/eval/`; `--output-dir ../extended-egglog-paper/figures/eval`
-places the PDFs at the paper's expected paths. See the figure guide for the flat
-JSON catalog, observation identities, statistical protocol, and provenance receipts.
+the command. Generate, inspect, then copy the output folder into the manuscript:
+
+```sh
+./bench.py figures
+cp -R figures/output/eval ../extended-egglog-paper/figures/
+```
+
+This preserves `figures/eval/` include paths. In the manuscript, for example:
+
+```tex
+\input{figures/eval/slotted-runtime.numbers.tex}
+\EgglogFigureNumber{slotted-runtime/batax-1st-44rules/slotted-no-aliasing-over-slotted-ref-nested/runtime/ratio}
+\input{figures/eval/slotted-runtime.table.tex}
+```
+
+Authored specifications stay in this repository's `figures/eval/`.
+`--output-dir PATH` overrides the generated folder. PDF and TeX files need no
+JSON reader; bound specifications need the original cache for rerendering.
+Subset invocations update only selected filenames, so removed or renamed figures
+can leave obsolete outputs to remove before copying. `./bench.py figures --help`
+lists configured names. See the figure guide for the flat JSON catalog,
+observation identities, statistical protocol, and provenance receipts.
 Use `./bench.py figures --rounds 3` for a shorter
 run without changing the ten-run production catalog.
 

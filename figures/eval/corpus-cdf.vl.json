@@ -1,6 +1,10 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
   "description": "Paper figure. Sample selection is bound by the shared cache selector; all statistics are performed by the visible Vega transforms. The runner binds selected_inputs, the report URL and scalar invocation parameters.",
+  "title": {
+    "text": {"expr": "indexof(treatments, 'term') >= 0 ? 'Congruence-only overhead' : indexof(treatments, 'proof-testing') >= 0 ? 'Full proof overhead' : indexof(treatments, 'proof-extraction') >= 0 ? 'Proof recording and extraction' : 'Proof recording only'"},
+    "subtitle": {"expr": "indexof(treatments, 'term') >= 0 ? 'Congruence pass only; no proof recording.' : indexof(treatments, 'proof-testing') >= 0 ? 'Recording, extraction and checking; includes congruence pass.' : indexof(treatments, 'proof-extraction') >= 0 ? 'Includes congruence pass and extraction; excludes checking.' : 'Includes congruence pass; excludes extraction and checking.'"}
+  },
   "data": {"url": "../../.reports-grouped.json", "format": {"type": "json"}},
   "params": [
     {"name": "target_label", "value": "figures"},
@@ -28,7 +32,7 @@
   "usermeta": {
     "statistics": "Newest requested N observations per exact identity, including failures. Complete successful samples only. Ratios of arithmetic means. The CDF has no population confidence band.",
     "coverage": "50%/95% empirical inverse CDF for complete data; measured coverage thresholds otherwise. Source preparation blockers are not saved replays.",
-    "view_domains": "Per metric/mode, full range starts at zero and fits the maximum, including 1x. Detail starts at the lesser of 1x and the observed minimum rounded down to tenths. Its upper bound is capped at twice the measured median, bounded by the full range, and rounded up to two significant digits. A 1.1x upper fallback keeps zero/empty cases finite. These viewing bounds never change CDF ranks or denominators."
+    "view_domains": "Per metric/mode, full range starts at zero and fits the maximum, including 1x. Detail starts at the lesser of 1x and the observed minimum rounded down to tenths. Its upper bound is capped at twice the measured median, bounded by the full range, and rounded up to two significant digits. A 1.1x upper fallback keeps zero/empty cases finite. These viewing bounds never change CDF ranks or denominators. The detail expands to the full maximum when this adds at most 20% to its upper bound. Full-range facets appear only for genuine tails; the runner omits the whole overview composition when neither metric needs it."
   },
   "transform": [
     {"calculate": "[datum.groups, [null]]", "as": "batches"},
@@ -48,7 +52,7 @@
     {"calculate": "datum.eligible_group ? datum.group.samples : []", "as": "observations"},
     {"calculate": "datum.eligible_group ? datum.input.selected_row_indices : []", "as": "sample_indices"},
     {"calculate": "length(datum.sample_indices)", "as": "sample_n"},
-    {"calculate": "datum.input.treatment === 'proof-testing' && datum.eligible_group && datum.input.validation_failures ? datum.input.validation_failures[datum.group.key.binary_sha256 + '/nee'] || '' : ''", "as": "validation_issue"},
+    {"calculate": "datum.input.validation_issue || (indexof(['proofs','proof-extraction','proof-testing'], datum.input.treatment) >= 0 && datum.eligible_group && datum.input.validation_failures ? datum.input.validation_failures[datum.group.key.binary_sha256 + '/nee'] || '' : '')", "as": "validation_issue"},
     {"calculate": "datum.sample_n ? datum.sample_indices : [null]", "as": "runs"},
     {"flatten": ["runs"], "as": ["row_index"]},
     {"calculate": "isValid(datum.row_index) ? datum.observations[indexof(pluck(datum.observations, 'row_index'), datum.row_index)] : null", "as": "run"},
@@ -62,7 +66,7 @@
     {"calculate": "datum.complete ? datum.sample_mean : null", "as": "mean"},
     {"calculate": "datum.input.exclusion ? 'excluded (' + datum.input.exclusion.kind + '): ' + datum.input.exclusion.reason : (datum.validation_issue || (datum.failed_n ? datum.sample_n + '/' + rounds + ' observations; ' + datum.failed_n + ' failed (' + datum.timeout_n + ' timeout); estimate unavailable' : datum.valid_n < datum.sample_n ? datum.sample_n + '/' + rounds + ' observations; measurement unavailable; no estimate' : datum.sample_n < rounds ? datum.sample_n + '/' + rounds + ' observations; estimate unavailable' : rounds === 1 ? 'n=1; CI unavailable' : '') )", "as": "issue"},
     {"window": [{"op": "row_number", "as": "run_number"}], "sort": [{"field": "run.row_index", "order": "ascending"}], "groupby": ["input_id", "metric"]},
-    {"calculate": "datum.input.treatment === 'off' ? 'Off' : datum.input.treatment === 'term' ? 'Congruence' : 'Checked proofs'", "as": "mode"},
+    {"calculate": "datum.input.treatment === 'off' ? 'Off' : datum.input.treatment === 'term' ? 'Congruence' : datum.input.treatment === 'proof-testing' ? 'Full proofs' : datum.input.treatment === 'proof-extraction' ? 'Proof extraction' : 'Proof recording'", "as": "mode"},
     {"calculate": "datum.input.logical_id", "as": "workload_id"},
     {"calculate": "datum.input.family || 'Unclassified'", "as": "family"},
     {"calculate": "datum.input.label", "as": "workload"},
@@ -75,7 +79,7 @@
     {"calculate": "datum.baseline_complete && datum.baseline.wall_mean >= 0.2 ? 1 : 0", "as": "selected"},
     {"calculate": "datum.baseline_complete && datum.baseline.wall_mean < 0.2 ? 1 : 0", "as": "too_fast"},
     {"calculate": "datum.baseline_complete ? 0 : 1", "as": "unresolved"},
-    {"calculate": "indexof(treatments, 'term') >= 0 ? 'Congruence' : 'Checked proofs'", "as": "mode"},
+    {"calculate": "indexof(treatments, 'term') >= 0 ? 'Congruence' : indexof(treatments, 'proof-testing') >= 0 ? 'Full proofs' : indexof(treatments, 'proof-extraction') >= 0 ? 'Proof extraction' : 'Proof recording'", "as": "mode"},
     {"calculate": "datum.conditions[indexof(pluck(datum.conditions,'mode'),datum.mode)]", "as": "candidate"},
     {"calculate": "datum.selected && datum.baseline.complete && isValid(datum.candidate) && datum.candidate.complete && datum.baseline.mean > 0 ? datum.candidate.mean / datum.baseline.mean : null", "as": "ratio"},
     {"calculate": "isValid(datum.ratio) && isFinite(datum.ratio) && datum.ratio >= 0 ? 1 : 0", "as": "valid"},
@@ -90,7 +94,7 @@
     {"calculate": "isValid(datum.minimum_ratio) ? floor(min(1, datum.minimum_ratio) * 10) / 10 : 0", "as": "zoom_min"},
     {"calculate": "max(1.1, min(datum.full_max, 2 * (isValid(datum.median_ratio) ? datum.median_ratio : 1)))", "as": "zoom_target"},
     {"calculate": "pow(10, floor(log(datum.zoom_target) / log(10)) - 1)", "as": "zoom_step"},
-    {"calculate": "min(datum.full_max, ceil(datum.zoom_target / datum.zoom_step) * datum.zoom_step)", "as": "zoom_max"},
+    {"calculate": "datum.full_max <= 1.2 * min(datum.full_max, ceil(datum.zoom_target / datum.zoom_step) * datum.zoom_step) ? datum.full_max : min(datum.full_max, ceil(datum.zoom_target / datum.zoom_step) * datum.zoom_step)", "as": "zoom_max"},
     {"calculate": "datum.metric === 'Runtime' ? datum.zoom_min : 0", "as": "runtime_min_bound"},
     {"extent": "runtime_min_bound", "param": "runtime_min_extent"},
     {"calculate": "datum.metric === 'Runtime' ? datum.zoom_max : 0", "as": "runtime_zoom_bound"},
@@ -229,6 +233,7 @@
       "spacing": 24
     },
     {
+      "transform": [{"filter": "datum.beyond_n > 0"}],
       "facet": {
         "column": {
           "field": "metric",

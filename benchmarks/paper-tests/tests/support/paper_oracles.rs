@@ -1,6 +1,21 @@
 //! Reject conditions without an oracle before registering or executing a trial.
 use std::{collections::BTreeSet, path::Path};
 
+/// Timed recording/extraction modes inherit strict proof oracles and exclusions.
+/// Normalize before registration so generation-only names cannot bypass a
+/// strict expected failure, resource deferral, or unsupported configuration.
+pub fn correctness_modes<'a>(modes: impl IntoIterator<Item = &'a str>) -> BTreeSet<String> {
+    modes
+        .into_iter()
+        .map(|mode| match mode {
+            "proofs" | "proof-extraction" => "proof-testing",
+            "egg-proofs" | "egg-proof-extraction" => "egg-proof-testing",
+            other => other,
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
 pub fn validate(root: &Path, file: &Path, modes: &BTreeSet<String>) -> Result<(), String> {
     let relative = file
         .strip_prefix(root)

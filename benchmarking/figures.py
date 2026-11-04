@@ -12,7 +12,7 @@ import sys
 import tempfile
 from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from time import perf_counter
 from typing import Any, TypedDict
@@ -33,7 +33,14 @@ from .workloads import exclusion_bindings, resolve_files
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "figures/catalog.json"
+DEFAULT_OUTPUT_DIR = ROOT / "figures/output/eval"
 VEGA_PACKAGES = ("vega@6.4.0", "vega-lite@6.4.3", "vega-cli@6.4.0", "canvas@3.2.3")
+PROOF_ORACLES: dict[Treatment, Treatment] = {
+    "proofs": "proof-testing",
+    "proof-extraction": "proof-testing",
+    "egg-proofs": "egg-proof-testing",
+    "egg-proof-extraction": "egg-proof-testing",
+}
 
 
 @dataclass(frozen=True)
@@ -212,7 +219,10 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, FigureConfig]:
     )
     parser.add_argument("--report", type=Path, default=Path(".reports.jsonl"), help="append-only observation cache")
     parser.add_argument(
-        "--output-dir", type=Path, help="common output directory (default: each specification directory)"
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help="output directory (default: this checkout's figures/output/eval)",
     )
     parser.add_argument("--timeout-sec", type=int, default=config.timeout_sec, help="per-process resource guard")
     add_memory_limit_options(parser, default=DEFAULT_MEMORY_LIMIT_BYTES)
@@ -257,6 +267,22 @@ def resolve_figures(config: FigureConfig, names: Sequence[str], invocation_cwd: 
                     if not path.is_file():
                         raise ValueError(f"{figure.name}: not a workload file: {path}")
                     inputs[path] = resolve_files([os.path.relpath(path, invocation_cwd)], invocation_cwd)[0]
+                    file = inputs[path]
+                    inputs[path] = replace(
+                        file,
+                        exclusions=file.exclusions
+                        + tuple(
+                            replace(rule, treatments=aliases)
+                            for rule in file.exclusions
+                            if (
+                                aliases := tuple(
+                                    mode
+                                    for mode, oracle in PROOF_ORACLES.items()
+                                    if oracle in rule.treatments and mode not in rule.treatments
+                                )
+                            )
+                        ),
+                    )
                 paths[path] = None
         files = tuple(inputs[path] for path in paths)
         validate_unique_file_identities(files)
@@ -276,6 +302,8 @@ def render_figures(
 ) -> tuple[Path, ...]:
     """Bind shared sample selections and render Vega through temporary files."""
     from scipy import stats
+
+    from .figure_results import corpus_view_domains, figure_results, latex_results
 
     metadata = {item["file_sha256"]: item for item in inventory["workloads"]}
     label = target.row.label
@@ -301,6 +329,21 @@ def render_figures(
                 key = CacheKey.for_endpoint(endpoint, file)
                 selection = select_observations(grouped, endpoint, file, config.rounds, config.timeout_sec)
                 excluded, rows = selection.exclusion, selection.rows
+                correctness_mode = PROOF_ORACLES.get(treatment, treatment)
+                if correctness_mode != treatment:
+                    # The recording sample keeps its own identity, but inherits
+                    # the strict oracle's reviewed quarantine before plotting.
+                    strict = select_observations(
+                        grouped, replace(endpoint, treatment=correctness_mode), file, config.rounds, config.timeout_sec
+                    )
+                    excluded = excluded or strict.exclusion
+                    if excluded is not None:
+                        rows = ()
+                validation_issue = (
+                    info["validation_failures"].get(f"{key.binary_sha256}/nee", "")
+                    if info and correctness_mode == "proof-testing"
+                    else ""
+                )
                 if excluded is not None:
                     excluded_conditions += 1
                 else:
@@ -316,6 +359,7 @@ def render_figures(
                         "memory_limit_bytes": endpoint.memory_limit_bytes,
                         "selected_row_indices": [row.row_index for row in rows],
                         "validation_failures": info["validation_failures"] if info else {},
+                        "validation_issue": validation_issue,
                         "exclusion": None
                         if excluded is None
                         else {
@@ -325,12 +369,13 @@ def render_figures(
                         },
                     }
                 )
+        t_critical = None if config.rounds == 1 else float(stats.t.ppf(0.975, config.rounds - 1))
         bindings = {
             "target_label": label,
             "timeout_sec": config.timeout_sec,
             "rounds": config.rounds,
             "memory_limit_bytes": config.memory_limit_bytes,
-            "t_critical": None if config.rounds == 1 else float(stats.t.ppf(0.975, config.rounds - 1)),
+            "t_critical": t_critical,
             "selected_inputs": selected_inputs,
             "treatments": figure.treatments,
             "source_blockers": inventory["unavailable_cases"],
@@ -340,14 +385,46 @@ def render_figures(
             if parameter.get("name") in bindings:
                 parameter["value"] = bindings[parameter["name"]]
         spec["data"]["url"] = grouped_report_path(report_path).as_uri()
-        destination = (output_dir or figure.spec.parent).resolve()
+        destination = (output_dir or DEFAULT_OUTPUT_DIR).resolve()
         destination.mkdir(parents=True, exist_ok=True)
         outputs = [destination / f"{figure.name}.{extension}" for extension in ("pdf", "svg", "png")]
+        results = figure_results(figure.name, selected_inputs, grouped, config.rounds, t_critical)
+        if figure.name.startswith("corpus-"):
+            domains = corpus_view_domains(results)
+            results["view_domains"] = domains
+            for parameter in spec.get("params", []):
+                if parameter["name"] == "view_domains":
+                    parameter.pop("expr", None)
+                    parameter["value"] = domains
+            if not any(domain["zoom"] < domain["full"] for domain in domains.values()):
+                # Empty facets still reserve axes/space in Vega-Lite. Omit the
+                # entire optional composition when every value fits the detail.
+                del spec["vconcat"][1]
+        results["provenance"] = {
+            "target": asdict(target.row),
+            "catalog_path": str(config.path),
+            "spec_path": str(figure.spec),
+            "report_path": str(report_path),
+            "timeout_sec": config.timeout_sec,
+            "memory_limit_bytes": config.memory_limit_bytes,
+            "source_blockers": inventory["unavailable_cases"],
+            "view_domains": results.get("view_domains"),
+        }
+        numbers, table = latex_results(results)
         console.print(f"Rendering {figure.name}", markup=False)
         # Render the complete set before replacing any existing image.
         with tempfile.TemporaryDirectory(dir=destination, prefix=f".{figure.name}.") as temporary:
             bound_path = Path(temporary) / f"{figure.name}.bound.vl.json"
             bound_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n")
+            # Export the same selected observations and quarantine decisions,
+            # atomically with the images and their bound specification.
+            for suffix, content in (
+                ("results.json", json.dumps(results, ensure_ascii=False, indent=2, allow_nan=False) + "\n"),
+                ("numbers.tex", numbers),
+                ("table.tex", table),
+            ):
+                exported = Path(temporary) / f"{figure.name}.{suffix}"
+                exported.write_text(content)
             for output in outputs:
                 generated = Path(temporary) / output.name
                 args = [
@@ -364,6 +441,9 @@ def render_figures(
                 if not generated.is_file() or not generated.stat().st_size:
                     raise ValueError(f"renderer produced no image: {output}")
             outputs.append(destination / bound_path.name)
+            outputs.extend(
+                destination / f"{figure.name}.{suffix}" for suffix in ("results.json", "numbers.tex", "table.tex")
+            )
             for output in outputs:
                 os.replace(Path(temporary) / output.name, output)
         for output in outputs:

@@ -8,12 +8,12 @@
       ],
       "treatments": [
         "egg-de",
-        "egg-ee",
         "egg-nee",
-        "egg-oee",
         "off"
       ],
       "checks": [
+        "egg-ee",
+        "egg-oee",
         "term",
         "proof-testing"
       ]
@@ -46,6 +46,24 @@
       "treatments": [
         "off",
         "term"
+      ]
+    },
+    "corpus-proof-recording-cdf": {
+      "spec": "eval/corpus-cdf.vl.json",
+      "files": [
+        "../benchmarks/corpus/eggcc/*.egg",
+        "../benchmarks/corpus/hardboiled/*.egg",
+        "../benchmarks/corpus/misaal/*.egg",
+        "../benchmarks/corpus/churchroad/*.egg",
+        "../benchmarks/corpus/dialegg/*.egg",
+        "../benchmarks/corpus/luminal/*.egg"
+      ],
+      "treatments": [
+        "off",
+        "proofs"
+      ],
+      "checks": [
+        "proof-testing"
       ]
     },
     "corpus-proofs-cdf": {

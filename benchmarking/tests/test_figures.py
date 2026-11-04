@@ -67,6 +67,19 @@ def test_config_help_does_not_expand_files(tmp_path: Path, capsys: pytest.Captur
     assert "--cached" not in text
 
 
+def test_default_output_is_checkout_relative_and_explicit_override_is_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = catalog_fixture(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    args, _ = figures.parse_args(["--config", str(config)])
+    assert args.output_dir == figures.ROOT / "figures/output/eval"
+    overridden, _ = figures.parse_args(["--config", str(config), "--output-dir", "relative-output"])
+    assert overridden.output_dir == Path("relative-output")
+
+
 def test_importing_figures_does_not_import_scipy() -> None:
     result = subprocess.run(
         [sys.executable, "-c", "import sys; import benchmarking.figures; assert 'scipy' not in sys.modules"],
@@ -132,6 +145,8 @@ def test_round_override_collects_shared_runs_and_binds_effective_samples(
     monkeypatch.setattr(collection, "preflight_collection", lambda *_args: None)
     monkeypatch.setattr(collection, "run_process", observe)
     monkeypatch.setattr(figures.subprocess, "run", render)
+    output_dir = tmp_path / "output/eval"
+    monkeypatch.setattr(figures, "DEFAULT_OUTPUT_DIR", output_dir)
     args = ["--config", str(path), "--report", str(report), "--rounds", str(rounds)]
     assert figures.main(args) == 0
     assert len(launched) == rounds  # Both figure views share one collection request.
@@ -146,6 +161,11 @@ def test_round_override_collects_shared_runs_and_binds_effective_samples(
     assert len(launched) == rounds
     assert len(bound_specs) == 12  # Every image is rendered again; observations are reused.
     assert resolved_rounds == [rounds, rounds]
+    assert len(list(output_dir.iterdir())) == 14
+    assert not list(tmp_path.glob("*.pdf"))
+    for name in ("runtime", "memory"):
+        for suffix in ("pdf", "svg", "png", "bound.vl.json", "results.json", "numbers.tex", "table.tex"):
+            assert (output_dir / f"{name}.{suffix}").is_file()
 
 
 @pytest.mark.parametrize("settings", [{"rounds": 0}, {"rounds": True}, {"timeout_sec": -1}, {"experiments": {}}])
@@ -227,8 +247,9 @@ def test_shared_specs_and_inputs_are_read_once(tmp_path: Path, monkeypatch: pyte
 
 
 @pytest.mark.parametrize("raise_error", [False, True])
+@pytest.mark.parametrize("default_output", [False, True])
 def test_temporary_bindings_render_every_time_and_preserve_images_on_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raise_error: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raise_error: bool, default_output: bool
 ) -> None:
     path = catalog_fixture(tmp_path)
     config = figures.load_config(path)
@@ -263,10 +284,12 @@ def test_temporary_bindings_render_every_time_and_preserve_images_on_failure(
     stream = io.StringIO()
     console = Console(file=stream, width=20)
     output_dir = tmp_path / "out[red]"
+    monkeypatch.setattr(figures, "DEFAULT_OUTPUT_DIR", output_dir)
+    output_argument = None if default_output else output_dir
     original = (tmp_path / "chart.vl.json").read_bytes()
     inventory: figures.FigureInventory = {"workloads": [], "unavailable_cases": []}
-    outputs = figures.render_figures(resolved, config, grouped, report, target, output_dir, console, inventory)
-    assert len(outputs) == 8 and len(calls) == 6
+    outputs = figures.render_figures(resolved, config, grouped, report, target, output_argument, console, inventory)
+    assert len(outputs) == 14 and len(calls) == 6
     assert all(str(output) in stream.getvalue().splitlines() for output in outputs)
     assert bindings[0] == bindings[3]
     params = {p["name"]: p["value"] for p in bindings[0]["params"]}
@@ -281,7 +304,7 @@ def test_temporary_bindings_render_every_time_and_preserve_images_on_failure(
     assert all(
         command[-2:] == ["--base", str(tmp_path)] or command[-4:-2] == ["--base", str(tmp_path)] for command in calls
     )
-    figures.render_figures(resolved, config, grouped, report, target, output_dir, console, inventory)
+    figures.render_figures(resolved, config, grouped, report, target, output_argument, console, inventory)
     assert len(calls) == 12
 
     # A failing renderer preserves every previous image, including a corrupt
@@ -290,13 +313,13 @@ def test_temporary_bindings_render_every_time_and_preserve_images_on_failure(
     previous_binding = (output_dir / "runtime.bound.vl.json").read_bytes()
     fail_png = True
     with pytest.raises(figures.subprocess.CalledProcessError if raise_error else ValueError):
-        figures.render_figures(resolved, config, grouped, report, target, output_dir, console, inventory)
+        figures.render_figures(resolved, config, grouped, report, target, output_argument, console, inventory)
     assert outputs[0].read_bytes() == b"rendered"
     assert outputs[2].read_bytes() == b"corrupt"
     assert (output_dir / "runtime.bound.vl.json").read_bytes() == previous_binding
     assert set((output_dir).iterdir()) == set(outputs)
     fail_png = False
-    figures.render_figures(resolved, config, grouped, report, target, output_dir, console, inventory)
+    figures.render_figures(resolved, config, grouped, report, target, output_argument, console, inventory)
     assert outputs[2].read_bytes() == b"rendered"
     assert len(calls) == 21
 

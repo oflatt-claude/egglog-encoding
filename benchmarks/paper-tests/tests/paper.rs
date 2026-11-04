@@ -575,25 +575,19 @@ fn main() {
     .unwrap();
     let mut cells: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
     for figure in catalog["figures"].as_object().unwrap().values() {
-        let modes: BTreeSet<_> = figure["treatments"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .chain(
-                figure
-                    .get("checks")
-                    .and_then(|v| v.as_array())
-                    .into_iter()
-                    .flatten(),
-            )
-            .map(|mode| mode.as_str().unwrap().to_owned())
-            .collect();
-        assert!(
-            !modes.iter().any(|mode| matches!(
-                mode.as_str(),
-                "proofs" | "proof-extraction" | "egg-proofs" | "egg-proof-extraction"
-            )),
-            "the paper catalog must name strict proof-testing or egg-proof-testing; generation-only comparison CLI treatments cannot bypass the strict oracle's exclusions"
+        let modes = paper_oracles::correctness_modes(
+            figure["treatments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .chain(
+                    figure
+                        .get("checks")
+                        .and_then(|v| v.as_array())
+                        .into_iter()
+                        .flatten(),
+                )
+                .map(|mode| mode.as_str().unwrap()),
         );
         for pattern in figure["files"].as_array().unwrap() {
             let pattern = catalog_path
