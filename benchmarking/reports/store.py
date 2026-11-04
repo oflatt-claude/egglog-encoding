@@ -19,7 +19,6 @@ from ..models import (
     BenchmarkEndpoint,
     DisequalityEncoding,
     Exclusion,
-    ExclusionKind,
     FileSpec,
     Status,
     TargetRow,
@@ -29,8 +28,8 @@ from ..models import (
 type ReportSchemaVersion = Literal[8]
 REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 8
 
-type GroupedSchemaVersion = Literal[5]
-GROUPED_SCHEMA_VERSION: Final[GroupedSchemaVersion] = 5
+type GroupedSchemaVersion = Literal[6]
+GROUPED_SCHEMA_VERSION: Final[GroupedSchemaVersion] = 6
 
 type TimingSummarySchemaVersion = Literal[4]
 TIMING_SUMMARY_SCHEMA_VERSION: Final[TimingSummarySchemaVersion] = 4
@@ -106,7 +105,7 @@ class CacheKey:
 
         file_spec = file_spec.for_binary(TREATMENT_SPECS[endpoint.treatment].binary_name)
         return cls(
-            binary_sha256=endpoint.target.binary_sha256_for(endpoint.treatment),
+            binary_sha256=endpoint.binary_sha256,
             file_sha256=file_spec.sha256,
             treatment=endpoint.treatment,
             disequality_encoding=endpoint.disequality_encoding,
@@ -185,22 +184,14 @@ class GroupedReportRecord(TypedDict):
     """Version the grouping structure separately from its shared ReportRecord samples.
 
     Grouping-only changes can regenerate this snapshot without invalidating raw observations.
+    Exclusions use the shared model, indexed by file hash for offline retargeting;
+    they become dictionaries only at the JSON boundary.
     """
 
     grouped_schema_version: GroupedSchemaVersion
     report_schema_version: ReportSchemaVersion
     groups: list[ObservationGroup]
-    exclusions: list[GroupedExclusion]
-
-
-class GroupedExclusion(TypedDict):
-    file_sha256: str
-    treatments: list[Treatment]
-    disequality_encoding: DisequalityEncoding | None
-    kind: ExclusionKind
-    reason: str
-    evidence: str
-    memory_limit_bytes: int | None
+    exclusions: dict[str, tuple[Exclusion, ...]]
 
 
 class GroupedReport:
@@ -209,19 +200,7 @@ class GroupedReport:
     def __init__(self, data: GroupedReportRecord, display_path: str) -> None:
         self.data = data
         self.display_path = display_path
-        excluded: dict[str, list[Exclusion]] = {}
-        for rule in data["exclusions"]:
-            excluded.setdefault(rule["file_sha256"], []).append(
-                Exclusion(
-                    rule["kind"],
-                    rule["reason"],
-                    rule["evidence"],
-                    tuple(rule["treatments"]),
-                    rule["disequality_encoding"],
-                    rule["memory_limit_bytes"],
-                )
-            )
-        self.exclusions_by_input = {identity: tuple(rules) for identity, rules in excluded.items()}
+        self.exclusions_by_input = data["exclusions"]
         self._by_key = {
             CacheKey(**group["key"]): tuple(
                 IndexedRecord(sample["row_index"], datetime.fromisoformat(sample["started_at"]), sample)
@@ -290,7 +269,7 @@ class ReportStore:
     def grouped_report(
         self,
         label_bindings: Mapping[tuple[str, str], str] | None = None,
-        exclusions: Sequence[GroupedExclusion] = (),
+        exclusions: Mapping[str, tuple[Exclusion, ...]] | None = None,
     ) -> GroupedReport:
         """Freeze observations and refresh aliases from any targets resolved this invocation.
 
@@ -325,7 +304,7 @@ class ReportStore:
                 "grouped_schema_version": GROUPED_SCHEMA_VERSION,
                 "report_schema_version": REPORT_SCHEMA_VERSION,
                 "groups": groups,
-                "exclusions": list(exclusions),
+                "exclusions": dict(exclusions or {}),
             },
             self.display_path,
         )
@@ -471,16 +450,19 @@ def serialize_report_record(record: ReportRecord) -> bytes:
 def parse_grouped_report(data: bytes | str, display_path: str) -> GroupedReport:
     """Read the versioned trusted-writer snapshot without touching its source cache."""
 
-    record = cast(GroupedReportRecord, json.loads(data))
-    _require_current_grouped_report(record)
-    return GroupedReport(record, display_path)
+    record = json.loads(data)
+    _require_current_grouped_report(cast(GroupedReportRecord, record))
+    record["exclusions"] = {
+        identity: tuple(Exclusion.from_json(rule) for rule in rules) for identity, rules in record["exclusions"].items()
+    }
+    return GroupedReport(cast(GroupedReportRecord, record), display_path)
 
 
 def serialize_grouped_report(report: GroupedReport) -> bytes:
     """Encode the shared typed snapshot deterministically for files and HTML."""
 
     _require_current_grouped_report(report.data)
-    return json.dumps(report.data, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
+    return json.dumps(report.data, default=asdict, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
 
 
 def _require_current_grouped_report(record: GroupedReportRecord) -> None:

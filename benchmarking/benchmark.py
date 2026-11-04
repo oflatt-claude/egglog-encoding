@@ -208,13 +208,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             console.print(f"  resolved {len(resolved_targets)} targets in {perf_counter() - started:.1f}s")
         comparison = ComparisonSpec(
             baseline=BenchmarkEndpoint(
-                resolved_targets[baseline_request.target],
+                resolved_targets[baseline_request.target].row,
+                resolved_targets[baseline_request.target].binary_sha256_for(baseline_request.treatment),
                 baseline_request.treatment,
                 baseline_request.disequality_encoding,
                 baseline_request.memory_limit_bytes,
             ),
             candidate=BenchmarkEndpoint(
-                resolved_targets[candidate_request.target],
+                resolved_targets[candidate_request.target].row,
+                resolved_targets[candidate_request.target].binary_sha256_for(candidate_request.treatment),
                 candidate_request.treatment,
                 candidate_request.disequality_encoding,
                 candidate_request.memory_limit_bytes,

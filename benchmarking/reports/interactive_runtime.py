@@ -21,16 +21,9 @@ from typing import NotRequired, TypedDict, cast
 from ..engines import TREATMENT_SPECS
 from ..models import (
     BenchmarkEndpoint,
-    BuiltBinary,
     ComparisonSpec,
-    DisequalityEncoding,
-    Exclusion,
-    ExclusionKind,
     FileSpec,
-    ResolvedTarget,
-    TargetRequest,
     TargetRow,
-    Treatment,
 )
 from ..native_memory import NATIVE_LIMIT_BYTES
 from .catalog import CellTone, ReportCatalog, ReportCell, ReportMessage, report_id
@@ -84,31 +77,8 @@ class _BinaryInput(_FileSnapshot):
     binary_name: str
 
 
-class _ExclusionSnapshot(TypedDict):
-    memory_limit_bytes: int | None
-    kind: ExclusionKind
-    reason: str
-    evidence: str
-    treatments: list[Treatment]
-    disequality_encoding: DisequalityEncoding | None
-
-
 class _InitialFile(_FileSnapshot):
     binary_inputs: list[_BinaryInput]
-    exclusions: list[_ExclusionSnapshot]
-
-
-class _EndpointSource(TypedDict):
-    target_source: str
-    target_path: str
-    target_git_ref: str
-    target_git_sha: str
-    target_is_dirty: bool
-    target_label: str | None
-    binary_sha256: str
-    treatment: Treatment
-    disequality_encoding: DisequalityEncoding
-    memory_limit_bytes: int | None
 
 
 class InitialScope(_ScopeRequest):
@@ -116,7 +86,7 @@ class InitialScope(_ScopeRequest):
 
     files: list[_InitialFile]
     memory_limit_bytes: NotRequired[int | None]
-    endpoints: NotRequired[list[_EndpointSource]]
+    endpoints: NotRequired[list[BenchmarkEndpoint]]
 
 
 class InteractiveRuntime:
@@ -138,8 +108,7 @@ class InteractiveRuntime:
         # Fully excluded endpoints have no observation row. Retain the invocation's
         # metadata for them, while existing identities keep latest cached provenance.
         endpoint_choices = {choice.endpoint_id: choice for choice in self._endpoint_choices}
-        for source in initial_scope.get("endpoints", []):
-            endpoint = _endpoint_from_record(source)
+        for endpoint in initial_scope.get("endpoints", []):
             endpoint_id = _endpoint_id(endpoint)
             endpoint_choices.setdefault(endpoint_id, _EndpointChoice(endpoint_id, endpoint))
         self._endpoint_choices = tuple(endpoint_choices.values())
@@ -178,17 +147,7 @@ class InteractiveRuntime:
                 replace(
                     file,
                     binary_inputs=inputs,
-                    exclusions=tuple(
-                        Exclusion(
-                            rule["kind"],
-                            rule["reason"],
-                            rule["evidence"],
-                            tuple(rule["treatments"]),
-                            rule["disequality_encoding"],
-                            rule["memory_limit_bytes"],
-                        )
-                        for rule in logical["exclusions"]
-                    ),
+                    exclusions=store.exclusions_by_input.get(file.sha256, ()),
                 ),
             )
         self._file_choices = tuple(choices.values())
@@ -210,7 +169,9 @@ class InteractiveRuntime:
         """Load the browser's typed grouped snapshot and restore its initial scope."""
 
         store = parse_grouped_report(path.read_bytes(), display_path)
-        return cls(store, cast(InitialScope, json.loads(initial_scope_json)))
+        scope = json.loads(initial_scope_json)
+        scope["endpoints"] = [BenchmarkEndpoint.from_json(endpoint) for endpoint in scope.get("endpoints", [])]
+        return cls(store, cast(InitialScope, scope))
 
     def payload(self) -> dict[str, JsonValue]:
         """Return the last successfully published selectors and catalog."""
@@ -332,8 +293,8 @@ class InteractiveRuntime:
                         "id": choice.endpoint_id,
                         "label": _endpoint_label(choice.endpoint),
                         "target": choice.endpoint.target.display_label,
-                        "git_sha": choice.endpoint.target.row.git_sha,
-                        "dirty": choice.endpoint.target.row.is_dirty,
+                        "git_sha": choice.endpoint.target.git_sha,
+                        "dirty": choice.endpoint.target.is_dirty,
                         "treatment": choice.endpoint.treatment,
                     }
                     for choice in endpoint_choices
@@ -358,7 +319,7 @@ class InteractiveRuntime:
 
 
 def scope_for_comparison(comparison: ComparisonSpec) -> InitialScope:
-    """Serialize one native comparison as the browser runtime's initial scope."""
+    """Build the initial selection using shared endpoints and physical input bindings."""
 
     caps = {
         endpoint.memory_limit_bytes
@@ -374,37 +335,12 @@ def scope_for_comparison(comparison: ComparisonSpec) -> InitialScope:
         "file_ids": [_file_id(file) for file in comparison.files],
         "timeout_sec": comparison.timeout_sec,
         "rounds": comparison.rounds,
-        "endpoints": [
-            {
-                "target_source": endpoint.target.row.source,
-                "target_path": endpoint.target.row.path,
-                "target_git_ref": endpoint.target.row.git_ref,
-                "target_git_sha": endpoint.target.row.git_sha,
-                "target_is_dirty": endpoint.target.row.is_dirty,
-                "target_label": endpoint.target.row.label,
-                "binary_sha256": endpoint.target.binary_sha256_for(endpoint.treatment),
-                "treatment": endpoint.treatment,
-                "disequality_encoding": endpoint.disequality_encoding,
-                "memory_limit_bytes": endpoint.memory_limit_bytes,
-            }
-            for endpoint in (comparison.baseline, comparison.candidate)
-        ],
+        "endpoints": [comparison.baseline, comparison.candidate],
         "files": [
             {
                 "display_path": file.display_path,
                 "absolute_path": str(file.absolute_path),
                 "sha256": file.sha256,
-                "exclusions": [
-                    {
-                        "memory_limit_bytes": rule.memory_limit_bytes,
-                        "kind": rule.kind,
-                        "reason": rule.reason,
-                        "evidence": rule.evidence,
-                        "treatments": list(rule.treatments),
-                        "disequality_encoding": rule.disequality_encoding,
-                    }
-                    for rule in file.exclusions
-                ],
                 "binary_inputs": [
                     {
                         "binary_name": binary_name,
@@ -507,25 +443,21 @@ def _cache_universe(
     return endpoints, files, tuple(sorted(timeouts)), max(counts.values(), default=0)
 
 
-def _endpoint_from_record(record: ReportRecord | _EndpointSource) -> BenchmarkEndpoint:
-    row = TargetRow(
-        record["target_source"],
-        record["target_path"],
-        record["target_git_ref"],
-        record["target_git_sha"],
-        record["target_is_dirty"],
-        record["target_label"],
-    )
-    binary_name = TREATMENT_SPECS[record["treatment"]].binary_name
-    target = ResolvedTarget(
-        TargetRequest(row.label or row.source, row.source, row.label),
-        row,
+def _endpoint_from_record(record: ReportRecord) -> BenchmarkEndpoint:
+    return BenchmarkEndpoint(
+        TargetRow(
+            record["target_source"],
+            record["target_path"],
+            record["target_git_ref"],
+            record["target_git_sha"],
+            record["target_is_dirty"],
+            record["target_label"],
+        ),
         record["binary_sha256"],
-        None,
-        binaries=(BuiltBinary(binary_name, record["binary_sha256"], None),),
-        primary_binary=binary_name,
+        record["treatment"],
+        record["disequality_encoding"],
+        record["memory_limit_bytes"],
     )
-    return BenchmarkEndpoint(target, record["treatment"], record["disequality_encoding"], record["memory_limit_bytes"])
 
 
 def _file_from_record(record: ReportRecord) -> FileSpec:
@@ -550,8 +482,8 @@ def _record_endpoint_id(record: ReportRecord) -> str:
 
 
 def _endpoint_label(endpoint: BenchmarkEndpoint) -> str:
-    dirty = " dirty" if endpoint.target.row.is_dirty else ""
-    short_git_sha = endpoint.target.row.git_sha[:12]
+    dirty = " dirty" if endpoint.target.is_dirty else ""
+    short_git_sha = endpoint.target.git_sha[:12]
     target = endpoint.target.display_label
     git = f"{short_git_sha}{dirty}"
     target_and_git = git if target == short_git_sha else f"{target} · {git}"

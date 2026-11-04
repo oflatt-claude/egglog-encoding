@@ -125,8 +125,8 @@ def _selection_section(
             text_cell(role, role.title()),
             endpoint.target.display_label,
             text_cell(
-                endpoint.target.row.git_sha,
-                _git_display(endpoint.target.row.git_sha, endpoint.target.row.is_dirty),
+                endpoint.target.git_sha,
+                _git_display(endpoint.target.git_sha, endpoint.target.is_dirty),
             ),
             endpoint.treatment,
             endpoint.disequality_encoding
@@ -147,17 +147,15 @@ def _selection_section(
     baseline_engine = TREATMENT_SPECS[comparison.baseline.treatment].binary_name
     candidate_engine = TREATMENT_SPECS[comparison.candidate.treatment].binary_name
     target_changed = (
-        comparison.baseline.target.row.git_sha,
-        comparison.baseline.target.row.is_dirty,
+        comparison.baseline.target.git_sha,
+        comparison.baseline.target.is_dirty,
         comparison.baseline.target.display_label,
     ) != (
-        comparison.candidate.target.row.git_sha,
-        comparison.candidate.target.row.is_dirty,
+        comparison.candidate.target.git_sha,
+        comparison.candidate.target.is_dirty,
         comparison.candidate.target.display_label,
     ) or (
-        baseline_engine == candidate_engine
-        and comparison.baseline.target.binary_sha256_for(comparison.baseline.treatment)
-        != comparison.candidate.target.binary_sha256_for(comparison.candidate.treatment)
+        baseline_engine == candidate_engine and comparison.baseline.binary_sha256 != comparison.candidate.binary_sha256
     )
     encoding_changed = comparison.baseline.disequality_encoding != comparison.candidate.disequality_encoding
     changed = (target_changed, comparison.baseline.treatment != comparison.candidate.treatment, encoding_changed)

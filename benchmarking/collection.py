@@ -207,7 +207,8 @@ def plan_collection(
     for request in requests:
         target = resolved_targets[request.endpoint.target]
         endpoint = BenchmarkEndpoint(
-            target,
+            target.row,
+            target.binary_sha256_for(request.endpoint.treatment),
             request.endpoint.treatment,
             request.endpoint.disequality_encoding,
             request.endpoint.memory_limit_bytes,
@@ -216,23 +217,23 @@ def plan_collection(
         if endpoint not in endpoints:
             endpoints.append(endpoint)
 
-    cells: dict[CacheKey, tuple[BenchmarkEndpoint, FileSpec, SelectedObservations]] = {}
-    for (_target, files), endpoints in scopes.items():
+    cells: dict[CacheKey, tuple[ResolvedTarget, BenchmarkEndpoint, FileSpec, SelectedObservations]] = {}
+    for (target, files), endpoints in scopes.items():
         for file in files:
             for endpoint in endpoints:
                 selection = select_observations(store, endpoint, file, rounds, timeout_sec)
                 if selection.exclusion is not None:
                     continue
                 physical_file = file.for_binary(TREATMENT_SPECS[endpoint.treatment].binary_name)
-                cells.setdefault(CacheKey.for_endpoint(endpoint, file), (endpoint, physical_file, selection))
+                cells.setdefault(CacheKey.for_endpoint(endpoint, file), (target, endpoint, physical_file, selection))
 
     runs_by_target: dict[ResolvedTarget, list[BenchmarkRunPlan]] = {}
-    for endpoint, file, selection in cells.values():
+    for target, endpoint, file, selection in cells.values():
         cached = tuple(row.record["status"] for row in selection.rows)
         missing = rounds if force_run else max(0, rounds - len(cached))
         if not force_run and any(status != "success" for status in cached):
             missing = 0
-        runs_by_target.setdefault(endpoint.target, []).append(
+        runs_by_target.setdefault(target, []).append(
             BenchmarkRunPlan(
                 file=file,
                 treatment=endpoint.treatment,
@@ -479,7 +480,11 @@ def label_has_enough_rows(
 
     for request in endpoint_requests:
         endpoint = BenchmarkEndpoint(
-            target, request.treatment, request.disequality_encoding, request.memory_limit_bytes
+            target.row,
+            target.binary_sha256_for(request.treatment),
+            request.treatment,
+            request.disequality_encoding,
+            request.memory_limit_bytes,
         )
         for file in files_by_endpoint[request] if files_by_endpoint is not None else files:
             selection = select_observations(store, endpoint, file, rounds, timeout_sec)
@@ -567,7 +572,7 @@ def preflight_collection(plan: CollectionPlan, timeout_sec: int) -> None:
         binary_runs = tuple(run for run in missing if TREATMENT_SPECS[run.treatment].binary_name == binary_name)
         binary_path = target.binary_path_for(binary_runs[0].treatment)
         if binary_path is None:
-            raise ValueError(f"target {target.display_label} needs a fresh {binary_name} binary")
+            raise ValueError(f"target {target.row.display_label} needs a fresh {binary_name} binary")
         if binary_name not in ("egglog-experimental", "egg-math-benchmark", "slotted-reference"):
             continue
         required_outputs = []
@@ -597,7 +602,7 @@ def preflight_collection(plan: CollectionPlan, timeout_sec: int) -> None:
             bound,
         )
         if result.status != "success":
-            message = f"target {target.display_label} {binary_name} preflight failed"
+            message = f"target {target.row.display_label} {binary_name} preflight failed"
             if result.error is not None:
                 message = f"{message}: {result.error.message}"
             raise ValueError(message)
@@ -664,7 +669,7 @@ def emit_collection_plan(console: Console, plan: CollectionPlan, *, timeout_sec:
             action_text += f" · {samples.pop()} samples/condition"
         if timeout_sec is not None:
             action_text += f" · timeout {timeout_sec}s"
-    console.print(Text(f"{plan.target.display_label}: {cache_text} · {action_text}"))
+    console.print(Text(f"{plan.target.row.display_label}: {cache_text} · {action_text}"))
 
 
 def flat_report_record(
@@ -734,7 +739,14 @@ class CollectionETAColumn(ProgressColumn):
                 self.hints[identity] = (order, wall)
         for target, run in runs:
             key = CacheKey.for_endpoint(
-                BenchmarkEndpoint(target, run.treatment, run.disequality_encoding, run.memory_limit_bytes), run.file
+                BenchmarkEndpoint(
+                    target.row,
+                    target.binary_sha256_for(run.treatment),
+                    run.treatment,
+                    run.disequality_encoding,
+                    run.memory_limit_bytes,
+                ),
+                run.file,
             )
             self.remaining[key] = run.missing_observations
             self.durations[key] = [
@@ -819,7 +831,14 @@ def collect_rows(
         for round_index in range(max_deficit):
             for target, run in runs:
                 key = CacheKey.for_endpoint(
-                    BenchmarkEndpoint(target, run.treatment, run.disequality_encoding, run.memory_limit_bytes), run.file
+                    BenchmarkEndpoint(
+                        target.row,
+                        target.binary_sha256_for(run.treatment),
+                        run.treatment,
+                        run.disequality_encoding,
+                        run.memory_limit_bytes,
+                    ),
+                    run.file,
                 )
                 if round_index >= run.missing_observations or key in stopped:
                     continue
@@ -830,7 +849,7 @@ def collect_rows(
                     run.disequality_encoding,
                 )
                 if len(plans) > 1:
-                    label = f"{target.display_label} · {label}"
+                    label = f"{target.row.display_label} · {label}"
                 estimate.active = (key, progress.tasks[0].elapsed or 0.0)
                 progress.update(
                     process_task,
@@ -840,7 +859,7 @@ def collect_rows(
                 binary_path = target.binary_path_for(run.treatment)
                 if binary_path is None:
                     raise ValueError(
-                        f"target {target.display_label} needs a fresh "
+                        f"target {target.row.display_label} needs a fresh "
                         f"{TREATMENT_SPECS[run.treatment].binary_name} binary"
                     )
                 if verbose and not console.is_terminal:
@@ -888,7 +907,7 @@ def collect_rows(
                             f"{format_timing_result(observation.result)} · {estimate.render(progress.tasks[0])}"
                         )
                     )
-    target_label = plans[0].target.display_label if len(plans) == 1 else f"{len(plans)} targets"
+    target_label = plans[0].target.row.display_label if len(plans) == 1 else f"{len(plans)} targets"
     console.print(
         Text(f"{target_label}: collected {completed_observations} fresh runs · {_status_counts_text(result_counts)}")
     )

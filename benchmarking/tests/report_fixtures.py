@@ -151,6 +151,7 @@ def make_endpoint(
     """Construct one resolved endpoint used by pair-report tests."""
 
     return models.BenchmarkEndpoint(
-        make_target(target_label=target_label, binary_sha256=binary_sha256),
+        make_target(target_label=target_label).row,
+        binary_sha256,
         treatment,
     )

@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from benchmarking import collection, models, nightly, processes, targets, workloads
-from benchmarking.reports.store import GroupedExclusion, ReportStore
+from benchmarking.reports.store import ReportStore, parse_grouped_report
 
 from .report_fixtures import make_target, make_timing_summary
 
@@ -56,7 +56,9 @@ def nightly_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, A
     monkeypatch.setattr(workloads, "resolve_files", lambda *_args: (file,))
     monkeypatch.setattr(collection, "resolve_requests", resolve)
     monkeypatch.setattr(
-        collection, "preflight_collection", lambda plan, *_args: case["preflights"].append(plan.target.display_label)
+        collection,
+        "preflight_collection",
+        lambda plan, *_args: case["preflights"].append(plan.target.row.display_label),
     )
     monkeypatch.setattr(collection, "run_process", measure)
     monkeypatch.setattr(targets, "run_text", lambda command, *_a, **_k: case["fetches"].append(command))
@@ -67,17 +69,13 @@ def test_collects_checked_and_off_once_and_renders_cached_reports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nightly_case: dict[str, Any]
 ) -> None:
     output = tmp_path / "output"
-    exclusions: list[GroupedExclusion] = [
-        {
-            "file_sha256": "sha256:archived-file",
-            "treatments": ["term"],
-            "disequality_encoding": "nee",
-            "kind": "expected-failure",
-            "reason": "known count bug outside initial nightly selection",
-            "evidence": "issue",
-            "memory_limit_bytes": None,
-        }
-    ]
+    exclusions = {
+        "sha256:archived-file": (
+            models.Exclusion(
+                "expected-failure", "known count bug outside initial nightly selection", "issue", ("term",), "nee"
+            ),
+        )
+    }
     monkeypatch.setattr(workloads, "exclusion_bindings", lambda _files: exclusions)
     assert nightly.main([str(output)]) == 0
     assert nightly_case["builds"] == ["branch", "main"]
@@ -99,9 +97,9 @@ def test_collects_checked_and_off_once_and_renders_cached_reports(
     assert store.path.read_bytes() == before
     assert 'id="report-envelope"' in (output / "index.html").read_text()
     assert "proof-testing" in (output / "branch-vs-main.md").read_text()
-    grouped = json.loads((output / "index-grouped.json").read_text())
-    assert grouped["groups"]
-    assert grouped["exclusions"] == exclusions
+    grouped = parse_grouped_report((output / "index-grouped.json").read_bytes(), "index-grouped.json")
+    assert grouped.data["groups"]
+    assert grouped.exclusions_by_input == exclusions
 
 
 @pytest.mark.parametrize("after_rows", [0, 1, 2])
@@ -131,7 +129,7 @@ def test_unsupported_main_is_fatal_and_preserves_branch_rows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nightly_case: dict[str, Any]
 ) -> None:
     def preflight(plan: collection.CollectionPlan, *_args: Any) -> None:
-        if plan.target.display_label == "main":
+        if plan.target.row.display_label == "main":
             raise ValueError("main does not support --memory-limit-bytes")
 
     monkeypatch.setattr(collection, "preflight_collection", preflight)

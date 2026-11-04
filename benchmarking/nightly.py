@@ -58,8 +58,15 @@ def _render(
     """Render the collected snapshot without resolving targets or collecting rows."""
     target = resolved_targets["branch"]
     comparison = ComparisonSpec(
-        BenchmarkEndpoint(target, "off", memory_limit_bytes=args.memory_limit_bytes),
-        BenchmarkEndpoint(target, "proof-testing", memory_limit_bytes=args.memory_limit_bytes),
+        BenchmarkEndpoint(
+            target.row, target.binary_sha256_for("off"), "off", memory_limit_bytes=args.memory_limit_bytes
+        ),
+        BenchmarkEndpoint(
+            target.row,
+            target.binary_sha256_for("proof-testing"),
+            "proof-testing",
+            memory_limit_bytes=args.memory_limit_bytes,
+        ),
         files,
         args.rounds,
         args.timeout_sec,
@@ -82,9 +89,17 @@ def _render(
         else:
             comparison = ComparisonSpec(
                 BenchmarkEndpoint(
-                    resolved_targets["main"], "proof-testing", memory_limit_bytes=args.memory_limit_bytes
+                    resolved_targets["main"].row,
+                    resolved_targets["main"].binary_sha256_for("proof-testing"),
+                    "proof-testing",
+                    memory_limit_bytes=args.memory_limit_bytes,
                 ),
-                BenchmarkEndpoint(target, "proof-testing", memory_limit_bytes=args.memory_limit_bytes),
+                BenchmarkEndpoint(
+                    target.row,
+                    target.binary_sha256_for("proof-testing"),
+                    "proof-testing",
+                    memory_limit_bytes=args.memory_limit_bytes,
+                ),
                 files,
                 args.rounds,
                 args.timeout_sec,

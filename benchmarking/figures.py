@@ -292,7 +292,12 @@ def render_figures(
             info = metadata.get(file.sha256)
             for treatment in figure.treatments:
                 physical = file.for_binary(TREATMENT_SPECS[treatment].binary_name)
-                endpoint = BenchmarkEndpoint(target, treatment, memory_limit_bytes=config.memory_limit_bytes)
+                endpoint = BenchmarkEndpoint(
+                    target.row,
+                    target.binary_sha256_for(treatment),
+                    treatment,
+                    memory_limit_bytes=config.memory_limit_bytes,
+                )
                 key = CacheKey.for_endpoint(endpoint, file)
                 selection = select_observations(grouped, endpoint, file, config.rounds, config.timeout_sec)
                 excluded, rows = selection.exclusion, selection.rows

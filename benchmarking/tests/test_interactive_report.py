@@ -6,7 +6,7 @@ import ast
 import base64
 import importlib.util
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -170,13 +170,13 @@ def test_unobserved_excluded_endpoint_keeps_invocation_metadata_without_syntheti
     else:
         path.write_text("")
     before = path.read_bytes()
-    store = ReportStore(path).grouped_report()
     file = models.FileSpec(
         "file.egg",
         tmp_path / "file.egg",
         "sha256:file",
         exclusions=(models.Exclusion("expected-failure", "known bug", "issue", ("term",)),),
     )
+    store = ReportStore(path).grouped_report(exclusions={file.sha256: file.exclusions})
     comparison = models.ComparisonSpec(
         make_endpoint(target_label="invocation baseline"),
         make_endpoint(target_label="unobserved candidate", binary_sha256="sha256:unobserved", treatment="term"),
@@ -189,6 +189,9 @@ def test_unobserved_excluded_endpoint_keeps_invocation_metadata_without_syntheti
     initial = runtime.initial_payload(comparison)
     assert "invocation baseline" in json.dumps(initial)
     assert "unobserved candidate" in json.dumps(initial)
+    grouped_path = tmp_path / "grouped.json"
+    grouped_path.write_bytes(serialize_grouped_report(store))
+    runtime = InteractiveRuntime.from_path(grouped_path, str(path), json.dumps(scope, default=asdict))
     updated = runtime.apply(scope)
     assert ("cached baseline" if cached_baseline else "invocation baseline") in json.dumps(updated)
     assert "unobserved candidate" in json.dumps(updated)
@@ -213,7 +216,7 @@ def test_scope_request_rejects_invalid_field_types_without_changing_report(tmp_p
     )
 
     for request, message in invalid_requests:
-        result = json.loads(runtime.apply_json(json.dumps(request)))
+        result = json.loads(runtime.apply_json(json.dumps(request, default=asdict)))
         assert result == {"ok": False, "error": message}
         assert runtime.payload() == payload
 
@@ -298,8 +301,8 @@ def test_initial_html_uses_native_provenance_file_order_and_selector_labels(tmp_
         git_sha: str,
         dirty: bool,
     ) -> models.BenchmarkEndpoint:
-        row = replace(endpoint.target.row, label=label, git_sha=git_sha, is_dirty=dirty)
-        return replace(endpoint, target=replace(endpoint.target, row=row))
+        row = replace(endpoint.target, label=label, git_sha=git_sha, is_dirty=dirty)
+        return replace(endpoint, target=row)
 
     baseline = native_endpoint(
         cached_comparison.baseline,
@@ -365,15 +368,8 @@ def test_grouped_runtime_restores_logical_workload_physical_input_bindings(tmp_p
     )
     baseline = make_endpoint(binary_sha256="sha256:baseline", treatment="off")
     if native_only:
-        baseline = models.BenchmarkEndpoint(
-            replace(baseline.target, binaries=(models.BuiltBinary("egg-ee", "sha256:baseline", None),)),
-            "egg-ee",
-        )
-    target = replace(
-        baseline.target,
-        binaries=(models.BuiltBinary("egg-de", "sha256:native", None),),
-    )
-    candidate = models.BenchmarkEndpoint(target, "egg-de")
+        baseline = replace(baseline, treatment="egg-ee")
+    candidate = replace(baseline, binary_sha256="sha256:native", treatment="egg-de")
     comparison = models.ComparisonSpec(baseline, candidate, (logical,), 1, 120)
     path = tmp_path / "report.jsonl"
     records: list[ReportRecord] = []
@@ -381,7 +377,7 @@ def test_grouped_runtime_restores_logical_workload_physical_input_bindings(tmp_p
         record = make_record(
             len(records),
             started_at="2026-09-30T00:00:00Z",
-            binary_sha256=endpoint.target.binary_sha256_for(endpoint.treatment),
+            binary_sha256=endpoint.binary_sha256,
             treatment=endpoint.treatment,
             file_sha256=file.sha256,
         )
@@ -484,8 +480,8 @@ def _interactive_case(
         record = make_record(
             len(records),
             started_at=f"2026-07-17T12:{len(records):02d}:00Z",
-            target_label=endpoint.target.row.label,
-            binary_sha256=endpoint.target.binary_sha256,
+            target_label=endpoint.target.label,
+            binary_sha256=endpoint.binary_sha256,
             file_sha256=file.sha256,
             treatment=endpoint.treatment,
             timeout_sec=timeout_sec,
@@ -559,17 +555,13 @@ def test_cap_scoped_exclusion_guards_fresh_work_in_each_report(tmp_path: Path) -
         )
     before = path.read_bytes()
     snapshot = store.grouped_report(
-        exclusions=[
-            {
-                "file_sha256": "sha256:file",
-                "treatments": ["proof-testing"],
-                "disequality_encoding": None,
-                "kind": "resource",
-                "reason": "recorded cap stop",
-                "evidence": "exit 86",
-                "memory_limit_bytes": 10 * 1024**3,
-            }
-        ]
+        exclusions={
+            "sha256:file": (
+                models.Exclusion(
+                    "resource", "recorded cap stop", "exit 86", ("proof-testing",), memory_limit_bytes=10 * 1024**3
+                ),
+            )
+        }
     )
     baseline, candidate = make_endpoint(), make_endpoint(treatment="proof-testing")
     file = models.FileSpec("file.egg", tmp_path / "file.egg", "sha256:file")

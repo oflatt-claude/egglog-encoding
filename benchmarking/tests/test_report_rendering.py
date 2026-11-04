@@ -86,8 +86,8 @@ def test_selection_uses_treatment_from_the_comparison(tmp_path: Path) -> None:
 
 def test_selection_warns_when_same_engine_binary_and_treatment_both_change(tmp_path: Path) -> None:
     comparison = models.ComparisonSpec(
-        models.BenchmarkEndpoint(make_target(binary_sha256="sha256:before"), "off"),
-        models.BenchmarkEndpoint(make_target(binary_sha256="sha256:after"), "proofs"),
+        make_endpoint(binary_sha256="sha256:before", treatment="off"),
+        make_endpoint(binary_sha256="sha256:after", treatment="proofs"),
         (models.FileSpec("file.egg", tmp_path / "file.egg", "sha256:file"),),
         1,
         120,
@@ -114,8 +114,8 @@ def test_selection_does_not_treat_cross_engine_binary_difference_as_target_chang
         "egglog-experimental",
     )
     comparison = models.ComparisonSpec(
-        models.BenchmarkEndpoint(target, "egg-proofs"),
-        models.BenchmarkEndpoint(target, "proofs"),
+        models.BenchmarkEndpoint(target.row, target.binary_sha256_for("egg-proofs"), "egg-proofs"),
+        models.BenchmarkEndpoint(target.row, target.binary_sha256_for("proofs"), "proofs"),
         (models.FileSpec("file.egg", tmp_path / "file.egg", "sha256:file"),),
         1,
         120,
@@ -343,13 +343,13 @@ def test_ruleset_edges_label_empty_names_and_break_equal_deltas_by_name(tmp_path
         make_record(
             0,
             started_at="2026-07-17T12:00:00Z",
-            binary_sha256=baseline.target.binary_sha256,
+            binary_sha256=baseline.binary_sha256,
             timing_summary=make_timing_summary(unchanged, native_rebuild_ns=0),
         ),
         make_record(
             1,
             started_at="2026-07-17T12:00:01Z",
-            binary_sha256=candidate.target.binary_sha256,
+            binary_sha256=candidate.binary_sha256,
             treatment="proofs",
             wall_sec=1.2,
             timing_summary=make_timing_summary(
@@ -411,7 +411,7 @@ def test_negative_residual_keeps_an_explicit_warning(tmp_path: Path) -> None:
         make_record(
             0,
             started_at="2026-07-17T12:00:00Z",
-            binary_sha256=baseline.target.binary_sha256,
+            binary_sha256=baseline.binary_sha256,
             treatment=baseline.treatment,
             wall_sec=1.0,
             timing_summary=make_timing_summary(
@@ -426,7 +426,7 @@ def test_negative_residual_keeps_an_explicit_warning(tmp_path: Path) -> None:
         make_record(
             1,
             started_at="2026-07-17T12:00:01Z",
-            binary_sha256=candidate.target.binary_sha256,
+            binary_sha256=candidate.binary_sha256,
             treatment=candidate.treatment,
             wall_sec=1.2,
             timing_summary=make_timing_summary(
@@ -503,13 +503,13 @@ def test_missing_rss_is_one_explicit_unavailable_summary(tmp_path: Path) -> None
         make_record(
             0,
             started_at="2026-07-17T12:00:00Z",
-            binary_sha256=baseline.target.binary_sha256,
+            binary_sha256=baseline.binary_sha256,
             treatment=baseline.treatment,
         ),
         make_record(
             1,
             started_at="2026-07-17T12:00:01Z",
-            binary_sha256=candidate.target.binary_sha256,
+            binary_sha256=candidate.binary_sha256,
             treatment=candidate.treatment,
         ),
     )
@@ -588,10 +588,10 @@ def _pair_case(tmp_path: Path) -> tuple[Path, models.ComparisonSpec]:
                     make_record(
                         len(records),
                         started_at=f"2026-07-17T12:00:{len(records):02d}Z",
-                        binary_sha256=endpoint.target.binary_sha256,
+                        binary_sha256=endpoint.binary_sha256,
                         file_sha256=file.sha256,
                         treatment=endpoint.treatment,
-                        target_label=endpoint.target.row.label,
+                        target_label=endpoint.target.label,
                         wall_sec=wall,
                         max_rss_bytes=rss_values[file_order] + round_index * 1_000_000,
                         timing_summary=make_timing_summary(
@@ -652,10 +652,10 @@ def _six_file_pair_case(tmp_path: Path) -> tuple[Path, models.ComparisonSpec]:
                     make_record(
                         len(records),
                         started_at=f"2026-07-17T12:{len(records):02d}:00Z",
-                        binary_sha256=endpoint.target.binary_sha256,
+                        binary_sha256=endpoint.binary_sha256,
                         file_sha256=file.sha256,
                         treatment=endpoint.treatment,
-                        target_label=endpoint.target.row.label,
+                        target_label=endpoint.target.label,
                         wall_sec=baseline_wall * wall_factor + round_index * 0.01,
                         max_rss_bytes=(100 + file_order * 20 + endpoint_order * 10 + round_index) * 1_000_000,
                         timing_summary=make_timing_summary(

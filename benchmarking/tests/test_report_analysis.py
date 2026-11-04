@@ -22,7 +22,8 @@ def _endpoint(
     treatment: models.Treatment = "off",
 ) -> models.BenchmarkEndpoint:
     return models.BenchmarkEndpoint(
-        make_target(target_label=label, binary_sha256=binary_sha256),
+        make_target(target_label=label).row,
+        binary_sha256,
         treatment,
     )
 

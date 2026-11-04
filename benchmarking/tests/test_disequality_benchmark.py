@@ -17,8 +17,8 @@ def test_encoding_endpoints_and_cached_results_are_distinct(tmp_path: Path) -> N
     before, after = benchmark.endpoint_requests(args)
     assert (before.disequality_encoding, after.disequality_encoding) == ("nee", "ee")
     target = make_target()
-    baseline = models.BenchmarkEndpoint(target, "off", "nee")
-    candidate = models.BenchmarkEndpoint(target, "off", "ee")
+    baseline = models.BenchmarkEndpoint(target.row, target.binary_sha256_for("off"), "off", "nee")
+    candidate = models.BenchmarkEndpoint(target.row, target.binary_sha256_for("off"), "off", "ee")
     file = models.FileSpec("test.egg", tmp_path / "test.egg", "sha256:file")
     models.ComparisonSpec(baseline, candidate, (file,), 1, 120)
     assert CacheKey.for_endpoint(baseline, file) != CacheKey.for_endpoint(candidate, file)
@@ -61,8 +61,8 @@ def test_encoding_and_treatment_change_warns(tmp_path: Path) -> None:
 
     target = make_target()
     comparison = models.ComparisonSpec(
-        models.BenchmarkEndpoint(target, "off", "nee"),
-        models.BenchmarkEndpoint(target, "proofs", "ee"),
+        models.BenchmarkEndpoint(target.row, target.binary_sha256_for("off"), "off", "nee"),
+        models.BenchmarkEndpoint(target.row, target.binary_sha256_for("proofs"), "proofs", "ee"),
         (models.FileSpec("file.egg", tmp_path / "file.egg", "sha256:file"),),
         1,
         120,

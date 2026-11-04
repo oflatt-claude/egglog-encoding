@@ -7,10 +7,10 @@ outcomes, persisted records, and derived report rows live beside their owners.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from .engines import TREATMENT_SPECS, Treatment
 from .native_memory import NATIVE_LIMIT_BYTES
@@ -30,10 +30,25 @@ class TargetRow:
     is_dirty: bool
     label: str | None = None
 
+    @property
+    def display_label(self) -> str:
+        if self.label:
+            return self.label
+        if self.git_ref != "HEAD":
+            return self.git_ref
+        if self.git_sha:
+            return self.git_sha[:12]
+        return Path(self.path).name
+
 
 @dataclass(frozen=True)
 class Exclusion:
-    """A reviewed configuration exclusion, attached to its matched logical input."""
+    """A reviewed reason to exclude an input/configuration from verified results.
+
+    Rules come from benchmarks/ignore.json: known correctness failures,
+    unsupported configurations, or resource deferrals under the recorded cap.
+    Snapshots associate these same rules with file hashes for offline reports.
+    """
 
     kind: ExclusionKind
     reason: str
@@ -41,6 +56,14 @@ class Exclusion:
     treatments: tuple[Treatment, ...] = ()
     disequality_encoding: DisequalityEncoding | None = None
     memory_limit_bytes: int | None = None
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> Exclusion:
+        """Restore immutable selectors, ignoring path/test metadata in ignore entries."""
+
+        values = {field.name: data[field.name] for field in fields(cls) if field.name in data}
+        values["treatments"] = tuple(values.get("treatments", ()))
+        return cls(**values)
 
 
 @dataclass(frozen=True)
@@ -132,7 +155,7 @@ class ResolvedTarget:
                 return binary.sha256
         if binary_name == "egglog-experimental" and self.primary_binary in (None, "egglog-experimental"):
             return self.binary_sha256
-        raise ValueError(f"target {self.display_label} has no {binary_name} binary")
+        raise ValueError(f"target {self.row.display_label} has no {binary_name} binary")
 
     def binary_path_for(self, treatment: Treatment) -> Path | None:
         binary_name = TREATMENT_SPECS[treatment].binary_name
@@ -141,17 +164,7 @@ class ResolvedTarget:
                 return binary.path
         if binary_name == "egglog-experimental" and self.primary_binary in (None, "egglog-experimental"):
             return self.binary_path
-        raise ValueError(f"target {self.display_label} has no {binary_name} binary")
-
-    @property
-    def display_label(self) -> str:
-        if self.row.label:
-            return self.row.label
-        if self.row.git_ref != "HEAD":
-            return self.row.git_ref
-        if self.row.git_sha:
-            return self.row.git_sha[:12]
-        return Path(self.row.path).name
+        raise ValueError(f"target {self.row.display_label} has no {binary_name} binary")
 
 
 @dataclass(frozen=True)
@@ -174,9 +187,14 @@ class EndpointRequest:
 
 @dataclass(frozen=True)
 class BenchmarkEndpoint:
-    """One resolved target/treatment addressed by benchmark cache rows."""
+    """Resolved provenance and treatment shared by collection and offline reports.
 
-    target: ResolvedTarget
+    Executable paths and build requests stay with the collector's ResolvedTarget;
+    an endpoint needs only the selected executable's hash, including without runs.
+    """
+
+    target: TargetRow
+    binary_sha256: str
     treatment: Treatment
     disequality_encoding: DisequalityEncoding = "nee"
     memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
@@ -185,12 +203,18 @@ class BenchmarkEndpoint:
         if not TREATMENT_SPECS[self.treatment].allocator_limit:
             object.__setattr__(self, "memory_limit_bytes", None)
 
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> BenchmarkEndpoint:
+        """Restore the nested provenance after the standard dataclass JSON encoding."""
+
+        return cls(**{**data, "target": TargetRow(**data["target"])})
+
     @property
     def cache_identity(self) -> tuple[str, Treatment, DisequalityEncoding]:
         """Return the endpoint coordinates shared by all of its file keys."""
 
         return (
-            self.target.binary_sha256_for(self.treatment),
+            self.binary_sha256,
             self.treatment,
             self.disequality_encoding,
         )

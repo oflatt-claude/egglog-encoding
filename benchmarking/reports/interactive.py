@@ -16,6 +16,7 @@ import re
 import tempfile
 import webbrowser
 from contextlib import suppress
+from dataclasses import asdict
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -131,7 +132,7 @@ def _interactive_page(
         "python_modules": _python_module_sources(),
     }
     encoded_envelope = base64.b64encode(
-        json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode()
+        json.dumps(envelope, default=asdict, ensure_ascii=False, separators=(",", ":")).encode()
     ).decode("ascii")
     css = _style_text(eval_live.css() + "\n" + _asset_path("interactive.css").read_text(encoding="utf-8"))
     eval_live_js = _script_text(eval_live.js())

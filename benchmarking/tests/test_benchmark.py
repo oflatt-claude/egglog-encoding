@@ -271,8 +271,8 @@ def test_pair_cli_rejects_identical_endpoints_before_target_resolution() -> None
 
 def test_comparison_permits_shared_binary_across_different_treatments() -> None:
     target = make_target(binary_sha256="sha256:shared")
-    baseline = models.BenchmarkEndpoint(target, "off")
-    candidate = models.BenchmarkEndpoint(target, "proofs")
+    baseline = models.BenchmarkEndpoint(target.row, target.binary_sha256_for("off"), "off")
+    candidate = models.BenchmarkEndpoint(target.row, target.binary_sha256_for("proofs"), "proofs")
 
     comparison = models.ComparisonSpec(baseline, candidate, (FILE_SPEC,), 2, 120)
 
@@ -283,7 +283,7 @@ def test_comparison_permits_shared_binary_across_different_treatments() -> None:
 
 def test_comparison_rejects_identical_cache_endpoints() -> None:
     target = make_target(binary_sha256="sha256:shared")
-    endpoint = models.BenchmarkEndpoint(target, "proofs")
+    endpoint = models.BenchmarkEndpoint(target.row, target.binary_sha256_for("proofs"), "proofs")
 
     with pytest.raises(ValueError, match="baseline and candidate endpoints must be different"):
         models.ComparisonSpec(endpoint, endpoint, (FILE_SPEC,), 1, 120)
@@ -364,7 +364,7 @@ def test_main_preflights_both_fresh_targets_before_collecting(
     preflighted: list[str] = []
 
     def fail_new_preflight(plan: collection.CollectionPlan, _timeout: int) -> None:
-        label = plan.target.display_label
+        label = plan.target.row.display_label
         preflighted.append(label)
         if label == "new":
             raise ValueError("target new does not support --timing-summary")

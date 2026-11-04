@@ -355,7 +355,7 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
     binary_path = target.binary_path_for(request.treatment)
     binary_sha256 = target.binary_sha256_for(request.treatment)
     if binary_path is None:
-        raise ValueError(f"target {target.display_label} needs a profiling binary")
+        raise ValueError(f"target {target.row.display_label} needs a profiling binary")
     checkout_path = Path(target.row.path)
     native_limit = TREATMENT_SPECS[request.treatment].allocator_limit
     workload = workload_command(binary_path, request.file, request.treatment, request.disequality_encoding)

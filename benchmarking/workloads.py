@@ -17,7 +17,6 @@ from pathlib import Path
 
 from .engines import TREATMENT_SPECS, TREATMENTS
 from .models import Exclusion, FileSpec, validate_unique_file_identities
-from .reports.store import GroupedExclusion
 from .targets import sha256_file
 
 DEFAULT_WORKLOADS = (
@@ -125,16 +124,7 @@ def resolve_files(
                 absolute_path=absolute_path,
                 sha256=sha256_file(absolute_path),
                 exclusions=tuple(
-                    Exclusion(
-                        rule["kind"],
-                        rule["reason"],
-                        rule["evidence"],
-                        tuple(rule.get("treatments", [])),
-                        rule.get("disequality_encoding"),
-                        rule.get("memory_limit_bytes"),
-                    )
-                    for rule in rules
-                    if logical_path in matched_paths[rule["file"]]
+                    Exclusion.from_json(rule) for rule in rules if logical_path in matched_paths[rule["file"]]
                 ),
             )
         )
@@ -160,7 +150,7 @@ def resolve_files(
     return resolved
 
 
-def exclusion_bindings(files: Sequence[FileSpec]) -> list[GroupedExclusion]:
+def exclusion_bindings(files: Sequence[FileSpec]) -> dict[str, tuple[Exclusion, ...]]:
     """Freeze the current policy for every excluded input, including later retargeting.
 
     Exclusions belong to the invocation's grouped snapshot, never synthetic raw
@@ -176,29 +166,14 @@ def exclusion_bindings(files: Sequence[FileSpec]) -> list[GroupedExclusion]:
     ]
     suffixes = {specification.input_suffix for specification in TREATMENT_SPECS.values()}
     for rule in json.loads(IGNORE_FILE.read_text()):
-        exclusion = Exclusion(
-            rule["kind"],
-            rule["reason"],
-            rule["evidence"],
-            tuple(rule.get("treatments", [])),
-            rule.get("disequality_encoding"),
-            rule.get("memory_limit_bytes"),
-        )
+        exclusion = Exclusion.from_json(rule)
         paths = glob.glob(str(IGNORE_FILE.parent / rule["file"]), recursive=True)
         physical = {Path(path).with_suffix(suffix) for path in paths for suffix in suffixes}
         entries.extend((sha256_file(path), exclusion) for path in sorted(physical) if path.is_file())
-    return [
-        GroupedExclusion(
-            file_sha256=identity,
-            treatments=list(rule.treatments),
-            disequality_encoding=rule.disequality_encoding,
-            memory_limit_bytes=rule.memory_limit_bytes,
-            kind=rule.kind,
-            reason=rule.reason,
-            evidence=rule.evidence,
-        )
-        for identity, rule in dict.fromkeys(entries)
-    ]
+    bindings: dict[str, list[Exclusion]] = {}
+    for identity, rule in dict.fromkeys(entries):
+        bindings.setdefault(identity, []).append(rule)
+    return {identity: tuple(rules) for identity, rules in bindings.items()}
 
 
 def _egglog_tokens(source: str) -> Iterator[str]:

@@ -26,7 +26,7 @@ def endpoint(
     target: models.ResolvedTarget,
     treatment: models.Treatment = "off",
 ) -> models.BenchmarkEndpoint:
-    return models.BenchmarkEndpoint(target, treatment)
+    return models.BenchmarkEndpoint(target.row, target.binary_sha256_for(treatment), treatment)
 
 
 def stable_file_spec(tmp_path: Path) -> models.FileSpec:
@@ -878,7 +878,7 @@ def test_collected_row_uses_selected_engine_binary_and_hash(
         ROOT / "egglog-experimental/tests/math-microbenchmark-rational.egg",
         "sha256:math",
     )
-    selected_endpoint = models.BenchmarkEndpoint(target, "egg")
+    selected_endpoint = models.BenchmarkEndpoint(target.row, target.binary_sha256_for("egg"), "egg")
     requests = (collection.BenchmarkRequest(models.EndpointRequest(target.request, "egg"), (file_spec,)),)
     success = processes.TimingResult("success", processes.TimingRow(wall_sec=0.5), None)
     observed_binaries: list[Path] = []

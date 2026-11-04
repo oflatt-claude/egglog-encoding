@@ -128,7 +128,9 @@ def test_native_cache_and_plan_use_physical_input_identity(tmp_path: Path) -> No
         "sha256:egglog",
         binary_inputs=tuple((method, native) for method in METHODS),
     )
-    endpoints = tuple(models.BenchmarkEndpoint(target, method) for method in METHODS)
+    endpoints = tuple(
+        models.BenchmarkEndpoint(target.row, target.binary_sha256_for(method), method) for method in METHODS
+    )
     requests = tuple(
         collection.BenchmarkRequest(models.EndpointRequest(target.request, method), (logical,)) for method in METHODS
     )
@@ -222,8 +224,8 @@ def test_native_detailed_report_uses_bound_inputs_and_marks_phases_unavailable(t
         "fixture.egg", tmp_path / "fixture.egg", "sha256:file", binary_inputs=(("egg-ee", native),)
     )
     comparison = models.ComparisonSpec(
-        models.BenchmarkEndpoint(target, "off"),
-        models.BenchmarkEndpoint(target, "egg-ee"),
+        models.BenchmarkEndpoint(target.row, target.binary_sha256_for("off"), "off"),
+        models.BenchmarkEndpoint(target.row, target.binary_sha256_for("egg-ee"), "egg-ee"),
         (logical,),
         2,
         120,
