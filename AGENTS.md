@@ -148,9 +148,10 @@ or modify the JSONL.
 - Shared exclusions live only in `benchmarks/ignore.json`, with reason/evidence.
   A cap-specific resource exclusion applies only to a set cap no larger than the
   recorded bound, never to uncapped runs. Unsupported entries apply across profiles.
-  Preserve exclusions in grouped/interactive snapshots and figure coverage.
-  Complete successful samples bypass cap-specific resource deferrals; known
-  correctness bugs and unsupported configurations remain excluded.
+  Preserve exclusions in grouped/interactive snapshots. Figure timing inputs
+  omit only expected-failure table-size rules; Rust correctness checks retain
+  their exact expectations. Complete successful samples bypass cap-specific
+  resource deferrals; unsupported configurations remain excluded.
 - The baseline and candidate must have different endpoint cache identities
   (binary SHA-256, treatment, and disequality encoding). They may use the same
   binary when treatment or encoding differs.
@@ -185,11 +186,12 @@ or modify the JSONL.
   PDF/TeX need no JSON runtime, while bound specs require the original cache to
   rerender. Subset invocations update selected filenames only; obsolete renamed
   or removed outputs are not cleaned automatically. Render through temporary
-  files and replace a figure's companions only after every format succeeds.
+  files and replace the requested bundle only after every condition is complete
+  and every format succeeds. Failed/missing measurements stop publication.
   Observation provenance remains in the raw JSONL, grouped JSON and results JSON.
 - `make check` includes the Vega tests; inspect all six exported figures at manuscript width
   and verify PDF font embedding. Tests must cover latest-N selection, N=1 without
-  intervals, independent Fieller intervals, missing/failure denominators, and
+  intervals, independent Fieller intervals, incomplete-bundle rejection, and
   the shared baseline-runtime corpus cohort (>=0.2 seconds, no upper cutoff).
 
 - The shared runner owns whole-process wall time and peak RSS for every engine.
@@ -202,6 +204,6 @@ or modify the JSONL.
   known table-size bugs instead require an issue and an explicitly reviewed
   `expected-failure` with exact `[ordinary, candidate]` counts. Rust must execute
   that case, fail unexpected passes or any different failure, and keep all other
-  checks active. The affected condition stays outside verified figure results.
+  checks active. Figure timings still include these known table-size cases.
   semantic/proof failures are failures, never automatic exclusions. Do not use a
   smaller input to certify an excluded actual paper workload.

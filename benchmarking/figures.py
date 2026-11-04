@@ -268,6 +268,24 @@ def resolve_figures(config: FigureConfig, names: Sequence[str], invocation_cwd: 
                         raise ValueError(f"{figure.name}: not a workload file: {path}")
                     inputs[path] = resolve_files([os.path.relpath(path, invocation_cwd)], invocation_cwd)[0]
                     file = inputs[path]
+                    # Table-size expectations belong to the correctness oracle;
+                    # figure timings still include these executable workloads.
+                    file = replace(
+                        file,
+                        exclusions=tuple(rule for rule in file.exclusions if rule.kind != "expected-failure"),
+                        binary_inputs=tuple(
+                            (
+                                binary,
+                                replace(
+                                    physical,
+                                    exclusions=tuple(
+                                        rule for rule in physical.exclusions if rule.kind != "expected-failure"
+                                    ),
+                                ),
+                            )
+                            for binary, physical in file.binary_inputs
+                        ),
+                    )
                     inputs[path] = replace(
                         file,
                         exclusions=file.exclusions
@@ -311,109 +329,132 @@ def render_figures(
         raise ValueError("figure target must have a label")
     command = [*shlex.split(os.environ.get("NPX", "npx --yes")), *[f"--package={p}" for p in VEGA_PACKAGES]]
     rendered = []
-    for resolved in figures:
-        figure = resolved.figure
-        selected_inputs = []
-        incomplete = 0
-        excluded_conditions = 0
-        for file in resolved.files:
-            info = metadata.get(file.sha256)
-            for treatment in figure.treatments:
-                physical = file.for_binary(TREATMENT_SPECS[treatment].binary_name)
-                endpoint = BenchmarkEndpoint(
-                    target.row,
-                    target.binary_sha256_for(treatment),
-                    treatment,
-                    memory_limit_bytes=config.memory_limit_bytes,
-                )
-                key = CacheKey.for_endpoint(endpoint, file)
-                selection = select_observations(grouped, endpoint, file, config.rounds, config.timeout_sec)
-                excluded, rows = selection.exclusion, selection.rows
-                correctness_mode = PROOF_ORACLES.get(treatment, treatment)
-                if correctness_mode != treatment:
-                    # The recording sample keeps its own identity, but inherits
-                    # the strict oracle's reviewed quarantine before plotting.
-                    strict = select_observations(
-                        grouped, replace(endpoint, treatment=correctness_mode), file, config.rounds, config.timeout_sec
+    destination = (output_dir or DEFAULT_OUTPUT_DIR).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=destination, prefix=".figures.") as temporary:
+        for resolved in figures:
+            figure = resolved.figure
+            selected_inputs = []
+            for file in resolved.files:
+                info = metadata.get(file.sha256)
+                for treatment in figure.treatments:
+                    physical = file.for_binary(TREATMENT_SPECS[treatment].binary_name)
+                    endpoint = BenchmarkEndpoint(
+                        target.row,
+                        target.binary_sha256_for(treatment),
+                        treatment,
+                        memory_limit_bytes=config.memory_limit_bytes,
                     )
-                    excluded = excluded or strict.exclusion
-                    if excluded is not None:
-                        rows = ()
-                validation_issue = (
-                    info["validation_failures"].get(f"{key.binary_sha256}/nee", "")
-                    if info and correctness_mode == "proof-testing"
-                    else ""
-                )
-                if excluded is not None:
-                    excluded_conditions += 1
-                else:
-                    incomplete += len(rows) < config.rounds or any(row.record["status"] != "success" for row in rows)
-                selected_inputs.append(
-                    {
-                        "logical_id": file.sha256,
-                        "label": info["label"] if info else file.display_path,
-                        "family": info["family"] if info else "",
-                        "file_sha256": physical.sha256,
-                        "treatment": treatment,
-                        "binary_sha256": key.binary_sha256,
-                        "memory_limit_bytes": endpoint.memory_limit_bytes,
-                        "selected_row_indices": [row.row_index for row in rows],
-                        "validation_failures": info["validation_failures"] if info else {},
-                        "validation_issue": validation_issue,
-                        "exclusion": None
-                        if excluded is None
-                        else {
-                            "kind": excluded.kind,
-                            "reason": excluded.reason,
-                            "evidence": excluded.evidence,
-                        },
-                    }
-                )
-        t_critical = None if config.rounds == 1 else float(stats.t.ppf(0.975, config.rounds - 1))
-        bindings = {
-            "target_label": label,
-            "timeout_sec": config.timeout_sec,
-            "rounds": config.rounds,
-            "memory_limit_bytes": config.memory_limit_bytes,
-            "t_critical": t_critical,
-            "selected_inputs": selected_inputs,
-            "treatments": figure.treatments,
-            "source_blockers": inventory["unavailable_cases"],
-        }
-        spec = deepcopy(resolved.spec)
-        for parameter in spec.get("params", []):
-            if parameter.get("name") in bindings:
-                parameter["value"] = bindings[parameter["name"]]
-        spec["data"]["url"] = grouped_report_path(report_path).as_uri()
-        destination = (output_dir or DEFAULT_OUTPUT_DIR).resolve()
-        destination.mkdir(parents=True, exist_ok=True)
-        outputs = [destination / f"{figure.name}.{extension}" for extension in ("pdf", "svg", "png")]
-        results = figure_results(figure.name, selected_inputs, grouped, config.rounds, t_critical)
-        if figure.name.startswith("corpus-"):
-            domains = corpus_view_domains(results)
-            results["view_domains"] = domains
+                    key = CacheKey.for_endpoint(endpoint, file)
+                    selection = select_observations(grouped, endpoint, file, config.rounds, config.timeout_sec)
+                    excluded, rows = selection.exclusion, selection.rows
+                    correctness_mode = PROOF_ORACLES.get(treatment, treatment)
+                    if correctness_mode != treatment:
+                        # The recording sample keeps its own identity, but inherits
+                        # the strict oracle's reviewed quarantine before plotting.
+                        strict = select_observations(
+                            grouped,
+                            replace(endpoint, treatment=correctness_mode),
+                            file,
+                            config.rounds,
+                            config.timeout_sec,
+                        )
+                        excluded = excluded or strict.exclusion
+                        if excluded is not None:
+                            rows = ()
+                    validation_issue = (
+                        info["validation_failures"].get(f"{key.binary_sha256}/nee", "")
+                        if info and correctness_mode == "proof-testing"
+                        else ""
+                    )
+                    selected_inputs.append(
+                        {
+                            "logical_id": file.sha256,
+                            "label": info["label"] if info else file.display_path,
+                            "family": info["family"] if info else "",
+                            "file_sha256": physical.sha256,
+                            "treatment": treatment,
+                            "binary_sha256": key.binary_sha256,
+                            "memory_limit_bytes": endpoint.memory_limit_bytes,
+                            "selected_row_indices": [row.row_index for row in rows],
+                            "validation_failures": info["validation_failures"] if info else {},
+                            "validation_issue": validation_issue,
+                            "exclusion": None
+                            if excluded is None
+                            else {
+                                "kind": excluded.kind,
+                                "reason": excluded.reason,
+                                "evidence": excluded.evidence,
+                            },
+                        }
+                    )
+            t_critical = None if config.rounds == 1 else float(stats.t.ppf(0.975, config.rounds - 1))
+            bindings = {
+                "target_label": label,
+                "timeout_sec": config.timeout_sec,
+                "rounds": config.rounds,
+                "memory_limit_bytes": config.memory_limit_bytes,
+                "t_critical": t_critical,
+                "selected_inputs": selected_inputs,
+                "treatments": figure.treatments,
+                "source_blockers": inventory["unavailable_cases"],
+            }
+            spec = deepcopy(resolved.spec)
             for parameter in spec.get("params", []):
-                if parameter["name"] == "view_domains":
-                    parameter.pop("expr", None)
-                    parameter["value"] = domains
-            if not any(domain["zoom"] < domain["full"] for domain in domains.values()):
-                # Empty facets still reserve axes/space in Vega-Lite. Omit the
-                # entire optional composition when every value fits the detail.
-                del spec["vconcat"][1]
-        results["provenance"] = {
-            "target": asdict(target.row),
-            "catalog_path": str(config.path),
-            "spec_path": str(figure.spec),
-            "report_path": str(report_path),
-            "timeout_sec": config.timeout_sec,
-            "memory_limit_bytes": config.memory_limit_bytes,
-            "source_blockers": inventory["unavailable_cases"],
-            "view_domains": results.get("view_domains"),
-        }
-        numbers, table = latex_results(results)
-        console.print(f"Rendering {figure.name}", markup=False)
-        # Render the complete set before replacing any existing image.
-        with tempfile.TemporaryDirectory(dir=destination, prefix=f".{figure.name}.") as temporary:
+                if parameter.get("name") in bindings:
+                    parameter["value"] = bindings[parameter["name"]]
+            spec["data"]["url"] = grouped_report_path(report_path).as_uri()
+            outputs = [destination / f"{figure.name}.{extension}" for extension in ("pdf", "svg", "png")]
+            results = figure_results(figure.name, selected_inputs, grouped, config.rounds, t_critical)
+            for condition in results["conditions"]:
+                issue = (
+                    f"excluded ({condition['exclusion']['kind']}): {condition['exclusion']['reason']}"
+                    if condition["exclusion"]
+                    else condition["validation_issue"]
+                    or (f"{condition['failed_n']} failed observations" if condition["failed_n"] else None)
+                    or (
+                        f"{condition['sample_n']}/{config.rounds} observations"
+                        if condition["sample_n"] != config.rounds
+                        else None
+                    )
+                    or next(
+                        (
+                            f"{metric}: measurement unavailable"
+                            for metric, values in condition["metrics"].items()
+                            if values["valid_n"] != config.rounds
+                        ),
+                        None,
+                    )
+                )
+                if issue:
+                    raise ValueError(
+                        f"{figure.name}: {condition['label']} · {condition['treatment']}: {issue}; "
+                        "no figure outputs replaced"
+                    )
+            if figure.name.startswith("corpus-"):
+                domains = corpus_view_domains(results)
+                results["view_domains"] = domains
+                for parameter in spec.get("params", []):
+                    if parameter["name"] == "view_domains":
+                        parameter.pop("expr", None)
+                        parameter["value"] = domains
+                if not any(domain["zoom"] < domain["full"] for domain in domains.values()):
+                    # Empty facets still reserve axes/space in Vega-Lite. Omit the
+                    # entire optional composition when every value fits the detail.
+                    del spec["vconcat"][1]
+            results["provenance"] = {
+                "target": asdict(target.row),
+                "catalog_path": str(config.path),
+                "spec_path": str(figure.spec),
+                "report_path": str(report_path),
+                "timeout_sec": config.timeout_sec,
+                "memory_limit_bytes": config.memory_limit_bytes,
+                "source_blockers": inventory["unavailable_cases"],
+                "view_domains": results.get("view_domains"),
+            }
+            numbers, table = latex_results(results)
+            console.print(f"Rendering {figure.name}", markup=False)
+            # Stage every companion before publishing the requested bundle.
             bound_path = Path(temporary) / f"{figure.name}.bound.vl.json"
             bound_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n")
             # Export the same selected observations and quarantine decisions,
@@ -444,21 +485,11 @@ def render_figures(
             outputs.extend(
                 destination / f"{figure.name}.{suffix}" for suffix in ("results.json", "numbers.tex", "table.tex")
             )
-            for output in outputs:
-                os.replace(Path(temporary) / output.name, output)
-        for output in outputs:
-            console.print(str(output), soft_wrap=True, markup=False)
-            rendered.append(output)
-        if excluded_conditions:
-            console.print(
-                f"{figure.name}: {excluded_conditions}/{len(selected_inputs)} explicitly excluded conditions",
-                markup=False,
-            )
-        if incomplete:
-            console.print(
-                f"{figure.name}: {incomplete}/{len(selected_inputs)} incomplete or unsuccessful conditions",
-                markup=False,
-            )
+            rendered.extend(outputs)
+        for output in rendered:
+            os.replace(Path(temporary) / output.name, output)
+    for output in rendered:
+        console.print(str(output), soft_wrap=True, markup=False)
     return tuple(rendered)
 
 

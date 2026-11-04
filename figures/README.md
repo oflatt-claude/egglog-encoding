@@ -93,10 +93,10 @@ collection, sample selection and intervals without changing the catalog.
 Use `--rounds 1` and a temporary report for CLI smoke checks.
 
 Figures share the resource defaults in `benchmarking/config.py` with comparisons,
-nightly, profiling, and paper tests: 500 seconds and a 10 GiB allocator/address-space
+nightly, profiling, and paper tests: 500 seconds and a 16 GiB allocator/address-space
 cap where supported, enabled without any memory flag. `--timeout-sec N` and
 `--memory-limit-gib N` override them; fractional GiB values such as `2.5` are
-accepted. `--memory-limit` selects the 10 GiB default explicitly, and
+accepted. `--memory-limit` selects the 16 GiB default explicitly, and
 `--no-memory-limit` opts out for uncapped collection. `--memory-limit-bytes`
 remains available for existing scripts. Peak RSS is measured
 independently; the original native disequality drivers do not implement a cap.
@@ -110,15 +110,16 @@ conditions remain visible and never become successful observations. Ordinary
 semantic/proof failures fail the correctness suite.
 An explicitly reviewed `expected-failure` records a known bug and its exact
 ordinary/candidate table counts. Rust executes that case, rejecting unexpected
-passes and other failures. Figure selection quarantines the affected condition,
-including old cached successes; it stays visible in coverage without becoming a
-measured point. All other checks and treatments remain exact.
+passes and other failures. Figure timings include these known table-size cases;
+only the figure-local timing inputs omit `expected-failure` exclusions.
+All correctness checks and their exact expectations remain unchanged.
 The disequality catalog retains EE/OEE under correctness-only `checks`.
 Timed `proofs`/`proof-extraction` aliases inherit `proof-testing` oracles and
 exclusions; native Egg aliases similarly inherit `egg-proof-testing`.
 Rust normalizes these names before registration and ignore filtering. Figure
-collection and selection apply the corresponding strict exclusions, and
-exact-identity strict validation failures veto recording-only measurements too.
+collection and selection retain the corresponding resource and unsupported
+restrictions, and exact-identity strict validation failures veto recording-only
+measurements too.
 
 The shared collection progress estimates remaining time across all missing runs.
 `ETA ~` prefers current-binary cached and newly measured durations, then the
@@ -154,8 +155,10 @@ Native disequality `.in` and logical Egglog `.egg` inputs remain distinct.
 
 The shared selector chooses the newest requested N applicable rows per identity, ordered by
 timestamp and physical row index, including failures. Exports retain every selected
-observation; plots report a box or estimate only when all N rows succeeded and the metric is finite.
-Partial observations, timeouts and missing RSS remain explicit. With N >= 2,
+observation. Before publishing any output, the command requires all N rows to
+succeed with finite runtime and positive RSS for every requested condition.
+Partial observations, timeouts, missing metrics, strict validation failures and
+remaining exclusions stop the command, preserving the previous output bundle. With N >= 2,
 absolute mean intervals use Student's t at 95%. N = 1 permits a mean point but
 no interval. Math overhead uses independent-sample Fieller-style 95% intervals;
 unavailable or unbounded intervals retain their explanation. The t critical
@@ -167,8 +170,7 @@ fixture checks numerical parity against executed Vega transforms.
 Disequality and Math absolute panels use the same gray/black boxes: medians,
 interquartile ranges and 1.5-IQR whiskers. Only generated outliers appear as
 individual points; there is no all-run overlay. These are distributions, not
-confidence intervals for a mean. Incomplete conditions retain explicit status
-without a box. Runtime and RSS use independent absolute scales, and Math labels
+confidence intervals for a mean. Runtime and RSS use independent absolute scales, and Math labels
 each engine/proof condition directly. Actual arithmetic means and their
 Student-t intervals remain in the exports.
 Disequality ratios and their 95% intervals are exported for prose against the
@@ -196,12 +198,9 @@ MISAAL, Churchroad, DialEgg and Luminal, excluding Math. Select only a complete,
 successful baseline's mean wall time >= 0.2 seconds, with no upper cutoff.
 Memory and candidate outcomes never select membership. Each file has equal
 weight; projects contribute different numbers of files. All three corpus figures
-and both metrics share the selected denominator. Failed/missing/excluded ratios never
-become finite timeouts or disappear from coverage.
-
-Complete data support empirical median/95th-percentile annotations. With
-incomplete outcomes, reached annotations are measured coverage thresholds;
-unreached thresholds are explicitly unestablished. These CDFs are sample
+and both metrics share the selected denominator. Complete measurements support
+empirical median/95th-percentile annotations. Incomplete conditions stop export
+instead of producing partial CDFs. These CDFs are sample
 summaries, not population confidence bands.
 Each corpus metric gets a full-range overview only when its zoom excludes valid
 values. The detail expands to the full maximum when this increases its upper
@@ -214,8 +213,7 @@ viewing bounds never changes ranks or denominators.
 
 Corpus metadata is projected lazily for selected published inputs. Aliases,
 preparation blockers and exact-identity strict-validation failures are retained.
-The 156 unavailable source cases are separate from saved replay and baseline
-counts. Strict-proof errors veto checked and recording proof series across resource bounds;
+Strict-proof errors veto checked and recording proof series across resource bounds;
 resource-limit outcomes stay in observation reporting. Congruence-only measurements
 remain independent of strict-proof validation. Custom non-corpus figures require no corpus
 validation. Collection never acquires sources, regenerates inputs or invokes
@@ -228,23 +226,24 @@ The runner reads each authored specification once and binds its declared
 parameters and grouped JSON URL in a temporary copy. The standard parameters are
 `target_label`, `timeout_sec`, `rounds`, `t_critical`, `selected_inputs` and
 `source_blockers`. Expected inputs include physical identities, selected row IDs
-and corpus metadata. They scope subset configurations and keep missing conditions
-visible; statistics remain in the authored Vega transforms. Vega resolves other
+and corpus metadata. They scope subset configurations; statistics remain in
+the authored Vega transforms. Vega resolves other
 relative assets from the authored specification's directory.
 
-Each invocation renders temporary PDF/SVG/PNG files and replaces the previous
-images, bound specification and numeric exports after all three images succeed.
+Each invocation stages all requested companions and replaces the previous
+images, bound specifications and numeric exports only after every requested
+condition is complete and all formats succeed.
 The raw JSONL and grouped JSON retain observation
 provenance, including recorded resource bounds, source/binary hashes, statuses and row IDs. Preserve these
 with the catalog, authored specifications, validated Math12 boundary evidence and
 disequality contradiction-agreement results when handing off measurements.
-Fill paper result sentences only from validated measurements, keeping failed
-and missing cases visible.
+Fill paper result sentences only from complete measurements; collection errors
+remain explicit on stderr and in the append-only cache.
 
 The per-figure `.results.json` retains full-precision means, bounded CI endpoints,
 ratios, selected row IDs, sample counts, issues, exclusions and source provenance.
 Corpus exports include the common cohort denominator, measured/failed/missing/
-excluded counts and reached 50%/95% coverage thresholds; unestablished values are
+excluded counts and empirical median/95th-percentile values; unavailable values are
 `null`. Invalid or missing measurements never become zero. The named TeX macros
 and ready-to-include tables need no JSON reader or extra LaTeX package:
 

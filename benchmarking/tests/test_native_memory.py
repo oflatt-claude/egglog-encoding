@@ -80,7 +80,7 @@ def test_memory_help_uses_gib_and_hides_byte_compatibility_option(
     assert error.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
     assert "--memory-limit-gib GiB" in help_text
-    assert "default: 10 GiB" in help_text
+    assert f"default: {config.DEFAULT_MEMORY_LIMIT_BYTES / 1024**3:g} GiB" in help_text
     assert "--no-memory-limit" in help_text
     assert "--memory-limit-bytes" not in help_text
     assert str(native_memory.NATIVE_LIMIT_BYTES) not in help_text
@@ -88,7 +88,7 @@ def test_memory_help_uses_gib_and_hides_byte_compatibility_option(
 
 def test_native_command_uses_explicit_limit_and_fixed_startup_policy() -> None:
     command, env = native_memory.native_memory_command(["engine", "--help"], {"RUST_LOG": "error"})
-    assert command == ["engine", "--memory-limit-bytes=10737418240", "--help"]
+    assert command == ["engine", f"--memory-limit-bytes={config.DEFAULT_MEMORY_LIMIT_BYTES}", "--help"]
     assert env == {"RUST_LOG": "error", **native_memory.NATIVE_ALLOCATOR_ENV}
     assert native_memory.native_memory_command(["engine"], {}, 123)[0] == ["engine", "--memory-limit-bytes=123"]
     assert native_memory.native_memory_command(["engine"], {}, None) == (["engine"], native_memory.NATIVE_ALLOCATOR_ENV)
@@ -165,7 +165,7 @@ def test_older_binary_rejecting_native_option_fails_preflight(tmp_path: Path) ->
     binary_name = tmp_path / "engine"
     binary_name.write_text(
         f"#!{sys.executable}\nimport sys\n"
-        "assert sys.argv[1] == '--memory-limit-bytes=10737418240'\n"
+        f"assert sys.argv[1] == '--memory-limit-bytes={config.DEFAULT_MEMORY_LIMIT_BYTES}'\n"
         "print('unsupported native option',file=sys.stderr)\nsys.exit(2)\n"
     )
     binary_name.chmod(0o755)

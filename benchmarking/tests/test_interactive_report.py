@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import pytest
 
-from benchmarking import models, workloads
+from benchmarking import config, models, workloads
 from benchmarking.reports import interactive
 from benchmarking.reports.interactive_runtime import (
     InteractiveRuntime,
@@ -558,7 +558,11 @@ def test_cap_scoped_exclusion_guards_fresh_work_in_each_report(tmp_path: Path) -
         exclusions={
             "sha256:file": (
                 models.Exclusion(
-                    "resource", "recorded cap stop", "exit 86", ("proof-testing",), memory_limit_bytes=10 * 1024**3
+                    "resource",
+                    "recorded cap stop",
+                    "exit 86",
+                    ("proof-testing",),
+                    memory_limit_bytes=config.DEFAULT_MEMORY_LIMIT_BYTES,
                 ),
             )
         }

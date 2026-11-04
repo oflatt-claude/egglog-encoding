@@ -187,7 +187,7 @@ def test_shared_corpus_fixture_matches_export_counts_and_bound_view_layout(
             else (),
         )
         for item in fixture["inputs"]
-        if item["treatment"] == "off"
+        if item["treatment"] == "off" and item["label"] in ("boundary", "same-rank", "slow", "fast")
     )
 
     def render(command: list[str], **_kwargs: Any) -> None:
@@ -205,7 +205,7 @@ def test_shared_corpus_fixture_matches_export_counts_and_bound_view_layout(
         {"workloads": [], "unavailable_cases": []},
     )
     bound = json.loads((tmp_path / "out/corpus-proof-recording-cdf.bound.vl.json").read_text())
-    assert len(bound["vconcat"]) == 2
+    assert len(bound["vconcat"]) == 1
     assert '"name": "cdf_points"' not in json.dumps(bound)
     assert next(p["value"] for p in bound["params"] if p["name"] == "view_domains") == fixture["view_domains"]
     output = json.loads((tmp_path / "out/corpus-proof-recording-cdf.results.json").read_text())
@@ -227,8 +227,10 @@ def test_recording_aliases_inherit_strict_exclusions_before_collection_and_expor
     monkeypatch.setattr(figures, "resolve_files", lambda *_args: (logical,))
     # Actual resolution projects disjoint alias selectors before collection.
     resolved = figures.resolve_figures(config, [], tmp_path)[0]
-    assert resolved.files[0].exclusion_for("proofs", memory_limit_bytes=None) is not None
-    assert resolved.files[0].exclusion_for("proof-testing", memory_limit_bytes=None) == strict_rule
+    assert logical.exclusion_for("proof-testing", memory_limit_bytes=None) == strict_rule
+    timed = resolved.files[0]
+    assert (timed.exclusion_for("proofs", memory_limit_bytes=None) is None) == (kind == "expected-failure")
+    assert (timed.exclusion_for("proof-testing", memory_limit_bytes=None) is None) == (kind == "expected-failure")
     figure = replace(resolved.figure, treatments=("off", "proofs"))
     report = tmp_path / "report.jsonl"
     write_report(
@@ -250,8 +252,22 @@ def test_recording_aliases_inherit_strict_exclusions_before_collection_and_expor
         Path(command[command.index("--base") - 1]).write_bytes(b"rendered")
 
     monkeypatch.setattr(figures.subprocess, "run", render)
+    if kind != "expected-failure":
+        with pytest.raises(ValueError, match=f"excluded.*{kind}"):
+            figures.render_figures(
+                [figures.ResolvedFigure(figure, (timed,), resolved.spec)],
+                config,
+                grouped,
+                report,
+                make_target(target_label="figures"),
+                tmp_path / "out",
+                Console(file=io.StringIO()),
+                {"workloads": [], "unavailable_cases": []},
+            )
+        assert not list((tmp_path / "out").iterdir())
+        return
     figures.render_figures(
-        [figures.ResolvedFigure(figure, (logical,), resolved.spec)],
+        [figures.ResolvedFigure(figure, (timed,), resolved.spec)],
         config,
         grouped,
         report,
@@ -261,9 +277,9 @@ def test_recording_aliases_inherit_strict_exclusions_before_collection_and_expor
         {"workloads": [], "unavailable_cases": []},
     )
     result = json.loads((tmp_path / "out/runtime.results.json").read_text())
-    assert result["conditions"][1]["exclusion"]["reason"] == strict_rule.reason
-    assert result["conditions"][1]["metrics"]["runtime"]["mean"] is None
-    assert result["conditions"][1]["selected_row_indices"] == []
+    assert result["conditions"][1]["exclusion"] is None
+    assert result["conditions"][1]["metrics"]["runtime"]["mean"] == 1
+    assert result["conditions"][1]["selected_row_indices"] == [2, 3]
 
 
 def test_recording_alias_manifest_validation_failure_vetoes_exported_successes(
@@ -292,27 +308,25 @@ def test_recording_alias_manifest_validation_failure_vetoes_exported_successes(
         Path(command[command.index("--base") - 1]).write_bytes(b"rendered")
 
     monkeypatch.setattr(figures.subprocess, "run", render)
-    figures.render_figures(
-        [figures.ResolvedFigure(figure, (file,), json.loads(figure.spec.read_text()))],
-        config,
-        ReportStore(report).grouped_report(),
-        report,
-        make_target(target_label="figures"),
-        tmp_path / "out",
-        Console(file=io.StringIO()),
-        {
-            "workloads": [
-                {
-                    "file_sha256": file.sha256,
-                    "family": "eggcc",
-                    "label": "case",
-                    "validation_failures": {"sha256:bin/nee": "Strict failure"},
-                }
-            ],
-            "unavailable_cases": [],
-        },
-    )
-    result = json.loads((tmp_path / "out/runtime.results.json").read_text())
-    assert result["conditions"][0]["metrics"]["runtime"]["mean"] == 1
-    assert result["conditions"][1]["metrics"]["runtime"]["mean"] is None
-    assert result["conditions"][1]["validation_issue"] == "Strict failure"
+    with pytest.raises(ValueError, match="Strict failure"):
+        figures.render_figures(
+            [figures.ResolvedFigure(figure, (file,), json.loads(figure.spec.read_text()))],
+            config,
+            ReportStore(report).grouped_report(),
+            report,
+            make_target(target_label="figures"),
+            tmp_path / "out",
+            Console(file=io.StringIO()),
+            {
+                "workloads": [
+                    {
+                        "file_sha256": file.sha256,
+                        "family": "eggcc",
+                        "label": "case",
+                        "validation_failures": {"sha256:bin/nee": "Strict failure"},
+                    }
+                ],
+                "unavailable_cases": [],
+            },
+        )
+    assert not list((tmp_path / "out").iterdir())

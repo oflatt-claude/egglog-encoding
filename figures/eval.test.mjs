@@ -136,7 +136,7 @@ test('all figure designs preserve missing conditions and render without warnings
       assert.equal(find(result,'slotted_ratio_status').length,2);
       assert.equal(find(result,'slotted_ratio_points').length,0);
     } else if(name.startsWith('corpus-')) {
-      assert.match(result.svg,/unresolved baseline 1/);
+      assert.doesNotMatch(result.svg,/unresolved baseline|failed,|missing|excluded/);
       assert.equal(find(result,'cdf_points').length,0,'empty corpus needs no overview');
     }
   }
@@ -235,8 +235,9 @@ test('CDF recording aliases retain strict vetoes and baseline-wall cohort with m
     const points=find(result,'cdf_points_zoom');
     assert.equal(points.length,4);
     assert.ok(points.every(p=>p.datum.cohort_n===3&&p.datum.saved_n===4&&p.datum.too_fast_n===1));
-    assert.match(result.svg,/2\/3 valid/);assert.match(result.svg,/95% not established/);
-    assert.match(result.svg,/0 failed, 1 missing/);
+    assert.equal(find(result,'cdf_detail_status').length,0);
+    assert.equal(find(result,'cdf_coverage').length,0);
+    assert.doesNotMatch(result.svg,/failed,|missing|excluded|not established/);
     assert.equal(find(result,'cdf_points').length,0,'compact ratios need no overview');
     const vetoed=inputs.map(i=>({...i,validation_failures:{'current/nee':'Known strict failure'}}));
     const strict=await evaluate(`corpus-${name}-cdf`,vetoed,groups);
@@ -262,8 +263,8 @@ test('CDF overview appears only for metrics with tails and never changes ranks o
     for(const point of full)assert.ok(point.bounds.x1>=0&&point.bounds.x2<=point.mark.group.width);
     groups.at(-1).samples[0].status='failure';
     const partial=await evaluate(`corpus-${name}-cdf`,inputs,groups);
-    assert.match(partial.svg,/1 failed, 0 missing/);
-    assert.match(partial.svg,/95% not established/);
+    assert.ok(find(partial,'cdf_points_zoom').every(p=>p.datum.measured_n===3&&p.datum.cohort_n===4));
+    assert.doesNotMatch(partial.svg,/failed,|not established/);
   }
 });
 
@@ -272,7 +273,8 @@ test('CDF quarantines preserve coverage without measured points or altered denom
     input('a','off'),input('a','proofs',{selected_row_indices:[],exclusion:{kind:'expected-failure',reason:'known table mismatch'}}),
     input('b','off'),input('b','proofs')
   ],[group('a','off',[1,1]),group('a','proofs',[99,99]),group('b','off',[1,1]),group('b','proofs',[2,2])]);
-  assert.match(result.svg,/0 failed, 0 missing, 1 excluded/);
+  assert.equal(find(result,'cdf_coverage').length,0);
+  assert.doesNotMatch(result.svg,/failed,|excluded/);
   assert.ok(find(result,'cdf_points_zoom').every(p=>p.datum.cohort_n===2&&p.datum.measured_n===1&&p.datum.cdf===.5));
 });
 
@@ -300,11 +302,7 @@ test('CDF empty, zero, single-run and failed samples retain finite reference-con
     [[group('a','off',[1,1]),group('a',treatment,[null,null],{status:'timed-out'})],2]
   ]) {
     const result=await evaluate('corpus-proof-recording-cdf',inputs,groups,rounds);
-    for(const status of find(result,'cdf_detail_status')) {
-      const {zoom_min,zoom_max,full_max}=status.datum;
-      assert.ok([zoom_min,zoom_max,full_max].every(Number.isFinite));
-      assert.ok(zoom_min<=1&&zoom_max>=1&&full_max>=zoom_max&&zoom_max>zoom_min);
-    }
+    assert.doesNotMatch(result.svg,/NaN|Infinity|failed,|not established/);
     for(const point of find(result,'cdf_points_zoom')) {
       assert.ok(Number.isFinite(point.x)&&point.bounds.x1>=0&&point.bounds.x2<=point.mark.group.width);
       assert.ok(Number.isFinite(point.y)&&point.bounds.y1>=0&&point.bounds.y2<=point.mark.group.height);
@@ -314,12 +312,10 @@ test('CDF empty, zero, single-run and failed samples retain finite reference-con
     const inputs=['a','b','c','d'].flatMap(id=>['off',treatment].map(t=>input(id,t)));
     const groups=[...['a','b','c'].map(id=>group(id,'off',[1,1])),group('a',treatment,[2,2])];
     const partial=await evaluate(`corpus-${mode}-cdf`,inputs,groups);
-    assert.deepEqual(find(partial,'cdf_coverage').map(p=>p.text),['0 failed, 2 missing']);
-    for(const status of find(partial,'cdf_detail_status')) {
-      assert.match(status.text,/1\/3 valid · unresolved baseline 1\n50%\/95% not established/);
-      assert.ok(status.bounds.x1>=0&&status.bounds.x2<=status.mark.group.width,'status must fit its metric panel');
-      assert.ok(status.bounds.y2<=0,'status must remain above the plot');
-    }
+    assert.equal(find(partial,'cdf_detail_status').length,0);
+    assert.equal(find(partial,'cdf_coverage').length,0);
+    assert.ok(find(partial,'cdf_points_zoom').every(p=>p.datum.cohort_n===3&&p.datum.measured_n===1&&p.datum.unresolved_n===1));
+
   }
 });
 
@@ -375,7 +371,7 @@ test('CDF domains fit each metric, magnify compact data and separate heavy tails
         assert.ok(Math.abs(region.x2-(4+(region.mark.group.width-8)*zoom/full))<1e-8,'overview shade must end at the zoom upper bound');
         } else assert.equal(region,undefined,'no overview when zoom covers all values');
         assert.ok(zoom-minimum<full,'compact data must still have a genuine baseline-context zoom');
-        assert.equal(find(result,'cdf_detail_status').find(p=>p.datum.metric===metric).text,'4/4 valid');
+        assert.equal(find(result,'cdf_detail_status').length,0,'complete figures need no valid-count badge');
       }
     }
   }
@@ -397,10 +393,8 @@ test('executed corpus coverage and bound SVG layout match the shared paper-expor
     for(const {datum:row} of rows)for(const field of ['saved_n','cohort_n','measured_n','too_fast_n','unresolved_n','q50','q95'])
       assert.equal(row[field]??null,corpus.expected[field],`${metric} ${field}`);
   }
-  const [coverage]=find(result,'cdf_coverage');
-  for(const field of ['failed_n','missing_n','excluded_n'])assert.equal(coverage.datum[field],corpus.expected[field]);
-  assert.match(result.svg,/1 failed, 1 missing, 1 excluded/);
-  assert.match(result.svg,/95% not established/);
+  assert.equal(find(result,'cdf_coverage').length,0);
+  assert.doesNotMatch(result.svg,/failed,|missing|excluded|not established/);
   const raw=await evaluate('corpus-proof-recording-cdf',corpus.inputs,corpus.groups,3,authored);
   const percentAxes=r=>r.marks.filter(p=>p.mark.role==='axis-label'&&['0%','50%','100%'].includes(p.text));
   assert.equal(percentAxes(result).length,3,'the bound compact figure must have only the detail percentage axis');

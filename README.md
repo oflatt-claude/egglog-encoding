@@ -427,7 +427,7 @@ The remaining collection options are:
   default `6`.
 - `--timeout-sec N`: per-process guard; the shared default is 500 seconds.
 - `--memory-limit-gib N`: allocator/address-space guard in GiB; fractions are
-  accepted, for example `--memory-limit-gib 2.5`. The cap is enabled at 10 GiB
+  accepted, for example `--memory-limit-gib 2.5`. The cap is enabled at 16 GiB
   without any memory flag. `--memory-limit` selects that default explicitly;
   `--no-memory-limit` opts out. `--memory-limit-bytes` remains available for
   existing scripts. Resource defaults live in

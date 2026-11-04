@@ -31,7 +31,7 @@
   },
   "usermeta": {
     "statistics": "Newest requested N observations per exact identity, including failures. Complete successful samples only. Ratios of arithmetic means. The CDF has no population confidence band.",
-    "coverage": "50%/95% empirical inverse CDF for complete data; measured coverage thresholds otherwise. Source preparation blockers are not saved replays.",
+    "coverage": "50%/95% empirical inverse CDF. The figure command requires complete successful runtime and RSS measurements.",
     "view_domains": "Per metric/mode, full range starts at zero and fits the maximum, including 1x. Detail starts at the lesser of 1x and the observed minimum rounded down to tenths. Its upper bound is capped at twice the measured median, bounded by the full range, and rounded up to two significant digits. A 1.1x upper fallback keeps zero/empty cases finite. These viewing bounds never change CDF ranks or denominators. The detail expands to the full maximum when this adds at most 20% to its upper bound. Full-range facets appear only for genuine tails; the runner omits the whole overview composition when neither metric needs it."
   },
   "transform": [
@@ -59,12 +59,9 @@
     {"calculate": "['Runtime','Peak RSS']", "as": "metrics"},
     {"flatten": ["metrics"], "as": ["metric"]},
     {"calculate": "isValid(datum.run) && datum.run.status === 'success' ? (datum.metric === 'Runtime' ? (isValid(datum.run.wall_sec) && isFinite(datum.run.wall_sec) && datum.run.wall_sec >= 0 ? datum.run.wall_sec : null) : (isValid(datum.run.max_rss_bytes) && isFinite(datum.run.max_rss_bytes) && datum.run.max_rss_bytes > 0 ? datum.run.max_rss_bytes / 1048576 : null)) : null", "as": "value"},
-    {"calculate": "isValid(datum.run) && datum.run.status !== 'success' ? 1 : 0", "as": "failed"},
-    {"calculate": "isValid(datum.run) && datum.run.status === 'timed-out' ? 1 : 0", "as": "timed_out"},
-    {"joinaggregate": [{"op": "valid", "field": "value", "as": "valid_n"}, {"op": "mean", "field": "value", "as": "sample_mean"}, {"op": "sum", "field": "failed", "as": "failed_n"}, {"op": "sum", "field": "timed_out", "as": "timeout_n"}], "groupby": ["input_id", "metric"]},
+    {"joinaggregate": [{"op": "valid", "field": "value", "as": "valid_n"}, {"op": "mean", "field": "value", "as": "sample_mean"}], "groupby": ["input_id", "metric"]},
     {"calculate": "!datum.input.exclusion && datum.sample_n === rounds && datum.valid_n === rounds && !datum.validation_issue", "as": "complete"},
     {"calculate": "datum.complete ? datum.sample_mean : null", "as": "mean"},
-    {"calculate": "datum.input.exclusion ? 'excluded (' + datum.input.exclusion.kind + '): ' + datum.input.exclusion.reason : (datum.validation_issue || (datum.failed_n ? datum.sample_n + '/' + rounds + ' observations; ' + datum.failed_n + ' failed (' + datum.timeout_n + ' timeout); estimate unavailable' : datum.valid_n < datum.sample_n ? datum.sample_n + '/' + rounds + ' observations; measurement unavailable; no estimate' : datum.sample_n < rounds ? datum.sample_n + '/' + rounds + ' observations; estimate unavailable' : rounds === 1 ? 'n=1; CI unavailable' : '') )", "as": "issue"},
     {"window": [{"op": "row_number", "as": "run_number"}], "sort": [{"field": "run.row_index", "order": "ascending"}], "groupby": ["input_id", "metric"]},
     {"calculate": "datum.input.treatment === 'off' ? 'Off' : datum.input.treatment === 'term' ? 'Congruence' : datum.input.treatment === 'proof-testing' ? 'Full proofs' : datum.input.treatment === 'proof-extraction' ? 'Proof extraction' : 'Proof recording'", "as": "mode"},
     {"calculate": "datum.input.logical_id", "as": "workload_id"},
@@ -83,10 +80,6 @@
     {"calculate": "datum.conditions[indexof(pluck(datum.conditions,'mode'),datum.mode)]", "as": "candidate"},
     {"calculate": "datum.selected && datum.baseline.complete && isValid(datum.candidate) && datum.candidate.complete && datum.baseline.mean > 0 ? datum.candidate.mean / datum.baseline.mean : null", "as": "ratio"},
     {"calculate": "isValid(datum.ratio) && isFinite(datum.ratio) && datum.ratio >= 0 ? 1 : 0", "as": "valid"},
-    {"calculate": "datum.baseline.input.exclusion || (isValid(datum.candidate) && datum.candidate.input.exclusion) ? 1 : 0", "as": "excluded_outcome"},
-    {"calculate": "datum.selected && isValid(datum.candidate) && (datum.candidate.failed_n > 0 || datum.candidate.validation_issue) ? 1 : 0", "as": "failed_outcome"},
-    {"calculate": "datum.selected && !datum.valid && !datum.failed_outcome && !datum.excluded_outcome ? 1 : 0", "as": "missing_outcome"},
-    {"calculate": "!datum.selected ? '' : isValid(datum.candidate) && datum.candidate.input.exclusion ? datum.candidate.issue : !isValid(datum.candidate) || !datum.candidate.sample_n ? 'Missing treatment' : datum.candidate.issue || (!datum.baseline.complete ? 'Baseline metric unavailable' : !datum.valid ? 'Invalid ratio' : '')", "as": "issue"},
     {"calculate": "datum.valid ? datum.ratio : null", "as": "valid_ratio"},
     {"joinaggregate": [{"op": "sum", "field": "selected", "as": "cohort_n"}, {"op": "sum", "field": "valid", "as": "measured_n"}, {"op": "count", "as": "saved_n"}, {"op": "sum", "field": "too_fast", "as": "too_fast_n"}, {"op": "sum", "field": "unresolved", "as": "unresolved_n"}, {"op": "min", "field": "valid_ratio", "as": "minimum_ratio"}, {"op": "median", "field": "valid_ratio", "as": "median_ratio"}, {"op": "max", "field": "valid_ratio", "as": "maximum_ratio"}], "groupby": ["mode", "metric"]},
     {"calculate": "pow(10, floor(log(max(1, isValid(datum.maximum_ratio) ? datum.maximum_ratio : 1)) / log(10)) - 1)", "as": "full_step"},
@@ -189,7 +182,7 @@
               {"fold": ["q50", "q95"], "as": ["quantile", "threshold_ratio"]},
               {"calculate": "datum.quantile === 'q50' ? 0.5 : 0.95", "as": "percentile"},
               {"filter": "isValid(datum.threshold_ratio)"},
-              {"calculate": "format(datum.percentile,'.0%') + (datum.measured_n === datum.cohort_n ? ' ≤ ' : ' coverage ≤ ') + format(datum.threshold_ratio,'.3g') + '×'", "as": "threshold"},
+              {"calculate": "format(datum.percentile,'.0%') + ' ≤ ' + format(datum.threshold_ratio,'.3g') + '×'", "as": "threshold"},
               {"filter": "datum.threshold_ratio <= datum.zoom_max"}
             ],
             "encoding": {"x": {"field": "threshold_ratio"}, "y": {"field": "percentile"}},
@@ -217,15 +210,6 @@
                 "encoding": {"text": {"field": "threshold"}}
               }
             ]
-          },
-          {
-            "transform": [
-              {"aggregate": [{"op": "max", "field": "cohort_n", "as": "cohort_n"}, {"op": "max", "field": "measured_n", "as": "measured_n"}, {"op": "max", "field": "maximum_ratio", "as": "maximum_ratio"}, {"op": "max", "field": "beyond_n", "as": "beyond_n"}, {"op": "max", "field": "unresolved_n", "as": "unresolved_n"}], "groupby": ["metric", "zoom_min", "zoom_max", "full_max"]},
-              {"calculate": "datum.measured_n + '/' + datum.cohort_n + ' valid' + (datum.unresolved_n ? ' · unresolved baseline ' + datum.unresolved_n : '') + (datum.measured_n < ceil(0.5 * datum.cohort_n) ? '\\n50%/95% not established' : datum.measured_n < ceil(0.95 * datum.cohort_n) ? '\\n95% not established' : '')", "as": "summary"}
-            ],
-            "name": "cdf_detail_status",
-            "mark": {"type": "text", "align": "right", "fontSize": 12, "baseline": "bottom", "dy": {"expr": "datum.measured_n < ceil(0.95 * datum.cohort_n) ? -18 : -5"}, "lineBreak": "\n", "lineHeight": 13},
-            "encoding": {"x": {"value": 260}, "y": {"value": 0}, "text": {"field": "summary"}}
           }
         ]
       },
@@ -315,7 +299,7 @@
               {"fold": ["q50", "q95"], "as": ["quantile", "threshold_ratio"]},
               {"calculate": "datum.quantile === 'q50' ? 0.5 : 0.95", "as": "percentile"},
               {"filter": "isValid(datum.threshold_ratio)"},
-              {"calculate": "format(datum.percentile,'.0%') + (datum.measured_n === datum.cohort_n ? ' ≤ ' : ' coverage ≤ ') + format(datum.threshold_ratio,'.3g') + '×'", "as": "threshold"},
+              {"calculate": "format(datum.percentile,'.0%') + ' ≤ ' + format(datum.threshold_ratio,'.3g') + '×'", "as": "threshold"},
               {"filter": "datum.threshold_ratio > datum.zoom_max"}
             ],
             "encoding": {"x": {"field": "threshold_ratio"}, "y": {"field": "percentile"}},
@@ -356,25 +340,6 @@
       },
       "resolve": {"scale": {"x": "independent"}},
       "spacing": 24
-    },
-    {
-      "name": "cdf_coverage",
-      "transform": [
-        {"aggregate": [{"op": "max", "field": "failed_outcome", "as": "failed_outcome"}, {"op": "max", "field": "missing_outcome", "as": "missing_outcome"}, {"op": "max", "field": "excluded_outcome", "as": "excluded_outcome"}, {"op": "max", "field": "selected", "as": "selected"}], "groupby": ["mode", "workload_id"]},
-        {"calculate": "datum.excluded_outcome && !datum.selected ? 1 : 0", "as": "outside_excluded"},
-        {"calculate": "datum.failed_outcome ? 0 : datum.missing_outcome", "as": "missing_only"},
-        {"aggregate": [{"op": "sum", "field": "failed_outcome", "as": "failed_n"}, {"op": "sum", "field": "missing_only", "as": "missing_n"}, {"op": "sum", "field": "excluded_outcome", "as": "excluded_n"}, {"op": "sum", "field": "outside_excluded", "as": "outside_excluded_n"}], "groupby": ["mode"]},
-        {"calculate": "datum.failed_n + ' failed, ' + datum.missing_n + ' missing' + (datum.excluded_n ? ', ' + datum.excluded_n + ' excluded' + (datum.outside_excluded_n ? ' (' + datum.outside_excluded_n + ' outside cohort)' : '') : '')", "as": "coverage"},
-        {"filter": "datum.failed_n || datum.missing_n || datum.excluded_n"}
-      ],
-      "width": 544,
-      "height": {"step": 18},
-      "mark": {"type": "text", "align": "left", "fontSize": 12},
-      "encoding": {
-        "y": {"field": "mode", "axis": null},
-        "text": {"field": "coverage"},
-        "x": {"value": 0}
-      }
     }
   ],
   "spacing": 16,
