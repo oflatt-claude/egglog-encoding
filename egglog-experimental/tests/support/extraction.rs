@@ -1,4 +1,18 @@
 //! Shared extraction correctness instrumentation for ordinary and paper fixtures.
+//!
+//! Every intercepted top-level source extraction checks the actual returned terms:
+//! - Ordinary mode also runs the other tree/greedy-DAG extractor and checks all
+//!   returned terms equal the requested root; the two cost models may choose differently.
+//! - Term-encoded mode checks each returned source term equal to the source root
+//!   through the encoding's normal check pipeline.
+//! - Strict proof-testing checks ordered certificates for the exact returned terms
+//!   and a checked connection from the requested source root to each certificate's LHS.
+//!
+//! Extra validation runs on pre-command clones, preserving the real workload graph.
+//! The paper harness separately compares terms, variant order and costs across modes.
+//! For its equal-cost best-term tie policy, this helper also checks a supplied
+//! comparison term against the root; it never rewrites returned terms or certificates.
+//! Extractions inside included files are not intercepted.
 use egglog::{
     CommandOutput, Context, Error, ResolvedCall, TermDag, TermId, TypedTerm,
     ast::{Action, Command, Expr, Fact, FunctionSubtype, Literal},

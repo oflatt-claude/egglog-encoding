@@ -43,11 +43,19 @@ struct Ignore {
 
 #[derive(Debug, PartialEq, Eq)]
 struct Observations {
+    /// Final row counts of source-visible tables, excluding encoding/proof internals.
     tables: BTreeMap<String, usize>,
-    math_classes: Option<usize>,
-    stable: String,
+    /// Distinct logical e-classes among constructor rows, populated only for
+    /// the native Math12 comparison.
+    math_eclass_count: Option<usize>,
+    /// Outputs comparable across ordinary, term and strict proof modes: omit
+    /// timings, print-function, proof certificates and extraction variants;
+    /// render best extractions as costs. Actual extracted terms are checked below.
+    stable_outputs: String,
     /// Terms and variant order are compared in addition to best-term costs.
     extractions: Vec<extraction_comparison::Extraction>,
+    /// Per extraction, whether the other mode's best term was checked equal to
+    /// this run's requested root. None means no alternative needed checking.
     comparison_in_root_class: Vec<Option<bool>>,
 }
 
@@ -99,11 +107,11 @@ fn observe(
         })
         .collect();
     Observations {
-        math_classes: file
+        math_eclass_count: file
             .ends_with("math-iteration-12.egg")
             .then(|| math_counts(&graph).1),
         tables: sizes.into_iter().collect(),
-        stable: CommandOutput::snapshot_non_proof_stable_under_proof_encoding(&outputs),
+        stable_outputs: CommandOutput::snapshot_non_proof_stable_under_proof_encoding(&outputs),
         extractions,
         comparison_in_root_class: checked.comparison_in_root_class,
     }
@@ -327,10 +335,13 @@ fn check_case(root: &Path, file: &Path, requested: &BTreeSet<String>) {
                 );
             }
             assert_eq!(
-                observed.math_classes, expected.math_classes,
+                observed.math_eclass_count, expected.math_eclass_count,
                 "{mode}: classes"
             );
-            assert_eq!(observed.stable, expected.stable, "{mode}: stable outputs");
+            assert_eq!(
+                observed.stable_outputs, expected.stable_outputs,
+                "{mode}: stable outputs"
+            );
             assert!(
                 observed.extractions == expected.extractions,
                 "{mode}: extracted terms/costs differ"
@@ -369,7 +380,7 @@ fn check_case(root: &Path, file: &Path, requested: &BTreeSet<String>) {
             drop(native);
             let expected = &observations["off"];
             assert_eq!(
-                (&expected.tables, expected.math_classes),
+                (&expected.tables, expected.math_eclass_count),
                 (&counts.0, Some(counts.1)),
                 "native Math constructor/class counts differ"
             );

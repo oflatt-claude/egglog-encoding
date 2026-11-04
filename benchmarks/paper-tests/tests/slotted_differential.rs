@@ -1,26 +1,48 @@
-//! Frozen semantic comparisons replace the former Python differential runners.
+//! Compare slotted encodings with live native-reference executions on small cases.
+//!
+//! Each .egg contains a source program. Its .ref JSON contains the corresponding
+//! native program for multi-pattern matching and, optionally, nested matching.
+//! Compare each encoding with its matching native policy using snapshot
+//! substitution. Agreement cases require equal probe partitions and logical
+//! e-class/e-node counts. Export validation also checks renamings and edge domains.
+//! Curated expectations pin a known divergence and guard, aliasing or count
+//! properties. These are assertions alongside inputs; no graph isomorphism is run.
 use egglog::{EGraph, Error};
 use egglog_experimental::slotted::{Compiler, Options, export, new_egraph};
 use serde::Deserialize;
 use slotted_reference::{Substitution, run_spec};
 use std::{collections::BTreeMap, path::Path};
 
+/// Additional assertions for selected cases. With an empty expectation block,
+/// live native/encoded partition and count equality are still required.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct Expect {
+    /// Optional prescribed encoding partition; groups contain zero-based probe indices.
     encoding_partition: Option<String>,
+    /// Prescribed native partition when recording a known limitation.
     reference_partition: Option<String>,
+    /// Reason for a known divergence. Require both prescribed partitions and
+    /// require them to differ; a changed or unexpectedly fixed limitation fails.
     limitation: Option<String>,
+    /// Guarded array-case name whose probe partition must differ from this
+    /// guard-stripped case, so a guard cannot pass the test vacuously.
     differs_from: Option<String>,
+    /// Across encodings: true requires more nodes with aliasing than without
+    /// aliasing; false requires equal counts. Native policy comparisons remain separate.
     full_nodes_exceed_compat: Option<bool>,
+    /// Exact [e-class count, e-node count] for the encoded run, beyond live agreement.
     expected_counts: Option<[usize; 2]>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Fixture {
+    /// Executable native-reference program for the aliasing-capable encoding.
     multi: String,
+    /// Optional native-reference program for the no-aliasing encoding.
     nested: Option<String>,
+    /// Source terms whose equality partition is observed after the workload.
     probes: Vec<String>,
     expect: Expect,
 }

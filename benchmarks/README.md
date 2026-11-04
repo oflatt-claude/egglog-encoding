@@ -51,6 +51,18 @@ the local cap and have separately passed the actual uncapped correctness trial.
 The slotted benchmark suite has 23 frozen `.egg`/`.ref` pairs: ten full-rule SDQL
 kernel/phase inputs, eleven array parameter counts, and two logic fixtures.
 Its 122 small semantic pairs live beside them in `benchmarks/slotted/correctness`.
+The `.ref` JSON stores executable native-reference inputs: `multi` for
+multi-pattern matching and optional `nested` for nested matching. Each test runs
+the native algorithm again and compares it with the corresponding encoding.
+The semantic fixtures also keep `probes` and authored `expect` assertions beside
+those inputs. Probe partitions group zero-based indices: `[0,1][2] missing[[]]`
+means the first two probes are equal and the third is separate. The `missing`
+suffix lists any probes absent from the native graph; here that list is empty. The
+[`Expect` fields](paper-tests/tests/slotted_differential.rs) document additional
+guard, aliasing, count and known-limitation assertions. An empty `expect` still
+requires live partition/count agreement. Ordinary command-output and proof
+snapshots continue to use Insta in `egglog-experimental/tests/files.rs`; slotted
+compiler snapshots use it in `egglog-experimental/tests/slotted_files.rs`.
 Routine commands read these bytes. Regeneration is explicit:
 
 ```bash
