@@ -25,15 +25,15 @@ mutual
 to its root. Every child's proof runs from the matched child `b_i`: an application child's
 proof, which ends at its root `x_i`, is extended along the edge `b_i = x_i` (Edge), and a
 value child is proved by that edge itself, as a value side of a comparison is proved by the
-comparison's own premise (Val). A reflexive proof is not chained in, which keeps lifted
+comparison's own premise (Value). A reflexive proof is not chained in, which keeps lifted
 proofs small; the claim is the same. A bare pattern `e` is the comparison `e = e` with one
 shared derivation, whose proof is `trans(sym(π), π)`. -/
 @[blueprint "def:lift-query"
   (statement := /--
   \begin{mathpar}
-  \ir{Val}{v\in\mathit{Var}\cup\mathit{Lit}\\ \pi:s=\eval{v}}{v\Uparrow\pi:s=\eval{v}}
+  \ir{Value}{x\in\mathit{Var}\\ \pi:s=\eval{x}}{x\Uparrow\pi:s=\eval{x}}
   \and
-  \ir{Edge}{e\Uparrow\pi:x=\eval{e}\\ \pi':b=x}{e\Uparrow\kw{trans}(\pi',\pi):b=\eval{e}}
+  \ir{Edge}{\pi':b=x\\ e\Uparrow\pi:x=\eval{e}}{e\Uparrow\kw{trans}(\pi',\pi):b=\eval{e}}
   \and
   \ir{App}{e_i\Uparrow\pi_i:b_i=\eval{e_i}\ (\forall i)\\
     \pi_0:f(b_1,\ldots,b_n)=f(b_1,\ldots,b_n)\\ \pi_r:f(b_1,\ldots,b_n)=y}

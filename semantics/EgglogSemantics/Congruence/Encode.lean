@@ -147,7 +147,7 @@ a fresh root, which is its id. A pattern written as a bare `e` is the paper's sh
 @[blueprint "def:compile-query"
   (statement := /--
   \begin{mathpar}
-  \ir{Value}{v\in\mathit{Var}\cup\mathit{Lit}}{v\leadsto\top;\ v}
+  \ir{Value}{x\in\mathit{Var}}{x\leadsto\top;\ x}
   \and
   \ir{App}{e_i\leadsto Q_i;\ x_i\ (\forall i)\\ a_1,\ldots,a_n,y\text{ fresh}}
     {f(e_1,\ldots,e_n)\leadsto Q_1\land\cdots\land Q_n\land f(a_1,\ldots,a_n)
