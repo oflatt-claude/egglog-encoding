@@ -120,7 +120,7 @@ impl EGraph {
                         }?;
                         program.expanded = expanded.into_iter();
                     } else if let Command::Include(span, file) = &command {
-                        self.flush_ground_actions(pending)?;
+                        self.commit_ground_actions(pending)?;
                         let resolved = {
                             let include_timer = Instant::now();
                             let s = std::fs::read_to_string(file)
@@ -149,7 +149,7 @@ impl EGraph {
                         {
                             self.resolve_command(command)?
                         } else {
-                            self.flush_ground_actions(pending)?;
+                            self.commit_ground_actions(pending)?;
                             self.resolve_command(command)?
                         };
                         // Execution callers discard resolved trees; retaining them here
@@ -189,7 +189,7 @@ impl EGraph {
     pub(super) fn run_command(
         &mut self,
         command: ResolvedNCommand,
-        pending: Option<&mut action_execution::GroundActionBatch>,
+        mut pending: Option<&mut action_execution::GroundActionBatch>,
     ) -> Result<Vec<CommandOutput>, Error> {
         enum CommandPhase {
             Install,
@@ -214,8 +214,14 @@ impl EGraph {
         let command_timer = Instant::now();
         let process_before = self.overall_report.process_time();
         let iteration_before = self.overall_report.run.iterations.len();
+        let mut calls = HashMap::default();
+        let calls = pending
+            .as_deref_mut()
+            .map_or(&mut calls, |pending| &mut pending.calls);
         let prepared = match &command {
-            ResolvedNCommand::CoreAction(action) => self.prepare_resolved_ground_action(action),
+            ResolvedNCommand::CoreAction(action) => {
+                self.prepare_resolved_ground_action(action, calls)
+            }
             _ => None,
         };
         let result = if let Some(prepared) = prepared {
@@ -226,7 +232,7 @@ impl EGraph {
             .map(|()| Vec::new())
         } else {
             match pending {
-                Some(pending) => self.flush_ground_actions(pending),
+                Some(pending) => self.commit_ground_actions(pending),
                 None => Ok(()),
             }
             .and_then(|()| self.run_command_inner(command))
