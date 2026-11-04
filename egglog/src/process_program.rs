@@ -10,44 +10,71 @@ impl EGraph {
         program: Vec<Command>,
         run_commands: bool,
     ) -> Result<ResolvedNCommandsWithOutput, Error> {
+        let mut pending = crate::action_execution::GroundActionBatch::default();
+        let result = self.process_program_batched(program, run_commands, &mut pending);
+        // Commit the completed prefix on success or error; a drain error wins.
+        self.flush_ground_actions(&mut pending)?;
+        result
+    }
+
+    pub(super) fn process_program_batched(
+        &mut self,
+        program: Vec<Command>,
+        run_commands: bool,
+        pending: &mut crate::action_execution::GroundActionBatch,
+    ) -> Result<ResolvedNCommandsWithOutput, Error> {
         let mut outputs = Vec::new();
         let mut desugared_before_proofs = Vec::new();
         let mut desugared = Vec::new();
-
-        for before_expanded_command in program {
-            // First do user-provided macro expansion for this command,
-            // which may rely on type information from previous commands.
-            let macro_type_info = self
-                .proof_state
-                .original_typechecking
-                .as_ref()
-                .map(|egraph| &egraph.type_info)
-                .unwrap_or(&self.type_info);
-            let macro_timer = Instant::now();
-            let macro_expanded = self.command_macros.apply(
-                before_expanded_command,
-                &mut self.parser.symbol_gen,
-                macro_type_info,
-            );
-            self.overall_report.frontend_other += macro_timer.elapsed();
-            let macro_expanded = macro_expanded?;
-
-            for command in macro_expanded {
-                // handle include specially- we keep them as-is for desugaring
+        for command in program {
+            let callback_free = self
+                .command_macros
+                .can_typecheck_without_callbacks(&command, &self.type_info);
+            let expanded = if callback_free {
+                // The capability also certifies that no macros are registered.
+                vec![command]
+            } else {
+                {
+                    self.flush_ground_actions(pending)?;
+                    let types = self
+                        .proof_state
+                        .original_typechecking
+                        .as_ref()
+                        .map(|original| &original.type_info)
+                        .unwrap_or(&self.type_info);
+                    let timer = Instant::now();
+                    let result =
+                        self.command_macros
+                            .apply(command, &mut self.parser.symbol_gen, types);
+                    self.overall_report.frontend_other += timer.elapsed();
+                    result
+                }?
+            };
+            for command in expanded {
                 if let Command::Include(span, file) = &command {
-                    let include_timer = Instant::now();
-                    let s = std::fs::read_to_string(file)
-                        .map_err(|e| Error::IoError(file.clone().into(), e, span.clone()));
-                    self.overall_report.frontend_other += include_timer.elapsed();
-                    let s = s?;
-                    let included_program = self.parse_program_timed(Some(file.clone()), &s)?;
-                    // run program internal on these include commands
-                    let resolved = self.process_program_internal(included_program, run_commands)?;
+                    self.flush_ground_actions(pending)?;
+                    let resolved = {
+                        let include_timer = Instant::now();
+                        let s = std::fs::read_to_string(file)
+                            .map_err(|e| Error::IoError(file.clone().into(), e, span.clone()));
+                        self.overall_report.frontend_other += include_timer.elapsed();
+                        let included_program = self.parse_program_timed(Some(file.clone()), &s?)?;
+                        // run program internal on these include commands
+                        self.process_program_internal(included_program, run_commands)
+                    }?;
                     outputs.extend(resolved.outputs);
                     desugared.extend(resolved.resolved);
                     desugared_before_proofs.extend(resolved.resolved_before_proofs);
                 } else {
-                    let resolved = self.resolve_command(command)?;
+                    let resolved = if callback_free
+                        || matches!(&command, Command::Action(action)
+                                if self.type_info.typecheck_closed_constructor_action(action).is_some())
+                    {
+                        self.resolve_command(command)?
+                    } else {
+                        self.flush_ground_actions(pending)?;
+                        self.resolve_command(command)?
+                    };
                     // Execution callers discard resolved trees; retaining them here
                     // duplicates large proof programs. Keep only the checker's history.
                     if run_commands {
@@ -59,7 +86,6 @@ impl EGraph {
                         desugared_before_proofs.extend(resolved.desugared_before_proofs);
                         desugared.extend(resolved.desugared.clone());
                     }
-
                     for processed in resolved.desugared {
                         // even in desugar mode we still run push and pop
                         if run_commands
@@ -68,14 +94,13 @@ impl EGraph {
                                 ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
                             )
                         {
-                            let result = self.run_command(processed)?;
+                            let result = self.run_command(processed, Some(pending))?;
                             outputs.extend(result);
                         }
                     }
                 }
             }
         }
-
         Ok(ResolvedNCommandsWithOutput {
             outputs,
             resolved_before_proofs: desugared_before_proofs,
@@ -86,6 +111,7 @@ impl EGraph {
     pub(super) fn run_command(
         &mut self,
         command: ResolvedNCommand,
+        pending: Option<&mut action_execution::GroundActionBatch>,
     ) -> Result<Vec<CommandOutput>, Error> {
         enum CommandPhase {
             Install,
@@ -110,7 +136,23 @@ impl EGraph {
         let command_timer = Instant::now();
         let process_before = self.overall_report.process_time();
         let iteration_before = self.overall_report.run.iterations.len();
-        let result = self.run_command_inner(command);
+        let prepared = match &command {
+            ResolvedNCommand::CoreAction(action) => self.prepare_resolved_ground_action(action),
+            _ => None,
+        };
+        let result = if let Some(prepared) = prepared {
+            match pending {
+                Some(pending) => self.queue_ground_action(prepared, pending),
+                None => self.eval_ground_actions(vec![prepared]),
+            }
+            .map(|()| Vec::new())
+        } else {
+            match pending {
+                Some(pending) => self.flush_ground_actions(pending),
+                None => Ok(()),
+            }
+            .and_then(|()| self.run_command_inner(command))
+        };
         let nested_process = self
             .overall_report
             .process_time()
@@ -223,11 +265,7 @@ impl EGraph {
                     panic!("Globals should have been desugared away: {name} = {contents}")
                 }
                 _ => {
-                    if let Some(prepared) = self.prepare_resolved_ground_action(&action) {
-                        self.eval_ground_actions(vec![prepared])?;
-                    } else {
-                        self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
-                    }
+                    self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                 }
             },
             // One `eval_actions` call, so the block's `let`s stay local.
@@ -320,7 +358,7 @@ impl EGraph {
                 // the overwhelmingly common negative-assertion form.
                 if matches!(cmds.as_slice(), [ResolvedNCommand::Check(..)]) {
                     let check = cmds.into_iter().next().unwrap();
-                    return match self.run_command(check) {
+                    return match self.run_command(check, None) {
                         Err(error) => {
                             log::info!("Command failed as expected: {error}");
                             Ok(vec![])
@@ -332,7 +370,7 @@ impl EGraph {
                 self.push();
                 let failure = cmds
                     .into_iter()
-                    .find_map(|command| self.run_command(command).err());
+                    .find_map(|command| self.run_command(command, None).err());
                 self.pop()
                     .expect("the snapshot pushed for `fail` must still be present");
                 return match failure {

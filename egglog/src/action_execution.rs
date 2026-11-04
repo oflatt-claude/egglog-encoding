@@ -1,12 +1,18 @@
 //! Prepare restricted constructor actions without effects; execute them through
-//! the same command dispatch as resolved actions. Each action retains its own
-//! commit and rebuild boundary.
+//! the same command dispatch as resolved actions. Only insertion-only runs share
+//! a commit. Unions retain an individual rebuild boundary.
 
 use crate::*;
 
 pub(super) struct GroundActions {
-    pub(super) lookups: Vec<(egglog_bridge::TableAction, Vec<usize>)>,
-    pub(super) union: Option<(usize, usize)>,
+    lookups: Vec<(egglog_bridge::TableAction, Vec<usize>)>,
+    union: Option<(usize, usize)>,
+}
+
+#[derive(Default)]
+pub(super) struct GroundActionBatch {
+    pending: Vec<GroundActions>,
+    lookups: usize,
 }
 
 impl EGraph {
@@ -99,6 +105,41 @@ impl EGraph {
                 }
             })
             .map_err(|error| Error::BackendError(error.to_string()))
+    }
+
+    /// Constructor insertion runs share a bounded transaction. A union retains
+    /// its original commit/rebuild boundary, including container callbacks.
+    pub(super) fn queue_ground_action(
+        &mut self,
+        prepared: GroundActions,
+        pending: &mut GroundActionBatch,
+    ) -> Result<(), Error> {
+        if prepared.union.is_some() {
+            self.flush_ground_actions(pending)?;
+            self.eval_ground_actions(vec![prepared])
+        } else {
+            pending.lookups += prepared.lookups.len();
+            pending.pending.push(prepared);
+            if pending.pending.len() >= 256 || pending.lookups >= 16_384 {
+                self.flush_ground_actions(pending)?;
+            }
+            Ok(())
+        }
+    }
+
+    /// Drain exactly once; failed effects are never replayed.
+    pub(super) fn flush_ground_actions(
+        &mut self,
+        pending: &mut GroundActionBatch,
+    ) -> Result<(), Error> {
+        pending.lookups = 0;
+        if !pending.pending.is_empty() {
+            let timer = Instant::now();
+            let result = self.eval_ground_actions(std::mem::take(&mut pending.pending));
+            self.overall_report.commands_actions += timer.elapsed();
+            result?;
+        }
+        Ok(())
     }
 }
 

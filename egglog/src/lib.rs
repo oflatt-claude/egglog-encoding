@@ -2867,11 +2867,10 @@ impl EGraph {
         name: &str,
         args: &[Expr],
     ) -> Result<Vec<CommandOutput>, Error> {
-        self.run_command(ResolvedNCommand::UserDefined(
-            span!(),
-            name.to_string(),
-            args.to_vec(),
-        ))
+        self.run_command(
+            ResolvedNCommand::UserDefined(span!(), name.to_string(), args.to_vec()),
+            None,
+        )
     }
 
     /// Set the report verbosity level for rule execution output.
