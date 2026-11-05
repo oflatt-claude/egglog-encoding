@@ -4,6 +4,8 @@ use egglog::file_supports_proofs_with_egraph;
 use egglog::{CommandOutput, ast::sanitize_internal_names};
 #[path = "support/extraction.rs"]
 mod extraction;
+#[path = "support/extraction_comparison.rs"]
+mod extraction_comparison;
 use egglog_experimental::*;
 use extraction::run_program_with_extract_checks;
 use libtest_mimic::Trial;
@@ -12,7 +14,7 @@ use libtest_mimic::Trial;
 struct Run {
     path: PathBuf,
     desugar: bool,
-    proof_testing: bool,
+    proofs: bool,
     /// Compare stable command output, including the appended table sizes,
     /// between the ordinary and proof-testing runs.
     snapshot_across_treatments: bool,
@@ -53,7 +55,7 @@ impl Run {
 
         match result {
             Ok(outputs) => {
-                if self.proof_testing {
+                if self.proofs {
                     let snapshot = CommandOutput::snapshot_proofs_only(&outputs);
                     if !snapshot.is_empty() {
                         insta::assert_snapshot!(self.snapshot_name(), snapshot);
@@ -61,7 +63,7 @@ impl Run {
                 }
 
                 if self.snapshot_across_treatments {
-                    let snapshot = if self.proof_testing {
+                    let snapshot = if self.proofs {
                         CommandOutput::snapshot_non_proof_stable_under_proof_encoding(&outputs)
                     } else {
                         CommandOutput::snapshot_stable_under_proof_encoding(&outputs)
@@ -71,7 +73,7 @@ impl Run {
                     }
                 }
             }
-            Err(err_msg) if self.proof_testing => {
+            Err(err_msg) if self.proofs => {
                 panic!("proof fixture failed: {err_msg}");
             }
             Err(_) => {}
@@ -79,7 +81,7 @@ impl Run {
     }
 
     fn egraph(&self) -> EGraph {
-        if self.proof_testing {
+        if self.proofs {
             new_experimental_egraph_with_proof_testing()
         } else {
             new_experimental_egraph()
@@ -92,6 +94,19 @@ impl Run {
         program: &str,
         message: &str,
     ) -> Result<Vec<CommandOutput>, String> {
+        let expected = if self.proofs && !self.requires_proofs() {
+            let ordinary = Run {
+                proofs: false,
+                ..self.clone()
+            };
+            Some(extraction_comparison::observe(&ordinary.test_program(
+                filename.clone(),
+                program,
+                message,
+            )?))
+        } else {
+            None
+        };
         let mut egraph = self.egraph();
         // Match the main file harness: table sizes are part of the output that
         // must remain stable under proof encoding.
@@ -100,20 +115,28 @@ impl Run {
         } else {
             program.to_owned()
         };
-        let result = if self.proof_testing {
-            egraph.parse_and_run_program(filename, &program)
-        } else {
-            egraph
-                .parse_program(filename, &program)
-                .and_then(|program| {
-                    run_program_with_extract_checks(&mut egraph, program, false, &[])
-                })
-                .map(|checked| {
-                    // This single-mode harness has no cross-mode baseline.
-                    drop(checked.comparison_in_root_class);
-                    checked.outputs
-                })
-        };
+        let baseline_terms: Vec<_> = expected
+            .iter()
+            .flatten()
+            .map(|(cost, terms)| (cost.is_some() && terms.len() == 1).then(|| terms[0].as_str()))
+            .collect();
+        let result = egraph
+            .parse_program(filename, &program)
+            .and_then(|program| {
+                let checked =
+                    run_program_with_extract_checks(&mut egraph, program, &baseline_terms)?;
+                if let Some(expected) = &expected {
+                    let mut actual = extraction_comparison::observe(&checked.outputs);
+                    extraction_comparison::compare(
+                        &mut actual,
+                        expected,
+                        &checked.comparison_in_root_class,
+                        &self.path.display().to_string(),
+                    )
+                    .map_err(egglog::Error::ExtractError)?;
+                }
+                Ok(checked.outputs)
+            });
         match result {
             Ok(outputs) => {
                 if self.should_fail() {
@@ -126,7 +149,7 @@ impl Run {
                             .join("\n")
                     );
                 } else {
-                    if !self.proof_testing {
+                    if !self.proofs {
                         for output in &outputs {
                             print!("  {output}");
                         }
@@ -169,7 +192,7 @@ impl Run {
         struct Wrapper<'a>(&'a Run);
         impl std::fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                if self.0.proof_testing {
+                if self.0.proofs {
                     write!(f, "proofs/")?;
                 }
                 let stem = self.0.path.file_stem().unwrap();
@@ -178,7 +201,7 @@ impl Run {
                 if self.0.desugar {
                     write!(f, "_resugar")?;
                 }
-                if self.0.proof_testing {
+                if self.0.proofs {
                     write!(f, "_proof_testing")?;
                 }
                 Ok(())
@@ -227,7 +250,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         let run = Run {
             path: path.clone(),
             desugar: false,
-            proof_testing: false,
+            proofs: false,
             snapshot_across_treatments: false,
         };
         if skipped_files.iter().any(|file| run.path.ends_with(file)) {
@@ -248,7 +271,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
 
         if supports_proofs {
             push_trial(Run {
-                proof_testing: true,
+                proofs: true,
                 ..run.clone()
             });
         }

@@ -3,7 +3,7 @@ use egglog::CommandOutput;
 use egglog_experimental::*;
 #[path = "../../../egglog-experimental/tests/support/extraction.rs"]
 mod extraction;
-#[path = "support/extraction_comparison.rs"]
+#[path = "../../../egglog-experimental/tests/support/extraction_comparison.rs"]
 mod extraction_comparison;
 #[path = "support/paper_oracles.rs"]
 mod paper_oracles;
@@ -119,14 +119,14 @@ fn literal_terms_variants_and_source_root_certificates_survive_encoding() {
         (extract integer 3)
     "#;
     let mut expected = None;
-    for (mut graph, strict) in [
+    for (mut graph, _strict) in [
         (new_experimental_egraph(), false),
         (new_experimental_egraph_with_term_encoding(), false),
         (new_experimental_egraph_with_proof_testing(), true),
     ] {
         let program = graph.parse_program(None, source).unwrap();
         let checked =
-            extraction::run_program_with_extract_checks(&mut graph, program, strict, &[]).unwrap();
+            extraction::run_program_with_extract_checks(&mut graph, program, &[]).unwrap();
         assert_eq!(checked.comparison_in_root_class.len(), 5);
         let outputs = checked.outputs;
         let terms: Vec<_> = outputs
@@ -158,14 +158,14 @@ fn container_children_keep_their_contextual_sorts_during_extraction_checks() {
         (extract root 3)
     "#;
     let mut expected = None;
-    for (mut graph, strict) in [
+    for (mut graph, _strict) in [
         (new_experimental_egraph(), false),
         (new_experimental_egraph_with_term_encoding(), false),
         (new_experimental_egraph_with_proof_testing(), true),
     ] {
         let program = graph.parse_program(None, source).unwrap();
         let checked =
-            extraction::run_program_with_extract_checks(&mut graph, program, strict, &[]).unwrap();
+            extraction::run_program_with_extract_checks(&mut graph, program, &[]).unwrap();
         assert_eq!(checked.comparison_in_root_class.len(), 2);
         let actual: Vec<_> = checked
             .outputs
@@ -223,7 +223,6 @@ fn alternate_best_term_is_checked_at_the_original_extraction_boundary() {
         let checked = extraction::run_program_with_extract_checks(
             &mut graph,
             vec![extract.clone()],
-            strict,
             &[Some(baseline)],
         )
         .unwrap();
@@ -249,7 +248,6 @@ fn alternate_best_term_is_checked_at_the_original_extraction_boundary() {
         let unequal = extraction::run_program_with_extract_checks(
             &mut graph,
             vec![extract, pop],
-            strict,
             &[Some("(C)")],
         )
         .unwrap();
@@ -279,7 +277,7 @@ fn ordinary_root_check_rejects_a_candidate_only_extraction_tie() {
     let source = format!("(extract {root})");
     let program = candidate.parse_program(None, &source).unwrap();
     let checked =
-        extraction::run_program_with_extract_checks(&mut candidate, program, false, &[Some(root)])
+        extraction::run_program_with_extract_checks(&mut candidate, program, &[Some(root)])
             .unwrap();
     assert_eq!(checked.comparison_in_root_class, [Some(true)]);
     assert!(checked.outputs.iter().any(|output| {
@@ -291,24 +289,11 @@ fn ordinary_root_check_rejects_a_candidate_only_extraction_tie() {
         .parse_and_run_program(None, "(datatype T (A) (B))")
         .unwrap();
     let program = ordinary.parse_program(None, &source).unwrap();
-    let checked = extraction::run_program_with_extract_checks(
-        &mut ordinary,
-        program,
-        false,
-        &[Some(&alternate)],
-    )
-    .unwrap();
+    let checked =
+        extraction::run_program_with_extract_checks(&mut ordinary, program, &[Some(&alternate)])
+            .unwrap();
     assert_eq!(checked.comparison_in_root_class, [Some(false)]);
-    let mut actual: Vec<_> = checked
-        .outputs
-        .iter()
-        .filter_map(|output| match output {
-            CommandOutput::ExtractBest(dag, cost, term) => {
-                Some((Some(cost.to_string()), vec![dag.to_string(*term)]))
-            }
-            _ => None,
-        })
-        .collect();
+    let mut actual = extraction_comparison::observe(&checked.outputs);
     assert_eq!(actual, [(Some(cost.clone()), vec![root.into()])]);
     assert!(
         extraction_comparison::compare(
@@ -331,7 +316,7 @@ fn source_constructor_root_can_be_materialized_without_leaking_validation_bindin
             .parse_program(None, "(datatype T (A) (F T)) (extract (F (A)))")
             .unwrap();
         let checked =
-            extraction::run_program_with_extract_checks(&mut graph, program, false, &[]).unwrap();
+            extraction::run_program_with_extract_checks(&mut graph, program, &[]).unwrap();
         assert_eq!(checked.comparison_in_root_class.len(), 1);
         let source_tables = graph.print_size(None).unwrap().to_string();
         assert!(!source_tables.contains("extract-validation"));
@@ -371,4 +356,35 @@ fn only_verified_equal_cost_best_term_ties_are_normalized() {
         extraction_comparison::compare(&mut [swapped], &[variants], &[Some(true)], "order")
             .is_err()
     );
+}
+
+#[test]
+fn included_extractions_preserve_comparison_output_alignment() {
+    let directory = tempfile::tempdir().unwrap();
+    let included = directory.path().join("included.egg");
+    std::fs::write(&included, "(datatype T (A)) (A) (extract (A))").unwrap();
+    let source = format!("(include {:?}) (extract (A))", included.to_str().unwrap());
+    let mut ordinary = new_experimental_egraph();
+    let program = ordinary.parse_program(None, &source).unwrap();
+    let baseline =
+        extraction::run_program_with_extract_checks(&mut ordinary, program, &[]).unwrap();
+    assert_eq!(baseline.comparison_in_root_class.len(), 2);
+    let expected = extraction_comparison::observe(&baseline.outputs);
+    let terms: Vec<_> = expected
+        .iter()
+        .map(|(_, terms)| Some(terms[0].as_str()))
+        .collect();
+    let mut proofs = new_experimental_egraph_with_proof_testing();
+    let program = proofs.parse_program(None, &source).unwrap();
+    let checked =
+        extraction::run_program_with_extract_checks(&mut proofs, program, &terms).unwrap();
+    let mut actual = extraction_comparison::observe(&checked.outputs);
+    extraction_comparison::compare(
+        &mut actual,
+        &expected,
+        &checked.comparison_in_root_class,
+        "include",
+    )
+    .unwrap();
+    assert_eq!(actual, expected);
 }

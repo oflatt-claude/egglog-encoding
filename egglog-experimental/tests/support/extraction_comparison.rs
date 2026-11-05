@@ -1,5 +1,23 @@
-//! The paper's explicit normalization policy for verified extraction ties.
+//! Shared comparison policy for equal-cost extraction ties and exact variants.
+use egglog::CommandOutput;
 pub type Extraction = (Option<String>, Vec<String>);
+
+/// Preserve best-term costs and exact ordered variant lists from command outputs.
+pub fn observe(outputs: &[CommandOutput]) -> Vec<Extraction> {
+    outputs
+        .iter()
+        .filter_map(|output| match output {
+            CommandOutput::ExtractBest(dag, cost, term) => {
+                Some((Some(cost.to_string()), vec![dag.to_string(*term)]))
+            }
+            CommandOutput::ExtractVariants(dag, terms) => Some((
+                None,
+                terms.iter().map(|&term| dag.to_string(term)).collect(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
 
 pub fn compare(
     actual: &mut [Extraction],
@@ -9,7 +27,7 @@ pub fn compare(
 ) -> Result<usize, String> {
     if actual.len() != expected.len() || actual.len() != root_equality.len() {
         return Err(format!(
-            "{context}: extraction counts differ or an extraction was not intercepted; paper inputs must expose each extraction at top level"
+            "{context}: extraction counts differ or an extraction was not intercepted; comparison evidence must match the extraction outputs"
         ));
     }
     let mut ties = 0;

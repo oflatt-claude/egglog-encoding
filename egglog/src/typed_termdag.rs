@@ -11,8 +11,8 @@ use crate::core::StringOrEq;
 use crate::sort::literal_sort;
 use crate::util::{HashMap, HashSet, IndexMap};
 use crate::{
-    ArcSort, Atom, AtomTerm, Context, EGraph, FuncType, ResolvedCall, Term, TermDag, TermId,
-    TypeError, TypeInfo, TypeInfoView, TypedTerm, TypedTermDag,
+    ArcSort, Atom, AtomTerm, Context, EGraph, Error, FuncType, ResolvedCall, ResolvedExpr, Term,
+    TermDag, TermId, TypeError, TypeInfo, TypeInfoView, TypedTerm, TypedTermDag, Value,
 };
 use egglog_ast::generic_ast::Literal;
 use egglog_ast::span::Span;
@@ -36,6 +36,88 @@ impl EGraph {
             types.get_func_type(self.global_table(name)?.name())
         })
     }
+
+    /// Resolve existing ground terms to their canonical values without inserting
+    /// constructor or function rows. Globals are zero-argument calls. Shared
+    /// subterms are read once per contextual typing; nested containers are
+    /// canonicalized before their values become lookup keys.
+    ///
+    /// Errors on unavailable terms, invalid or ambiguous typings, or primitives
+    /// unavailable in a read-only context. Primitive/container values may be
+    /// interned, but missing constructor/function rows are never materialized.
+    /// Root ordering and duplicates are preserved.
+    pub fn lookup_term_dag(
+        &self,
+        terms: &TermDag,
+        roots: &[(TermId, Option<ArcSort>)],
+    ) -> Result<Vec<(ArcSort, Value)>, Error> {
+        use crate::exec_state::{Core, Read};
+
+        let (typed, roots) = self
+            .typecheck_term_dag(terms, roots, Context::Read)
+            .map_err(|error| Error::ExtractError(error.to_string()))?;
+        let mut values = Vec::with_capacity(typed.size());
+        for (id, node) in typed.nodes() {
+            let value = match node {
+                TypedTerm::Var(never) => match *never {},
+                TypedTerm::Lit(literal) => self.read(|mut state| {
+                    state.eval_resolved_expr(&ResolvedExpr::Lit(Span::Panic, literal.clone()), &[])
+                }),
+                TypedTerm::App(call, children) => {
+                    let inputs: Vec<Value> = children.iter().map(|&child| values[child]).collect();
+                    match call {
+                        ResolvedCall::Primitive(primitive) => {
+                            self.read(|mut state| state.apply_primitive(primitive, &inputs))
+                        }
+                        ResolvedCall::Func(function) => self.read(|state| {
+                            if self
+                                .functions
+                                .get(&function.name)
+                                .is_some_and(crate::Function::rows_are_enodes)
+                            {
+                                state.eclass_of(&function.name, &inputs[..])
+                            } else {
+                                state.lookup(&function.name, &inputs[..])
+                            }
+                        })?,
+                        ResolvedCall::Values(_) => {
+                            unreachable!("ground typing rejects tuple outputs")
+                        }
+                    }
+                }
+            }
+            .ok_or_else(|| Error::ExtractError(format!("ground term node {id} is unavailable")))?;
+            values.push(canonical_value(self, value, &node.sort()));
+        }
+        Ok(roots
+            .into_iter()
+            .map(|id| (typed.get(id).sort(), values[id]))
+            .collect())
+    }
+}
+
+/// Value-only canonicalization also supports user-provided internal union-finds;
+/// proof-bearing row layouts are irrelevant to existing-term membership.
+fn canonical_value(egraph: &EGraph, value: Value, sort: &ArcSort) -> Value {
+    use crate::exec_state::{Core, Internal};
+    use crate::extract::find_canonical;
+    use crate::proofs::proof_container_rebuild::rebuild_with_leaders;
+
+    if !sort.is_eq_container_sort() {
+        return find_canonical(egraph, value, sort);
+    }
+    let leaders = egraph
+        .container_inner_values(sort, value)
+        .into_iter()
+        .filter_map(|(sort, value)| {
+            let leader = canonical_value(egraph, value, &sort);
+            (leader != value).then_some((value, leader))
+        })
+        .collect();
+    egraph.read(|mut state| {
+        let containers = state.container_values();
+        rebuild_with_leaders(containers, state.raw_exec_state(), sort, value, &leaders)
+    })
 }
 
 impl TypeInfo {

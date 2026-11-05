@@ -17,15 +17,18 @@
 
 The paper test target compares ordinary, term-encoded and strict proof-testing
 runs of each enabled input. It excludes internal encoding/proof tables from the
-size map. Extraction checks compare the actual returned terms and costs, and
-strict extraction verifies certificates for those returned terms in order,
+size map. Both fixture harnesses share extraction checks for actual returned
+terms, costs and exact variant lists. Read-only DAG lookup requires returned and
+comparison terms already represented in the requested root e-class, after normal
+once-only root/count evaluation. Proof-enabled extraction verifies certificates
+for the exact returned terms in order,
 including a checked connection to the requested source root. Supplementary
 extraction checks use a clone and do not mutate the workload being observed.
 One explicit normalization handles equal-cost best-term ties: a different single
 best expression is accepted only when its reported cost matches and the alternate
 expression is checked equal to the requested root in the ordinary configuration
 at that command boundary, or by a checked source proof in strict mode.
-Strict mode proves that equality. The suite reports each accepted tie and its
+Proof checking also proves that equality. The suite reports each accepted tie and its
 count; raw outputs and certificate right-hand sides remain exact. Variant order,
 variant counts and costs are not normalized. Paper inputs must expose their
 extractions at top level so every extraction is intercepted.
@@ -61,7 +64,8 @@ suffix lists any probes absent from the native graph; here that list is empty. T
 [`Expect` fields](paper-tests/tests/slotted_differential.rs) document additional
 guard, aliasing, count and known-limitation assertions. An empty `expect` still
 requires live partition/count agreement. Ordinary command-output and proof
-snapshots continue to use Insta in `egglog-experimental/tests/files.rs`; slotted
+snapshots continue to use Insta in `egglog-experimental/tests/files.rs`, with
+shared ordinary/proof extraction parity checks alongside those snapshots; slotted
 compiler snapshots use it in `egglog-experimental/tests/slotted_files.rs`.
 Routine commands read these bytes. Regeneration is explicit:
 

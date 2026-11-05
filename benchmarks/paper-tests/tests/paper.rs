@@ -14,7 +14,7 @@ use std::{
 
 #[path = "../../../egglog-experimental/tests/support/extraction.rs"]
 mod extraction;
-#[path = "support/extraction_comparison.rs"]
+#[path = "../../../egglog-experimental/tests/support/extraction_comparison.rs"]
 mod extraction_comparison;
 #[path = "support/paper_oracles.rs"]
 mod paper_oracles;
@@ -82,30 +82,14 @@ fn observe(
         .flat_map(|expected| &expected.extractions)
         .map(|(cost, terms)| (cost.is_some() && terms.len() == 1).then(|| terms[0].as_str()))
         .collect();
-    let checked = extraction::run_program_with_extract_checks(
-        &mut graph,
-        commands,
-        mode == "proof-testing",
-        &baseline_terms,
-    )
-    .unwrap_or_else(|error| panic!("{} / {mode}: {error}", file.display()));
+    let checked =
+        extraction::run_program_with_extract_checks(&mut graph, commands, &baseline_terms)
+            .unwrap_or_else(|error| panic!("{} / {mode}: {error}", file.display()));
     let outputs = checked.outputs;
     let CommandOutput::PrintAllFunctionsSize(sizes) = graph.print_size(None).unwrap() else {
         unreachable!()
     };
-    let extractions: Vec<_> = outputs
-        .iter()
-        .filter_map(|output| match output {
-            CommandOutput::ExtractBest(dag, cost, term) => {
-                Some((Some(cost.to_string()), vec![dag.to_string(*term)]))
-            }
-            CommandOutput::ExtractVariants(dag, terms) => Some((
-                None,
-                terms.iter().map(|term| dag.to_string(*term)).collect(),
-            )),
-            _ => None,
-        })
-        .collect();
+    let extractions = extraction_comparison::observe(&outputs);
     Observations {
         math_eclass_count: file
             .ends_with("math-iteration-12.egg")
