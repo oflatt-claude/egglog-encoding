@@ -92,8 +92,8 @@ For a disposable three-round verification preview:
 ```
 
 All entrypoints share the timeout and allocator/address-space guards from
-`benchmarking/config.py` (500 seconds and 10 GiB). `--timeout-sec N` and
-`--memory-limit-bytes N` override them; `--no-memory-limit` removes the cap.
+`benchmarking/config.py` (500 seconds and 16 GiB). `--timeout-sec N` and
+`--memory-limit-gib N` override them; `--no-memory-limit` removes the cap.
 The Rust paper parent reads these defaults once; trials remain Rust tests.
 Peak RSS is measured separately. Completed cached observations remain reusable
 even after lowering a guard. Timeouts and allocation-limit outcomes retry only
