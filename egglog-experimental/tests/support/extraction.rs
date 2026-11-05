@@ -126,6 +126,28 @@ fn source_term(dag: &mut TermDag, expr: &Expr) -> TermId {
 /// batched actions that the native eval_expr API cannot execute.
 fn capture_source_value(graph: &mut EGraph, root: &Expr) -> Result<Expr, Error> {
     let name = graph.parser.symbol_gen.fresh("extract-validation-root");
+    if let Expr::Call(_, function, arguments) = root
+        && arguments.is_empty()
+        && graph
+            .get_function(function)
+            .is_some_and(|function| function.is_view())
+        && let Some(function) = graph.type_info().source_types().get_func_type(function)
+        && function.subtype == egglog::ast::FunctionSubtype::Custom
+        && !function.role.is_global()
+    {
+        // Encoded actions cannot look up a custom function. Copy its current
+        // output through a query into a private slot, before any count actions.
+        let value = graph.parser.symbol_gen.fresh("extract-validation-value");
+        let enforce_reserved = graph.parser.ensure_no_reserved_symbols;
+        graph.parser.ensure_no_reserved_symbols = false;
+        let commands = graph.parse_program(None, &format!(
+            "(function {name} () {} :merge old) (for ((= {root} {value})) ((set ({name}) {value})))",
+            function.output().name(),
+        ));
+        graph.parser.ensure_no_reserved_symbols = enforce_reserved;
+        graph.run_program(commands?)?;
+        return Ok(Expr::Call(span!(), name, vec![]));
+    }
     graph.run_program(vec![Command::Action(Action::Let(
         span!(),
         name.clone(),
@@ -748,5 +770,64 @@ mod tests {
         assert!(
             matches!(&checked.outputs[0], CommandOutput::ExtractBest(dag, _, term) if dag.to_string(*term) == "(A)")
         );
+    }
+
+    #[test]
+    fn nullary_function_roots_are_captured_in_ordinary_and_encoded_graphs() {
+        for mut graph in [
+            new_experimental_egraph(),
+            new_experimental_egraph_with_term_encoding(),
+            new_experimental_egraph_with_proofs(),
+            new_experimental_egraph_with_proof_testing(),
+        ] {
+            let commands = graph
+                .parse_program(
+                    None,
+                    r#"
+                (datatype T (A) (B))
+                (function current () T :merge new)
+                (set (current) (A))
+                (extract (current))
+                (extract (current) 2)
+            "#,
+                )
+                .unwrap();
+            let checked = run_program_with_extract_checks(&mut graph, commands, &[]).unwrap();
+            assert_eq!(checked.comparison_in_root_class.len(), 2);
+            let terms = extracted_terms(&checked.outputs).unwrap();
+            assert_eq!(terms.len(), 2);
+            assert!(
+                terms
+                    .iter()
+                    .all(|(dag, term)| dag.to_string(*term) == "(A)")
+            );
+            assert!(
+                !graph
+                    .print_size(None)
+                    .unwrap()
+                    .to_string()
+                    .contains("extract-validation")
+            );
+            // A Full count expression can replace the source function's value.
+            // The validation root must retain the value read before that change.
+            let mut validation = graph.clone();
+            let root = validation
+                .parser
+                .get_expr_from_string(None, "(current)")
+                .unwrap();
+            let captured = capture_source_value(&mut validation, &root).unwrap();
+            validation
+                .parse_and_run_program(None, "(set (current) (B))")
+                .unwrap();
+            let mut terms = TermDag::default();
+            let captured = source_term(&mut terms, &captured);
+            let current = source_term(&mut terms, &root);
+            let a = terms.app("A".into(), vec![]);
+            let values = validation
+                .lookup_term_dag(&terms, &[(captured, None), (current, None), (a, None)])
+                .unwrap();
+            assert_eq!(values[0].1, values[2].1);
+            assert_ne!(values[0].1, values[1].1);
+        }
     }
 }
