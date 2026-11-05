@@ -520,6 +520,7 @@ impl Database {
                 rule_set,
                 match_counter: match_counter.as_ref(),
                 batches: Default::default(),
+                exec_state: exec_state.clone(),
                 apply_time: Duration::ZERO,
             };
             for (plan, desc, symbol_map) in rule_set.plans.values() {
@@ -2786,6 +2787,9 @@ struct InPlaceActionBuffer<'a> {
     rule_set: &'a RuleSet,
     match_counter: &'a MatchCounter,
     batches: DenseIdMap<ActionId, ActionState>,
+    /// Reuse staged-write buffers across serial batches. The state is dropped
+    /// before this ruleset merges, and batch-local predictions are reset below.
+    exec_state: ExecutionState<'a>,
     /// Time spent running rule-head instructions, excluding buffer management.
     apply_time: Duration,
 }
@@ -2808,7 +2812,7 @@ where
         &mut self,
         action: ActionId,
         bindings: &DenseIdMap<Variable, Value>,
-        mut to_exec_state: impl FnMut() -> ExecutionState<'scope>,
+        _to_exec_state: impl FnMut() -> ExecutionState<'scope>,
     ) {
         let action_state = self
             .batches
@@ -2822,24 +2826,29 @@ where
             action_state.bindings.push(bindings, &action_info.used_vars);
         }
         if action_state.len >= LOCAL_ACTION_BATCH_SIZE {
-            let mut state = to_exec_state();
             let apply_timer = Instant::now();
-            let succeeded = state.run_instrs(&action_info.instrs, &mut action_state.bindings);
+            let succeeded = self
+                .exec_state
+                .run_instrs(&action_info.instrs, &mut action_state.bindings);
             self.apply_time += apply_timer.elapsed();
+            self.exec_state.reset_action_batch();
             action_state.bindings.clear();
             self.match_counter.inc_matches(action, succeeded);
             action_state.len = 0;
         }
     }
 
-    fn flush(&mut self, exec_state: &mut ExecutionState) {
+    fn flush(&mut self, _exec_state: &mut ExecutionState) {
+        // The old final flush shared one fresh state across all partial
+        // batches. Keep that boundary while appending to the retained buffers.
         flush_action_states(
-            exec_state,
+            &mut self.exec_state,
             &mut self.batches,
             self.rule_set,
             self.match_counter,
             Some(&mut self.apply_time),
         );
+        self.exec_state.reset_action_batch();
     }
 
     fn recur<'local, 'rows>(

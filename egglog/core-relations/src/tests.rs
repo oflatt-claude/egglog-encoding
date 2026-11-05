@@ -4120,3 +4120,93 @@ fn shared_continuations_fixture(slow: Option<Constraint>) {
     assert_eq!(table_rows(&db, outputs[1]), expected_c);
     assert_eq!(table_rows(&db, outputs[2]), expected_b);
 }
+
+#[test]
+fn serial_action_state_reuse_preserves_batch_defaults_and_tail_writes() {
+    let pool = egglog_concurrency::ThreadPool::new(1);
+    pool.install(|| {
+        let mut db = Database::new();
+        let input = add_set_table(&mut db, 1);
+        let output = add_set_table(&mut db, 2);
+        let partial_output = add_set_table(&mut db, 2);
+        let defaults = db.add_table(
+            TimestampedTable::new(1, 2, Box::new(|_, _, _, _| false)),
+            iter::empty(),
+            iter::empty(),
+        );
+        let ids = db.add_counter();
+        // Two complete serial batches and a partial final batch. Reusing
+        // predictions across their boundaries would allocate only one id.
+        let count = 2 * 128 + 17;
+        {
+            let mut rows = db.new_buffer(input);
+            for i in 0..count {
+                rows.stage_insert(&[v(i)]);
+            }
+        }
+        db.merge_all();
+        let mut rules = db.new_rule_set();
+        let mut query = rules.new_rule();
+        let item = query.new_var_named("item");
+        query.add_atom(input, &[item.into()], &[]).unwrap();
+        let mut actions = query.build();
+        let default = actions
+            .lookup_or_insert(
+                defaults,
+                &[v(0).into()],
+                &[WriteVal::IncCounter(ids)],
+                ColumnId::new(1),
+            )
+            .unwrap();
+        actions
+            .insert(output, &[item.into(), default.into()])
+            .unwrap();
+        actions.build();
+        // A second action has only a partial batch. Both partial actions must
+        // continue sharing predictions during the one final flush.
+        let mut query = rules.new_rule();
+        let item = query.new_var_named("partial_item");
+        query
+            .add_atom(
+                input,
+                &[item.into()],
+                &[Constraint::LtConst {
+                    col: ColumnId::new(0),
+                    val: v(17),
+                }],
+            )
+            .unwrap();
+        let mut actions = query.build();
+        let default = actions
+            .lookup_or_insert(
+                defaults,
+                &[v(0).into()],
+                &[WriteVal::IncCounter(ids)],
+                ColumnId::new(1),
+            )
+            .unwrap();
+        actions
+            .insert(partial_output, &[item.into(), default.into()])
+            .unwrap();
+        actions.build();
+        let rules = rules.build();
+        db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+        let rows = table_rows(&db, output);
+        assert_eq!(rows.len(), count);
+        assert_eq!(
+            rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
+            (0..count).map(v).collect::<Vec<_>>()
+        );
+        let mut allocated = rows.iter().map(|row| row[1]).collect::<Vec<_>>();
+        allocated.sort_unstable();
+        allocated.dedup();
+        assert_eq!(allocated.len(), 3);
+        assert_eq!(db.read_counter(ids), 3);
+        assert_eq!(table_rows(&db, partial_output).len(), 17);
+        // Retained mutation buffers must be published before the next run.
+        // The now-visible default prevents any further fresh allocations.
+        db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+        assert_eq!(db.read_counter(ids), 3);
+        assert_eq!(table_rows(&db, defaults).len(), 1);
+    });
+}

@@ -569,6 +569,18 @@ impl<'a> ExecutionState<'a> {
         }
     }
 
+    /// Finish a serial action batch while retaining its staged-write buffers.
+    ///
+    /// Pending writes and their allocation buffers can be retained until the
+    /// ruleset merges, but predictions are batch-local: extending their lifetime
+    /// would make later batches observe defaults that were previously independent.
+    /// Return counter reservations at the same boundaries as a fresh state too.
+    pub(crate) fn reset_action_batch(&mut self) {
+        self.predicted.clear();
+        self.counter_reservations.ranges.clear();
+        self.changed = false;
+    }
+
     /// Get extension-owned scratch data for this execution's database view.
     ///
     /// Clones used by parallel workers share the data. A new execution starts
