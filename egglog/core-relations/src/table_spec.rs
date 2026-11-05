@@ -16,8 +16,8 @@ use smallvec::SmallVec;
 use crate::{
     QueryEntry, TableId, Variable,
     action::{
-        Bindings, ExecutionState,
-        mask::{Mask, MaskIter},
+        Bindings, ExecutionState, LookupOutput,
+        mask::{Mask, MaskIter, value_source},
     },
     common::Value,
     offsets::{RowId, Subset, SubsetRef},
@@ -417,6 +417,16 @@ pub trait Table: Any + Send + Sync {
         self.get_row(key).map(|row| row.vals[col.index()])
     }
 
+    /// Read selected columns for a key, preserving each column's presence and
+    /// value from `get_row_column`. `columns` and `out` must have equal lengths.
+    /// Implementations can share the row lookup without materializing the row.
+    fn get_row_columns(&self, key: &[Value], columns: &[ColumnId], out: &mut [Option<Value>]) {
+        assert_eq!(columns.len(), out.len());
+        for (col, out) in columns.iter().zip(out) {
+            *out = self.get_row_column(key, *col);
+        }
+    }
+
     /// Merge any updates to the table, and potentially update the generation for
     /// the table.
     fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange;
@@ -553,6 +563,41 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         bindings.insert(out_var, &out);
     }
 
+    fn lookup_columns_with_defaults_vectorized(
+        &self,
+        table: &dyn Table,
+        mask: &mut Mask,
+        bindings: &mut Bindings,
+        args: &[QueryEntry],
+        outputs: &[LookupOutput],
+    ) {
+        let table = table.as_any().downcast_ref::<T>().unwrap();
+        let columns: SmallVec<[ColumnId; 2]> = outputs.iter().map(|out| out.dst_col).collect();
+        let defaults: SmallVec<[_; 2]> = outputs
+            .iter()
+            .map(|out| value_source(&out.default, bindings))
+            .collect();
+        let mut scratch: SmallVec<[Option<Value>; 2]> = smallvec::smallvec![None; outputs.len()];
+        let lanes = mask.len();
+        let mut out = with_pool_set(PoolSet::get::<Vec<Value>>);
+        out.resize(lanes * outputs.len(), Value::stale());
+        let (first, rest) = out.split_at_mut(lanes);
+        for_each_binding_with_mask!(mask, args, bindings, |iter| {
+            iter.assign_vec(first, |lane, args| {
+                table.get_row_columns(args.as_slice(), &columns, &mut scratch);
+                for column in 1..outputs.len() {
+                    rest[(column - 1) * lanes + lane] =
+                        scratch[column].unwrap_or_else(|| defaults[column].at(lane));
+                }
+                scratch[0].unwrap_or_else(|| defaults[0].at(lane))
+            });
+        });
+        drop(defaults);
+        for (column, output) in outputs.iter().enumerate() {
+            bindings.insert(output.dst_var, &out[column * lanes..(column + 1) * lanes]);
+        }
+    }
+
     fn lookup_with_default_vectorized(
         &self,
         table: &dyn Table,
@@ -673,6 +718,17 @@ impl WrappedTable {
             .lookup_row_vectorized(mask, bindings, args, col, out_var)
     }
 
+    pub(crate) fn lookup_columns_with_defaults_vectorized(
+        &self,
+        mask: &mut Mask,
+        bindings: &mut Bindings,
+        args: &[QueryEntry],
+        outputs: &[LookupOutput],
+    ) {
+        self.as_ref()
+            .lookup_columns_with_defaults_vectorized(mask, bindings, args, outputs);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn lookup_with_default_vectorized(
         &self,
@@ -766,6 +822,15 @@ pub(crate) trait TableWrapper: Send + Sync {
         args: &[QueryEntry],
         col: ColumnId,
         out_var: Variable,
+    );
+
+    fn lookup_columns_with_defaults_vectorized(
+        &self,
+        table: &dyn Table,
+        mask: &mut Mask,
+        bindings: &mut Bindings,
+        args: &[QueryEntry],
+        outputs: &[LookupOutput],
     );
 
     #[allow(clippy::too_many_arguments)]
@@ -868,6 +933,17 @@ impl WrappedTableRef<'_> {
     ) {
         self.wrapper
             .lookup_row_vectorized(self.inner, mask, bindings, args, col, out_var);
+    }
+
+    pub(crate) fn lookup_columns_with_defaults_vectorized(
+        &self,
+        mask: &mut Mask,
+        bindings: &mut Bindings,
+        args: &[QueryEntry],
+        outputs: &[LookupOutput],
+    ) {
+        self.wrapper
+            .lookup_columns_with_defaults_vectorized(self.inner, mask, bindings, args, outputs);
     }
 
     #[allow(clippy::too_many_arguments)]

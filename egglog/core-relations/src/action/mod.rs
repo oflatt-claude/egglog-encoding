@@ -38,6 +38,8 @@ use self::mask::{Mask, MaskIter, ValueSource, value_source};
 pub(crate) mod mask;
 
 #[cfg(test)]
+mod lookup_tests;
+#[cfg(test)]
 mod tests;
 
 /// A representation of a value within a query or rule.
@@ -1067,6 +1069,14 @@ impl ExecutionState<'_> {
                     mask, bindings, args, *dst_col, *default, *dst_var,
                 );
             }
+            Instr::LookupColumnsWithDefaults {
+                table,
+                args,
+                outputs,
+            } => {
+                let table = &self.db.table_info[*table].table;
+                table.lookup_columns_with_defaults_vectorized(mask, bindings, args, outputs);
+            }
             Instr::Lookup {
                 table,
                 args,
@@ -1229,6 +1239,14 @@ impl ExecutionState<'_> {
     }
 }
 
+/// One independent column read in a fused lookup.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LookupOutput {
+    pub dst_col: ColumnId,
+    pub dst_var: Variable,
+    pub default: QueryEntry,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum Instr {
     /// Look up the value of the given table, inserting a new entry with a
@@ -1249,6 +1267,14 @@ pub(crate) enum Instr {
         dst_col: ColumnId,
         dst_var: Variable,
         default: QueryEntry,
+    },
+
+    /// Read multiple columns from one row, with an independent default for each.
+    /// No output may be used by another output's key or default.
+    LookupColumnsWithDefaults {
+        table: TableId,
+        args: Vec<QueryEntry>,
+        outputs: Vec<LookupOutput>,
     },
 
     /// Look up a value of the given table, halting execution if it is not

@@ -443,3 +443,183 @@ fn constant_occurrences_keep_cached_table_headers_separate() {
     assert_eq!(plain.subset.size(), 6);
     assert_eq!(builder.header_cache[table].len(), 1);
 }
+
+#[test]
+fn fused_lookup_defaults_remain_independent_and_follow_database_snapshots() {
+    let mut db = Database::default();
+    let source = add_table(&mut db, 2);
+    let output = output_table(&mut db, 5);
+    let rules = {
+        let mut builder = db.new_rule_set();
+        let mut rule = builder.new_rule().build();
+        let a = rule
+            .lookup_with_default(source, &[v(7).into()], v(70).into(), ColumnId::new(1))
+            .unwrap();
+        let b = rule
+            .lookup_with_default(source, &[v(7).into()], v(71).into(), ColumnId::new(2))
+            .unwrap();
+        let c = rule
+            .lookup_with_default(source, &[v(7).into()], v(72).into(), ColumnId::new(0))
+            .unwrap();
+        assert!(
+            matches!(&rule.qb.instrs[..], [Instr::LookupColumnsWithDefaults { outputs, .. }] if outputs.len() == 3)
+        );
+        // A fallback that uses a fused output must execute after those outputs
+        // are bound, even though it reads the same table and key.
+        let d = rule
+            .lookup_with_default(source, &[v(7).into()], b.into(), ColumnId::new(2))
+            .unwrap();
+        // A dependent key must also see its predecessor's output.
+        let e = rule
+            .lookup_with_default(source, &[d.into()], v(99).into(), ColumnId::new(1))
+            .unwrap();
+        assert!(matches!(
+            &rule.qb.instrs[..],
+            [
+                Instr::LookupColumnsWithDefaults { .. },
+                Instr::LookupWithDefault { .. },
+                Instr::LookupWithDefault { .. }
+            ]
+        ));
+        rule.insert(output, &[a.into(), b.into(), c.into(), d.into(), e.into()])
+            .unwrap();
+        rule.build();
+        builder.build()
+    };
+    let snapshot = db.clone();
+    db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(
+        table_rows(&db, output),
+        [vec![v(1), v(7), v(7), v(7), v(1)]]
+    );
+    db.clear_table(output);
+    db.clear_table(source);
+    db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(
+        table_rows(&db, output),
+        [vec![v(70), v(71), v(72), v(71), v(99)]]
+    );
+    db.clear_table(output);
+    db.new_buffer(source).stage_insert(&[v(7), v(42), v(3)]);
+    db.new_buffer(source).stage_insert(&[v(3), v(43), v(4)]);
+    db.merge_all();
+    db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(
+        table_rows(&db, output),
+        [vec![v(42), v(3), v(7), v(3), v(43)]]
+    );
+    db = snapshot;
+    db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(
+        table_rows(&db, output),
+        [vec![v(1), v(7), v(7), v(7), v(1)]]
+    );
+}
+
+#[test]
+fn fused_lookup_does_not_cross_effects_or_change_table_and_key_identity() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut db = Database::default();
+    let source = add_table(&mut db, 2);
+    let other = add_table(&mut db, 3);
+    let output = output_table(&mut db, 4);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let func = db.add_external_function(Box::new(crate::make_external_func({
+        let calls = calls.clone();
+        move |_: &mut crate::ExecutionState, _: &[crate::Value]| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Some(v(0))
+        }
+    })));
+    let rules = {
+        let mut builder = db.new_rule_set();
+        let mut rule = builder.new_rule().build();
+        let a = rule
+            .lookup_with_default(source, &[v(7).into()], v(90).into(), ColumnId::new(1))
+            .unwrap();
+        rule.call_external(func, &[]).unwrap();
+        let b = rule
+            .lookup_with_default(source, &[v(7).into()], v(91).into(), ColumnId::new(2))
+            .unwrap();
+        let c = rule
+            .lookup_with_default(other, &[v(7).into()], v(92).into(), ColumnId::new(1))
+            .unwrap();
+        let d = rule
+            .lookup_with_default(other, &[v(8).into()], v(93).into(), ColumnId::new(1))
+            .unwrap();
+        assert_eq!(rule.qb.instrs.len(), 5);
+        assert!(
+            !rule
+                .qb
+                .instrs
+                .iter()
+                .any(|instr| matches!(instr, Instr::LookupColumnsWithDefaults { .. }))
+        );
+        rule.insert(output, &[a.into(), b.into(), c.into(), d.into()])
+            .unwrap();
+        rule.build();
+        builder.build()
+    };
+    db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(table_rows(&db, output), [vec![v(1), v(7), v(1), v(2)]]);
+}
+
+#[test]
+fn fused_lookup_keeps_single_lookup_output_dependencies_sequential() {
+    let mut db = Database::default();
+    let source = add_table(&mut db, 2);
+    db.clear_table(source);
+    let output = output_table(&mut db, 2);
+    let rules = {
+        let mut builder = db.new_rule_set();
+        let mut rule = builder.new_rule().build();
+        let a = rule
+            .lookup_with_default(source, &[v(7).into()], v(90).into(), ColumnId::new(1))
+            .unwrap();
+        let b = rule
+            .lookup_with_default(source, &[v(7).into()], a.into(), ColumnId::new(2))
+            .unwrap();
+        assert!(matches!(
+            &rule.qb.instrs[..],
+            [
+                Instr::LookupWithDefault { .. },
+                Instr::LookupWithDefault { .. }
+            ]
+        ));
+        rule.insert(output, &[a.into(), b.into()]).unwrap();
+        rule.build();
+        builder.build()
+    };
+    db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(table_rows(&db, output), [vec![v(90), v(90)]]);
+}
+
+#[test]
+fn fused_lookup_preserves_per_column_presence_in_specialized_tables() {
+    let mut db = Database::default();
+    let uf = db.add_table(crate::DisplacedTable::default(), [], []);
+    let output = output_table(&mut db, 2);
+    // DisplacedTable exposes a leader for every id, but only exposes the other
+    // columns for displaced ids. A whole-row miss must not discard the leader.
+    let rules = {
+        let mut builder = db.new_rule_set();
+        let mut rule = builder.new_rule().build();
+        let leader = rule
+            .lookup_with_default(uf, &[v(7).into()], v(90).into(), ColumnId::new(1))
+            .unwrap();
+        let timestamp = rule
+            .lookup_with_default(uf, &[v(7).into()], v(91).into(), ColumnId::new(2))
+            .unwrap();
+        assert!(matches!(
+            &rule.qb.instrs[..],
+            [Instr::LookupColumnsWithDefaults { .. }]
+        ));
+        rule.insert(output, &[leader.into(), timestamp.into()])
+            .unwrap();
+        rule.build();
+        builder.build()
+    };
+    db.run_rule_set(&rules, ReportLevel::TimeOnly, None);
+    assert_eq!(table_rows(&db, output), [vec![v(7), v(91)]]);
+}

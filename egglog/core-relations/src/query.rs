@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::{
     BaseValueId, CounterId, ExternalFunctionId, PoolSet, Value,
-    action::{Instr, QueryEntry, WriteVal},
+    action::{Instr, LookupOutput, QueryEntry, WriteVal},
     common::HashMap,
     free_join::{
         ActionId, AtomId, Database, ProcessedConstraints, SubAtom, TableId, TableInfo, VarInfo,
@@ -897,13 +897,79 @@ impl RuleBuilder<'_, '_> {
         let table_info = self.table_info(table);
         self.validate_keys(table, table_info, args)?;
         let res = self.qb.new_var();
-        self.qb.instrs.push(Instr::LookupWithDefault {
-            table,
-            args: args.to_vec(),
+        let output = LookupOutput {
             dst_col,
             dst_var: res,
             default,
-        });
+        };
+        // Only combine consecutive reads. Any intervening instruction (including
+        // external calls) may have effects, or change the active lane mask.
+        let same_keys = |other: &[QueryEntry]| {
+            args.len() == other.len()
+                && args.iter().zip(other).all(|(a, b)| match (a, b) {
+                    (QueryEntry::Var(a), QueryEntry::Var(b)) => a == b,
+                    (QueryEntry::Const(a), QueryEntry::Const(b)) => a == b,
+                    _ => false,
+                })
+        };
+        let depends_on = |var| {
+            args.iter()
+                .chain(std::iter::once(&default))
+                .any(|entry| matches!(entry, QueryEntry::Var(v) if *v == var))
+        };
+        match self.qb.instrs.last_mut() {
+            Some(prev @ Instr::LookupWithDefault { .. }) => {
+                let Instr::LookupWithDefault {
+                    table: prev_table,
+                    args: prev_args,
+                    dst_col: prev_col,
+                    dst_var: prev_var,
+                    default: prev_default,
+                } = prev
+                else {
+                    unreachable!()
+                };
+                if *prev_table == table && same_keys(prev_args) && !depends_on(*prev_var) {
+                    *prev = Instr::LookupColumnsWithDefaults {
+                        table,
+                        args: std::mem::take(prev_args),
+                        outputs: vec![
+                            LookupOutput {
+                                dst_col: *prev_col,
+                                dst_var: *prev_var,
+                                default: *prev_default,
+                            },
+                            output,
+                        ],
+                    };
+                } else {
+                    self.qb.instrs.push(Instr::LookupWithDefault {
+                        table,
+                        args: args.to_vec(),
+                        dst_col,
+                        dst_var: res,
+                        default,
+                    });
+                }
+            }
+            Some(Instr::LookupColumnsWithDefaults {
+                table: prev_table,
+                args: prev_args,
+                outputs,
+            }) if *prev_table == table
+                && same_keys(prev_args)
+                && !outputs.iter().any(|out| depends_on(out.dst_var)) =>
+            {
+                outputs.push(output);
+            }
+            _ => self.qb.instrs.push(Instr::LookupWithDefault {
+                table,
+                args: args.to_vec(),
+                dst_col,
+                dst_var: res,
+                default,
+            }),
+        }
         self.qb.mark_used(args);
         self.qb.mark_used(&[default]);
         self.qb.mark_defined(&res.into());

@@ -667,6 +667,20 @@ impl Table for SortedWritesTable {
         Some(Row { id, vals })
     }
 
+    fn get_row_columns(&self, key: &[Value], columns: &[ColumnId], out: &mut [Option<Value>]) {
+        assert_eq!(columns.len(), out.len());
+        let Some(id) = get_entry(key, self.n_keys, &self.hash, |row| {
+            &self.data.get_row(row).unwrap()[0..self.n_keys] == key
+        }) else {
+            out.fill(None);
+            return;
+        };
+        let row = self.data.get_row(id).unwrap();
+        for (col, out) in columns.iter().zip(out) {
+            *out = Some(row[col.index()]);
+        }
+    }
+
     fn get_row_column(&self, key: &[Value], col: ColumnId) -> Option<Value> {
         let id = get_entry(key, self.n_keys, &self.hash, |row| {
             &self.data.get_row(row).unwrap()[0..self.n_keys] == key
