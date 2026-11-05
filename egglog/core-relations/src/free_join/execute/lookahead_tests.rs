@@ -310,6 +310,7 @@ fn promoted_intersection_preserves_every_factorized_payload_row() {
             rule_set: &rules,
             match_counter: &counter,
             batches: Default::default(),
+            exec_state: execution.clone(),
             apply_time: Duration::ZERO,
         };
         join.run_plan(
