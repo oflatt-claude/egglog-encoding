@@ -10,8 +10,8 @@ import EgglogSemantics.Tests.Render
 # Differential tests
 
 Curated and seeded constructor programs. Each invocation writes a `.egg` program and
-expected row counts; `scripts/difftest.sh` runs egglog with a per-case timeout, and
-`scripts/compiled-difftest.sh` does the same for the compiled programs.
+expected row counts; `semantics/difftest.sh` runs egglog with a per-case timeout, and
+`semantics/compiled-difftest.sh` does the same for the compiled programs.
 
 Nullary constructors stand in for literals where Rust requires distinct sorts.
 Additional modes run the congruence, provenance, and resugar gates and export certificates.
@@ -454,7 +454,7 @@ private def genProgram (s : Nat) : List Src :=
 
 /-! ### The whole corpus
 
-The cases `scripts/difftest.sh` runs, as data rather than as files, so that a harness which
+The cases `semantics/difftest.sh` runs, as data rather than as files, so that a harness which
 does not go through egglog can reuse them. The random family is drawn at the script's
 default `RANDOM_CASES`, and the seed is `k + 1` exactly as `main`'s `seed` mode computes it. -/
 
@@ -528,7 +528,7 @@ rounds, and a `union` between two terms neither of which has a view row.
 They are probes rather than corpus cases because the literal family is model-only —
 egglog's `i64` is a distinct sort where `Term.lit` shares one with applications — and
 because the constructor-only ones answer a question the congruence gate asks and
-`scripts/difftest.sh` does not.
+`semantics/difftest.sh` does not.
 -/
 
 /-- `Wrapper` applied `n` times. -/

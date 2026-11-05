@@ -4,19 +4,19 @@ from __future__ import annotations
 
 from typing import TextIO
 
-from native_memory import (
+from benchmarking.native_memory import (
     NATIVE_ALLOCATION_EXIT as NATIVE_ALLOCATION_EXIT,
 )
-from native_memory import (
+from benchmarking.native_memory import (
     NATIVE_ALLOCATOR_ENV as NATIVE_ALLOCATOR_ENV,
 )
-from native_memory import (
+from benchmarking.native_memory import (
     NATIVE_LIMIT_BYTES as NATIVE_LIMIT_BYTES,
 )
-from native_memory import (
+from benchmarking.native_memory import (
     NATIVE_SETUP_EXIT as NATIVE_SETUP_EXIT,
 )
-from native_memory import (
+from benchmarking.native_memory import (
     native_memory_command as native_memory_command,
 )
 

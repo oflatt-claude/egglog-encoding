@@ -11,27 +11,25 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from math import isfinite
 from pathlib import Path
-from typing import Final, Literal, NotRequired, TypedDict, cast
+from typing import Final, Literal, TypedDict, cast
 
-from native_memory import NATIVE_ALLOCATION_EXIT, NATIVE_LIMIT_BYTES
-
-from ..engines import TREATMENT_SPECS, Engine
+from ..engines import TREATMENT_SPECS
 from ..models import (
     BenchmarkEndpoint,
     DisequalityEncoding,
+    Exclusion,
     FileSpec,
     Status,
     TargetRow,
     Treatment,
 )
 
-type ReportSchemaVersion = Literal[5]
-REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 5
+type ReportSchemaVersion = Literal[8]
+REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 8
 
-type GroupedSchemaVersion = Literal[2]
-GROUPED_SCHEMA_VERSION: Final[GroupedSchemaVersion] = 2
+type GroupedSchemaVersion = Literal[6]
+GROUPED_SCHEMA_VERSION: Final[GroupedSchemaVersion] = 6
 
 type TimingSummarySchemaVersion = Literal[4]
 TIMING_SUMMARY_SCHEMA_VERSION: Final[TimingSummarySchemaVersion] = 4
@@ -82,45 +80,35 @@ class ReportRecord(TypedDict):
     binary_sha256: str
     file_path: str
     file_sha256: str
-    fact_directory_path: str | None
-    fact_directory_sha256: str
     treatment: Treatment
     disequality_encoding: DisequalityEncoding
     timeout_sec: int
     wall_sec: float | None
     max_rss_bytes: int | None
-    error_exit_code: int | None
-    error_signal: int | None
     error_message: str | None
-    error_memory_limit_bytes: NotRequired[int]  # Configured allowance; inherited address-space limits may be tighter.
+    memory_limit_bytes: int | None
     timing_summary: TimingSummaryRecord | None
 
 
 @dataclass(frozen=True)
 class CacheKey:
-    """Exact persisted identity used to select reusable observations."""
+    """Executable, workload and treatment identity, independent of resource cutoffs."""
 
     binary_sha256: str
     file_sha256: str
     treatment: Treatment
-    fact_directory_sha256: str = ""
     disequality_encoding: DisequalityEncoding = "nee"
 
     @classmethod
-    def for_endpoint(
-        cls,
-        endpoint: BenchmarkEndpoint,
-        file_spec: FileSpec,
-    ) -> CacheKey:
-        """Build the identity shared by collection and reporting."""
+    def for_endpoint(cls, endpoint: BenchmarkEndpoint, file_spec: FileSpec) -> CacheKey:
+        """Resolve the executable and physical input before any cache lookup."""
 
-        file_spec = file_spec.for_engine(TREATMENT_SPECS[endpoint.treatment].engine)
+        file_spec = file_spec.for_binary(TREATMENT_SPECS[endpoint.treatment].binary_name)
         return cls(
-            binary_sha256=endpoint.target.binary_sha256_for(endpoint.treatment),
+            binary_sha256=endpoint.binary_sha256,
             file_sha256=file_spec.sha256,
             treatment=endpoint.treatment,
             disequality_encoding=endpoint.disequality_encoding,
-            fact_directory_sha256=file_spec.fact_directory_sha256,
         )
 
 
@@ -148,37 +136,27 @@ class IndexedRecord:
 
 
 def select_records(
-    rows: Sequence[IndexedRecord], rounds: int, timeout_sec: int, memory_limit_bytes: int
+    rows: Sequence[IndexedRecord], rounds: int, timeout_sec: int, memory_limit_bytes: int | None
 ) -> tuple[IndexedRecord, ...]:
-    """Select newest applicable observations, retaining failures at unchanged bounds.
+    """Select the newest observations under one resource-retry policy.
 
-    Successful completion under an equal/tighter deadline is sufficient even
-    when process-launch overhead exceeds that deadline or wall time is absent.
-    Only a raised bound retires its resource failure; ordinary errors persist.
+    success: always reuse, including after lowering either guard.
+    timed-out: retry only after increasing the timeout.
+    memory-limited: retry only after increasing/removing the memory guard.
+    failure: keep the error until an explicit force-run.
     """
     if rounds < 1:
         raise ValueError("rounds must be positive")
     eligible = []
     for row in rows:
         record = row.record
-        wall = record["wall_sec"]
-        if record["status"] == "success":
-            if record["timeout_sec"] > timeout_sec and not (
-                wall is not None and isfinite(wall) and 0 < wall <= timeout_sec
-            ):
-                continue
-        elif "process-group cleanup failed:" in (record["error_message"] or ""):
-            pass  # A control failure is not repaired by raising a workload limit.
-        elif record["status"] == "timed-out":
-            if timeout_sec > record["timeout_sec"]:
-                continue
-        elif record["error_exit_code"] == NATIVE_ALLOCATION_EXIT and TREATMENT_SPECS[record["treatment"]].engine in (
-            "egglog",
-            "egg",
+        if record["status"] == "timed-out" and timeout_sec > record["timeout_sec"]:
+            continue
+        if record["status"] == "memory-limited" and (
+            memory_limit_bytes is None
+            or (record["memory_limit_bytes"] is not None and memory_limit_bytes > record["memory_limit_bytes"])
         ):
-            bound = record.get("error_memory_limit_bytes")
-            if bound is None or memory_limit_bytes > bound:
-                continue
+            continue
         eligible.append(row)
     return tuple(sorted(eligible, key=lambda row: row.order_key)[-rounds:])
 
@@ -187,7 +165,6 @@ class GroupedKey(TypedDict):
     binary_sha256: str
     file_sha256: str
     treatment: Treatment
-    fact_directory_sha256: str
     disequality_encoding: DisequalityEncoding
 
 
@@ -207,11 +184,14 @@ class GroupedReportRecord(TypedDict):
     """Version the grouping structure separately from its shared ReportRecord samples.
 
     Grouping-only changes can regenerate this snapshot without invalidating raw observations.
+    Exclusions use the shared model, indexed by file hash for offline retargeting;
+    they become dictionaries only at the JSON boundary.
     """
 
     grouped_schema_version: GroupedSchemaVersion
     report_schema_version: ReportSchemaVersion
     groups: list[ObservationGroup]
+    exclusions: dict[str, tuple[Exclusion, ...]]
 
 
 class GroupedReport:
@@ -220,6 +200,7 @@ class GroupedReport:
     def __init__(self, data: GroupedReportRecord, display_path: str) -> None:
         self.data = data
         self.display_path = display_path
+        self.exclusions_by_input = data["exclusions"]
         self._by_key = {
             CacheKey(**group["key"]): tuple(
                 IndexedRecord(sample["row_index"], datetime.fromisoformat(sample["started_at"]), sample)
@@ -233,7 +214,7 @@ class GroupedReport:
         )
 
     def latest_records(
-        self, key: CacheKey, rounds: int, timeout_sec: int, memory_limit_bytes: int = NATIVE_LIMIT_BYTES
+        self, key: CacheKey, rounds: int, timeout_sec: int, memory_limit_bytes: int | None
     ) -> tuple[IndexedRecord, ...]:
         """Select the requested tail without discarding the snapshot's other samples."""
 
@@ -285,29 +266,33 @@ class ReportStore:
             handle.write(encoded + b"\n")
         self._index(indexed)
 
-    def grouped_report(self, label_bindings: Mapping[tuple[str, Engine], str] | None = None) -> GroupedReport:
+    def grouped_report(
+        self,
+        label_bindings: Mapping[tuple[str, str], str] | None = None,
+        exclusions: Mapping[str, tuple[Exclusion, ...]] | None = None,
+    ) -> GroupedReport:
         """Freeze observations and refresh aliases from any targets resolved this invocation.
 
         Bindings override historical labels without changing sample provenance or
         adding observations when the current binary is already fully cached.
         """
 
-        latest: dict[tuple[str, Engine], IndexedRecord] = {}
+        latest: dict[tuple[str, str], IndexedRecord] = {}
         for label, rows in self._by_label.items():
             for row in rows:
-                identity = (label, TREATMENT_SPECS[row.record["treatment"]].engine)
+                identity = (label, TREATMENT_SPECS[row.record["treatment"]].binary_name)
                 if identity not in latest or row.order_key > latest[identity].order_key:
                     latest[identity] = row
         bindings = {identity: row.record["binary_sha256"] for identity, row in latest.items()}
         if label_bindings is not None:
             bindings.update(label_bindings)
-        labels: dict[tuple[Engine, str], list[str]] = {}
-        for (label, engine), binary_sha256 in bindings.items():
-            labels.setdefault((engine, binary_sha256), []).append(label)
+        labels: dict[tuple[str, str], list[str]] = {}
+        for (label, binary_name), binary_sha256 in bindings.items():
+            labels.setdefault((binary_name, binary_sha256), []).append(label)
         groups: list[ObservationGroup] = [
             {
                 "key": cast(GroupedKey, asdict(key)),
-                "labels": sorted(labels.get((TREATMENT_SPECS[key.treatment].engine, key.binary_sha256), ())),
+                "labels": sorted(labels.get((TREATMENT_SPECS[key.treatment].binary_name, key.binary_sha256), ())),
                 "samples": [
                     {**row.record, "row_index": row.row_index} for row in sorted(rows, key=lambda row: row.order_key)
                 ],
@@ -319,11 +304,12 @@ class ReportStore:
                 "grouped_schema_version": GROUPED_SCHEMA_VERSION,
                 "report_schema_version": REPORT_SCHEMA_VERSION,
                 "groups": groups,
+                "exclusions": dict(exclusions or {}),
             },
             self.display_path,
         )
 
-    def find_label_pointer(self, label: str, engine: Engine | None = None) -> CachedTarget | None:
+    def find_label_pointer(self, label: str, binary_name: str | None = None) -> CachedTarget | None:
         """Return the latest row carrying ``label`` for an optional engine."""
 
         rows = self._by_label.get(label)
@@ -331,8 +317,8 @@ class ReportStore:
             return None
         matching = (
             rows
-            if engine is None
-            else [row for row in rows if TREATMENT_SPECS[row.record["treatment"]].engine == engine]
+            if binary_name is None
+            else [row for row in rows if TREATMENT_SPECS[row.record["treatment"]].binary_name == binary_name]
         )
         if not matching:
             return None
@@ -349,26 +335,8 @@ class ReportStore:
             record["binary_sha256"],
         )
 
-    def selected_statuses_for_keys(
-        self,
-        keys: Sequence[CacheKey],
-        rounds: int,
-        timeout_sec: int,
-        memory_limit_bytes: int = NATIVE_LIMIT_BYTES,
-    ) -> dict[CacheKey, tuple[Status, ...]]:
-        """Select latest statuses for every distinct exact cache key."""
-
-        if rounds < 1:
-            raise ValueError("rounds must be positive")
-        return {
-            key: tuple(
-                row.record["status"] for row in self.latest_records(key, rounds, timeout_sec, memory_limit_bytes)
-            )
-            for key in dict.fromkeys(keys)
-        }
-
     def latest_records(
-        self, key: CacheKey, rounds: int, timeout_sec: int, memory_limit_bytes: int = NATIVE_LIMIT_BYTES
+        self, key: CacheKey, rounds: int, timeout_sec: int, memory_limit_bytes: int | None
     ) -> tuple[IndexedRecord, ...]:
         """Return up to ``rounds`` newest rows in chronological presentation order."""
 
@@ -397,13 +365,62 @@ class ReportStore:
         )
 
 
+@dataclass(frozen=True)
+class SelectedObservations:
+    """One selection shared by collection, terminal reports and figure bindings."""
+
+    rows: tuple[IndexedRecord, ...]
+    exclusion: Exclusion | None
+    issue: str | None
+
+
+def select_observations(
+    store: ReportStore | GroupedReport,
+    endpoint: BenchmarkEndpoint,
+    file: FileSpec,
+    rounds: int,
+    timeout_sec: int,
+) -> SelectedObservations:
+    """Apply reviewed exclusions and both resource budgets at one boundary."""
+
+    rows = store.latest_records(CacheKey.for_endpoint(endpoint, file), rounds, timeout_sec, endpoint.memory_limit_bytes)
+    excluded = file.exclusion_for(
+        endpoint.treatment, endpoint.disequality_encoding, memory_limit_bytes=endpoint.memory_limit_bytes
+    )
+    # A recorded resource bound guards fresh work, not already completed samples.
+    if (
+        excluded is not None
+        and excluded.kind == "resource"
+        and excluded.memory_limit_bytes is not None
+        and len(rows) == rounds
+        and all(row.record["status"] == "success" for row in rows)
+    ):
+        excluded = None
+    if excluded is not None:
+        return SelectedObservations((), excluded, f"excluded ({excluded.kind}): {excluded.reason}")
+    if len(rows) < rounds:
+        issue = f"missing {rounds - len(rows)} row(s)"
+    elif any(r.record["status"] == "failure" for r in rows):
+        message = next(
+            (r.record["error_message"] for r in rows if r.record["status"] == "failure" and r.record["error_message"]),
+            None,
+        )
+        issue = "failure row selected" + (f": {message}" if message else "")
+    elif any(r.record["status"] == "memory-limited" for r in rows):
+        issue = "memory limit row selected"
+    elif any(r.record["status"] == "timed-out" for r in rows):
+        issue = "timeout row selected"
+    else:
+        issue = None
+    return SelectedObservations(rows, None, issue)
+
+
 def _record_key(record: ReportRecord) -> CacheKey:
     return CacheKey(
         binary_sha256=record["binary_sha256"],
         file_sha256=record["file_sha256"],
         treatment=record["treatment"],
         disequality_encoding=record["disequality_encoding"],
-        fact_directory_sha256=record["fact_directory_sha256"],
     )
 
 
@@ -433,16 +450,19 @@ def serialize_report_record(record: ReportRecord) -> bytes:
 def parse_grouped_report(data: bytes | str, display_path: str) -> GroupedReport:
     """Read the versioned trusted-writer snapshot without touching its source cache."""
 
-    record = cast(GroupedReportRecord, json.loads(data))
-    _require_current_grouped_report(record)
-    return GroupedReport(record, display_path)
+    record = json.loads(data)
+    _require_current_grouped_report(cast(GroupedReportRecord, record))
+    record["exclusions"] = {
+        identity: tuple(Exclusion.from_json(rule) for rule in rules) for identity, rules in record["exclusions"].items()
+    }
+    return GroupedReport(cast(GroupedReportRecord, record), display_path)
 
 
 def serialize_grouped_report(report: GroupedReport) -> bytes:
     """Encode the shared typed snapshot deterministically for files and HTML."""
 
     _require_current_grouped_report(report.data)
-    return json.dumps(report.data, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
+    return json.dumps(report.data, default=asdict, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
 
 
 def _require_current_grouped_report(record: GroupedReportRecord) -> None:

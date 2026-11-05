@@ -15,7 +15,7 @@
 ;;; test suite, so this uses the goal-directed subset of the artifact's fine-grained rules
 ;;; needed by this witness. The workloads the suite can afford run under all 44 rules in
 ;;; `egglog-experimental/tests/slotted/sdql-paper/`; `slotted/eval.py` runs every workload, BATAX included, with all of them.
-;;; `slotted/checks/check-paper-sdql.py` keeps these definitions semantically identical to the
+;;; `benchmarks/reproduction/slotted/provenance.py` keeps these definitions semantically identical to the
 ;;; corresponding rules in `languages/sdql.egg` and checks both fixture transcriptions.
 (sort U)
 

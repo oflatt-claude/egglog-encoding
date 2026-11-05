@@ -70,10 +70,10 @@ From the workspace root:
 
 ```sh
 make check                 # Python and Rust formatting, checks, and tests
-make lean-check            # Lean build, proof-hole audit, corpus gates, Rust certificate check
+make -C semantics lean-check            # Lean build, proof-hole audit, corpus gates, Rust certificate check
 cargo build --release -p egglog
-make lean-difftest          # compare Lean and egglog per-function row counts
-make lean-compiled-difftest # run the compiled programs in egglog and compare view sizes
+make -C semantics lean-difftest          # compare Lean and egglog per-function row counts
+make -C semantics lean-compiled-difftest # run the compiled programs in egglog and compare view sizes
 ```
 
 Additional executable probes, from `semantics/`:

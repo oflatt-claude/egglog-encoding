@@ -25,48 +25,57 @@ make check
 ```
 
 `make nits` runs formatting checks, linting, type checking, and lockfile
-validation without tests. `make test` runs the Python and Rust tests. Use
-`make python-check` or `make rust-check` for complete language-specific
-validation; their `*-nits` and `*-test` dependencies can be run separately
-while iterating. These targets discover files from project configuration rather
-than naming individual files in this document.
+validation without tests. Use `uv run --locked pytest` or `cargo test` directly
+for focused reruns. `check` combines `nits`, `test-python`, `test-rust`, and
+`test-figures`; CI runs those four parts in parallel. `nightly` is the externally
+required entrypoint.
 
-`make slotted-test` builds the slotted reference runners and runs their unit and
-differential tests. CI runs it in parallel with `make rust-test`; both remain
-part of `make test` and `make check`.
+The catalog-driven Rust paper target and frozen slotted differential pairs run
+in the normal Cargo workspace suite. `make check` prepares unchanged native
+parameter-analysis drivers first and includes Vega tests. No separate Python
+slotted orchestration or live fixture generation belongs in routine validation.
+The Make recipe runs the workspace suite without `paper-tests`, then
+selects the `benchmarks/paper-tests` package alone. This prevents workspace feature merging
+from enabling the reference's expensive internal checks on the large paper cases;
+all paper oracles and the ordinary Rust debug assertions remain active.
+CI sets the explicitly partial `RUST_TEST_ARGS="--skip paper/"` filter for
+`make test-rust`. Local `make check` runs all enabled paper cases. The paper target honors
+the normal `--test-threads` option and `RUST_TEST_THREADS` environment variable.
+The local Make invocation defaults to two paper workers; ordinary Rust tests
+keep their usual parallelism. Its allocator limit is per child; set
+`RUST_TEST_THREADS=1` for a serial paper run.
+The paper target
+uses the allocator/address-space cap from `benchmarking/config.py` by default;
+`PAPER_TEST_MEMORY_LIMIT_BYTES=none` runs it uncapped. Apply the shared ignore
+policy against that selected profile, and print excluded configuration counts.
 
 For proof-focused changes, the filtered proof snapshot test is useful while
 iterating or when you want a focused proof rerun:
 
 ```bash
-make proof-tests
+cargo test --locked --workspace --test files proofs/ --
 ```
 
 `proofs/` runs explicit `(prove ...)` fixtures under `tests/proofs` and every
 proof-compatible file under proof-testing mode, snapshotting generated proofs.
 It is a name-filtered subset of `cargo test --workspace`, so do not run it after
-a full workspace test unless you want a focused proof rerun. The Make target
-owns the exact Cargo filter.
-
-`make math-parity` explicitly compares the twelve-round Math graphs across Egg
-and Egglog with proofs off, in release mode under the shared native memory cap.
-This large test is excluded from `make check`.
+a full workspace test unless you want a focused proof rerun.
 
 For benchmark-runner changes, smoke the public CLI entrypoint with a temporary,
 machine-readable report path so the run does not read or append to the default
 benchmark cache; runner status and build diagnostics stay on stderr.
 
 ```bash
-make benchmark-smoke
+uv run --locked pytest -q benchmarking/tests/test_benchmark.py::test_public_cli_collects_real_observations
 ```
 
-The Make target writes the one-round machine-readable report to
-`/tmp/egglog-encoding-bench-smoke.jsonl` by default and verifies that it is
-nonempty. It uses small Math and disequality fixtures, not the full local
-benchmark suite. Override `BENCHMARK_SMOKE_REPORT` to use another temporary path.
+This integration test is included in `make check`. It builds through the public
+CLI and checks four successful observations with wall/RSS measurements, using
+small Math and disequality fixtures and pytest's temporary report directory.
+It requires the Git checkout and Rust toolchain used by the normal workflow.
 
 For benchmark-report UI changes, inspect both a focused one-file report and the
-default eleven-file report in Rich and Markdown form. Exercise terminal widths 80,
+default ten-file report in Rich and Markdown form. Exercise terminal widths 80,
 119, 120, 160, and 200 using copies of the report cache under `/tmp`; do not read
 from or append to the repository cache during UI validation. Confirm that the
 cumulative `--detail` levels add files, phases, and top rulesets in that order,
@@ -111,7 +120,9 @@ or modify the JSONL.
 - Bare `./bench.py` compares `proof-testing` with `off`, including proof
   extraction and checking. Recording-only `proofs` and unchecked
   `proof-extraction` remain explicit choices.
-- The five egglog treatments run `egglog-experimental`. The `egg` treatment and
+- The five core egglog treatments and two slotted encoding treatments run
+  `egglog-experimental`. Native slotted treatments run `slotted-reference` with
+  explicit matcher/substitution flags. The `egg` treatment and
   its three proof variants run `egg-math-benchmark` on the fixed Rational Math
   workload at registered cutoffs, including the frozen twelve-round witness.
   Native workload selection derives from the complete input identity.
@@ -124,26 +135,40 @@ or modify the JSONL.
   selected treatment controls proof extraction, and cover strict proof validity
   in proof tests.
 - Benchmark files are resolved relative to the command invocation directory,
-  not relative to comparison targets.
-- Cache identity is binary SHA-256, file SHA-256, fact-directory SHA-256,
-  treatment and disequality encoding. Reuse successful observations across
-  resource bounds; a lower timeout requires an observed wall time that fits.
-  Retry cached resource failures only when their own bound increases; ordinary
-  errors remain cached. Keep one append-only report, retaining original limits
-  and optional allocation-failure bounds without rewriting old observations.
+  not relative to comparison targets. Require self-contained files without
+  `(include ...)` or `(input ...)`; expand external inputs before benchmarking.
+- Cache identity includes binary SHA-256, physical file SHA-256, treatment and
+  disequality encoding. Reuse completed successes independently of time/memory
+  guards. `select_records` centrally retries timeouts only after raising the
+  timeout, and memory-limited outcomes only after raising/removing the memory
+  guard. Ordinary failures require force-run. Classify outcomes once at launch;
+  readers use status rather than exit codes or diagnostic parsing.
+  Historical rows remain append-only; runtime-contract/schema changes require
+  a new cache. Controlled launches keep one allocator environment in both modes.
+- Shared exclusions live only in `benchmarks/ignore.json`, with reason/evidence.
+  A cap-specific resource exclusion applies only to a set cap no larger than the
+  recorded bound, never to uncapped runs. Unsupported entries apply across profiles.
+  Preserve exclusions in grouped/interactive snapshots. Figure timing inputs
+  omit only expected-failure table-size rules; Rust correctness checks retain
+  their exact expectations. Complete successful samples bypass cap-specific
+  resource deferrals; unsupported configurations remain excluded.
 - The baseline and candidate must have different endpoint cache identities
   (binary SHA-256, treatment, and disequality encoding). They may use the same
   binary when treatment or encoding differs.
-- A request must not contain duplicate file/fact-directory hash pairs; those
+- A request must not contain duplicate file hashes; those
   selectors would address the same cached workload observations twice.
 
 ## Paper figures
 
-- `./bench.py figures` collects and renders the five paper PDFs through the shared
+- `./bench.py figures` collects and renders the six paper PDFs through the shared
   benchmark phases. `--config` selects a flat JSON catalog with global `rounds`
-  and `timeout_sec`, and direct per-figure `spec`, `files`, and `treatments`.
-- The production catalog requests ten executions and a 300-second timeout. Use
-  `--rounds 1` and temporary reports for synthetic/CLI checks;
+  and optional `timeout_sec` override, and direct per-figure `spec`, `files`, `treatments`, and optional correctness-only `checks`.
+- Resource defaults for all entrypoints come from `benchmarking/config.py`.
+  The Rust paper parent reads them once through stdlib-only `python3`; execution
+  and worker scheduling stay in Rust. The catalog requests ten observations.
+  Correctness watchdogs retain a 3x allowance per mode for their additional
+  extraction, proof, and native-reference work.
+  Use `--rounds 3 --memory-limit` with temporary reports/previews for verification;
   ordinary benchmark defaults are unchanged. There is no cached-only mode.
 - Reuse compatible observations automatically, merge repeated runtime/memory
   requests, and refresh current label bindings even with zero fresh runs.
@@ -152,13 +177,33 @@ or modify the JSONL.
 - Figure collection never acquires sources, regenerates corpus inputs or runs
   separate validators. Retain selected published input hashes/aliases, strict
   failures and source blockers. Source blockers are not saved replay counts.
-- The outputs are `disequality-runtime`, `math-runtime`, `math-memory`,
-  `corpus-runtime-cdf`, and `corpus-memory-cdf`, each as PDF/SVG/PNG under
-  `figures/eval/` by default. `--output-dir` can target the paper's
-  `figures/eval/` directory. Render through temporary bound specs and image files;
-  replace the previous images only after every format succeeds. Observation
-  provenance remains in the raw JSONL and grouped JSON.
-- Run `make figures-test`; inspect all five exported figures at manuscript width
+- The outputs are `disequality-runtime`, `math-runtime`, `slotted-runtime`,
+  `corpus-congruence-cdf`, `corpus-proof-recording-cdf`, and `corpus-proofs-cdf`.
+  Each has PDF/SVG/PNG, bound specification, results JSON, numeric TeX macros,
+  and a TeX table under `figures/output/eval/` by default. Authored specifications
+  stay in `figures/eval/`. `--output-dir` overrides the common generated folder.
+  Copy the generated `eval` folder into the manuscript's `figures/` directory;
+  PDF/TeX need no JSON runtime, while bound specs require the original cache to
+  rerender. Subset invocations update selected filenames only; obsolete renamed
+  or removed outputs are not cleaned automatically. Render through temporary
+  files and replace the requested bundle only after every condition is complete
+  and every format succeeds. Failed/missing measurements stop publication.
+  Observation provenance remains in the raw JSONL, grouped JSON and results JSON.
+- `make check` includes the Vega tests; inspect all six exported figures at manuscript width
   and verify PDF font embedding. Tests must cover latest-N selection, N=1 without
-  intervals, independent Fieller intervals, missing/failure denominators, and
+  intervals, independent Fieller intervals, incomplete-bundle rejection, and
   the shared baseline-runtime corpus cohort (>=0.2 seconds, no upper cutoff).
+
+- The shared runner owns whole-process wall time and peak RSS for every engine.
+  Native slotted is a workload driver with no self-timing or phase-summary path.
+- Local allocation protection uses the existing allocator/address-space cap only.
+  Do not add host-reserve, host-pressure, or RSS-ceiling supervisors. Use
+  `--no-memory-limit` explicitly for uncapped final collection; peak RSS is
+  measured independently.
+- Resource failures require explicit evidence and review before an ignore entry;
+  known table-size bugs instead require an issue and an explicitly reviewed
+  `expected-failure` with exact `[ordinary, candidate]` counts. Rust must execute
+  that case, fail unexpected passes or any different failure, and keep all other
+  checks active. Figure timings still include these known table-size cases.
+  semantic/proof failures are failures, never automatic exclusions. Do not use a
+  smaller input to certify an excluded actual paper workload.

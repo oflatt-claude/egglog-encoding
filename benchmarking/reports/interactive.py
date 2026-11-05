@@ -16,6 +16,7 @@ import re
 import tempfile
 import webbrowser
 from contextlib import suppress
+from dataclasses import asdict
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -35,8 +36,9 @@ class EvalLiveModule(Protocol):
     def js(self) -> str: ...
 
 
-_PYTHON_MODULES = (
-    "native_memory.py",
+_RUNTIME_FILES = (
+    "benchmarking/config.py",
+    "benchmarking/native_memory.py",
     "benchmarking/__init__.py",
     "benchmarking/engines.py",
     "benchmarking/models.py",
@@ -130,7 +132,7 @@ def _interactive_page(
         "python_modules": _python_module_sources(),
     }
     encoded_envelope = base64.b64encode(
-        json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode()
+        json.dumps(envelope, default=asdict, ensure_ascii=False, separators=(",", ":")).encode()
     ).decode("ascii")
     css = _style_text(eval_live.css() + "\n" + _asset_path("interactive.css").read_text(encoding="utf-8"))
     eval_live_js = _script_text(eval_live.js())
@@ -158,7 +160,7 @@ def _interactive_page(
 
 def _python_module_sources() -> dict[str, str]:
     root = Path(__file__).resolve().parents[2]
-    return {name: (root / name).read_text(encoding="utf-8") for name in _PYTHON_MODULES}
+    return {name: (root / name).read_text(encoding="utf-8") for name in _RUNTIME_FILES}
 
 
 def _asset_path(name: str) -> Path:

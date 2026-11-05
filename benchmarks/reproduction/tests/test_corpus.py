@@ -80,4 +80,8 @@ def test_regeneration_does_not_import_measurement_or_old_script_packages() -> No
                 imports = [node.module or ""]
             else:
                 continue
-            assert not any(name.split(".")[0] in {"benchmarking", "scripts", "process_guard"} for name in imports), path
+            for name in imports:
+                # Share only the stdlib launch-policy leaf, never measurement code.
+                if name == "benchmarking.native_memory":
+                    continue
+                assert name.split(".")[0] not in {"benchmarking", "scripts", "process_guard"}, path

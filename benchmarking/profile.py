@@ -22,11 +22,11 @@ from typing import Any, Literal, cast
 from rich.console import Console
 from rich.text import Text
 
-from native_memory import native_memory_command
-
 from . import samply_analysis
-from .engines import TREATMENT_SPECS, TREATMENTS, Treatment, validate_engine_workload
+from .config import DEFAULT_TIMEOUT_SEC
+from .engines import TREATMENT_SPECS, TREATMENTS, Treatment, validate_binary_workload
 from .models import DisequalityEncoding, FileSpec, TargetRequest
+from .native_memory import NATIVE_ALLOCATOR_ENV, NATIVE_LIMIT_BYTES, add_memory_limit_options, native_memory_command
 from .processes import run_command, terminate_process_group
 from .targets import git_root_for_path, parse_target, resolve_profile_target, workload_command
 from .workloads import require_workload_unchanged, resolve_files
@@ -34,9 +34,8 @@ from .workloads import require_workload_unchanged, resolve_files
 DEFAULT_PROFILES_DIR = ".profiles"
 DEFAULT_PROFILE_SECONDS = 10
 DEFAULT_PROFILE_TOP = 15
-DEFAULT_TIMEOUT_SEC = 120
 MAX_PROFILE_ITERATIONS = 10_000
-PROFILE_CACHE_VERSION = "v4"
+PROFILE_CACHE_VERSION = "v5"
 PROFILE_SAMPLY_RATE_HZ = 1000
 OutputFormat = Literal["rich", "markdown"]
 
@@ -72,6 +71,7 @@ class ProfileRequest:
     top: int = DEFAULT_PROFILE_TOP
     show_summary: bool = True
     output_format: OutputFormat = "rich"
+    memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
 
 
 def parse_profile_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -82,11 +82,6 @@ def parse_profile_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument("file", help="benchmark workload file to profile")
     parser.add_argument("--disequality-encoding", choices=("nee", "ee"), default="nee")
-    parser.add_argument(
-        "--fact-directory",
-        default=None,
-        help="fact directory used by the profiled workload",
-    )
     parser.add_argument(
         "--target",
         default=".",
@@ -140,6 +135,7 @@ def parse_profile_args(argv: Sequence[str]) -> argparse.Namespace:
         default=DEFAULT_TIMEOUT_SEC,
         help=f"per-workload timeout in seconds for calibration and profiling watchdog (default: {DEFAULT_TIMEOUT_SEC})",
     )
+    add_memory_limit_options(parser, default=NATIVE_LIMIT_BYTES)
     args = parser.parse_args(argv)
     args.command = "profile"
     return args
@@ -164,7 +160,6 @@ def profile_cache_path(
     file_sha256: str,
     treatment: Treatment,
     mode: ProfileMode,
-    fact_directory_sha256: str = "",
     disequality_encoding: DisequalityEncoding = "nee",
 ) -> Path:
     return (
@@ -172,7 +167,6 @@ def profile_cache_path(
         / PROFILE_CACHE_VERSION
         / profile_hash_component(binary_sha256)
         / profile_hash_component(file_sha256)
-        / (profile_hash_component(fact_directory_sha256) if fact_directory_sha256 else "no-facts")
         / f"{treatment}-{disequality_encoding}-{mode.cache_label}.json.gz"
     )
 
@@ -267,6 +261,7 @@ def run_samply_record(
     checkout_path: Path,
     timeout_sec: int,
     native_limit: bool = False,
+    memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES,
 ) -> dict[str, Any]:
     temp_artifact = profile_temp_path(artifact)
     temp_artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -275,7 +270,7 @@ def run_samply_record(
     env = os.environ.copy()
     env["RUST_LOG"] = "error"
     if native_limit:
-        workload, env = native_memory_command(workload, env)
+        workload, env = native_memory_command(workload, env, memory_limit_bytes)
     command = samply_record_command(samply_executable(), temp_artifact, name, iterations, workload)
     try:
         process = subprocess.Popen(
@@ -321,13 +316,13 @@ def open_samply_profile(artifact: Path, checkout_path: Path) -> None:
 
 
 def resolve_profile_request(args: argparse.Namespace, invocation_cwd: Path) -> ProfileRequest:
-    files = resolve_files([str(args.file)], invocation_cwd, args.fact_directory)
+    files = resolve_files([str(args.file)], invocation_cwd)
     treatment = cast(Treatment, str(args.treatment))
     disequality_encoding = cast(DisequalityEncoding, args.disequality_encoding)
-    if TREATMENT_SPECS[treatment].engine != "egglog" and disequality_encoding != "nee":
+    if TREATMENT_SPECS[treatment].binary_name != "egglog-experimental" and disequality_encoding != "nee":
         raise ValueError("disequality encoding selection is only supported by egglog treatments")
-    file = files[0].for_engine(TREATMENT_SPECS[treatment].engine)
-    validate_engine_workload(file, treatment)
+    file = files[0].for_binary(TREATMENT_SPECS[treatment].binary_name)
+    validate_binary_workload(file, treatment)
     if args.iterations is not None:
         mode = ProfileMode(iterations=args.iterations, profile_seconds=None)
     else:
@@ -342,6 +337,7 @@ def resolve_profile_request(args: argparse.Namespace, invocation_cwd: Path) -> P
         treatment=treatment,
         disequality_encoding=disequality_encoding,
         timeout_sec=int(args.timeout_sec),
+        memory_limit_bytes=args.memory_limit_bytes,
         profiles_dir=profiles_dir,
         mode=mode,
         open_after=bool(args.open),
@@ -359,13 +355,13 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
     binary_path = target.binary_path_for(request.treatment)
     binary_sha256 = target.binary_sha256_for(request.treatment)
     if binary_path is None:
-        raise ValueError(f"target {target.display_label} needs a profiling binary")
+        raise ValueError(f"target {target.row.display_label} needs a profiling binary")
     checkout_path = Path(target.row.path)
-    native_limit = TREATMENT_SPECS[request.treatment].engine in ("egglog", "egg")
+    native_limit = TREATMENT_SPECS[request.treatment].allocator_limit
     workload = workload_command(binary_path, request.file, request.treatment, request.disequality_encoding)
     treatment_label = (
         f"{request.treatment} ({request.disequality_encoding})"
-        if TREATMENT_SPECS[request.treatment].engine == "egglog"
+        if TREATMENT_SPECS[request.treatment].binary_name == "egglog-experimental"
         else request.treatment
     )
     artifact = profile_cache_path(
@@ -374,7 +370,6 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
         request.file.sha256,
         request.treatment,
         request.mode,
-        request.file.fact_directory_sha256,
         request.disequality_encoding,
     )
     profile: dict[str, Any] | None = None
@@ -400,7 +395,13 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
                     f" {treatment_label} for {request.mode.profile_seconds}s",
                 )
             )
-            calibration = run_command(workload, checkout_path, request.timeout_sec, native_limit=native_limit)
+            calibration = run_command(
+                workload,
+                checkout_path,
+                request.timeout_sec,
+                env_overrides=NATIVE_ALLOCATOR_ENV if native_limit else {},
+                memory_limit_bytes=request.memory_limit_bytes if native_limit else None,
+            )
             if calibration.status != "success" or calibration.timing.wall_sec is None:
                 detail = calibration.error.message if calibration.error is not None else calibration.status
                 raise ValueError(f"profile calibration failed: {detail}")
@@ -435,6 +436,7 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
             checkout_path=checkout_path,
             timeout_sec=request.timeout_sec,
             native_limit=native_limit,
+            memory_limit_bytes=request.memory_limit_bytes,
         )
         console.print(Text.assemble(("Profile written", "bold"), " ", str(artifact)))
 

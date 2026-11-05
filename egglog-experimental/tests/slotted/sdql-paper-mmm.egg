@@ -19,7 +19,7 @@
 ;;; order differs between processes. It now takes the smallest term and, among equal
 ;;; sizes, the least canonical spelling, so every run builds the same e-graph;
 ;;; `tests/slotted_maintenance.rs` holds it to that on this program.
-;;; `slotted/checks/check-paper-sdql.py` checks the terms and that each rule is the library's.
+;;; `benchmarks/reproduction/slotted/provenance.py` checks the terms and that each rule is the library's.
 (include "egglog-experimental/tests/slotted/languages/sdql.egg")
 
 (rewrite (App (Symbol "uniquef") a) (Unique a) :name "unique-app2")

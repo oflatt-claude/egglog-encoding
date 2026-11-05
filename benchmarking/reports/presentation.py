@@ -125,11 +125,13 @@ def _selection_section(
             text_cell(role, role.title()),
             endpoint.target.display_label,
             text_cell(
-                endpoint.target.row.git_sha,
-                _git_display(endpoint.target.row.git_sha, endpoint.target.row.is_dirty),
+                endpoint.target.git_sha,
+                _git_display(endpoint.target.git_sha, endpoint.target.is_dirty),
             ),
             endpoint.treatment,
-            endpoint.disequality_encoding if TREATMENT_SPECS[endpoint.treatment].engine == "egglog" else "n/a",
+            endpoint.disequality_encoding
+            if TREATMENT_SPECS[endpoint.treatment].binary_name == "egglog-experimental"
+            else "n/a",
         )
         for role, endpoint in (("baseline", comparison.baseline), ("candidate", comparison.candidate))
     )
@@ -142,20 +144,18 @@ def _selection_section(
         caption=_comparison_caption(report_path, comparison, file_labels),
     )
     blocks: list[ReportBlock] = [endpoint_table]
-    baseline_engine = TREATMENT_SPECS[comparison.baseline.treatment].engine
-    candidate_engine = TREATMENT_SPECS[comparison.candidate.treatment].engine
+    baseline_engine = TREATMENT_SPECS[comparison.baseline.treatment].binary_name
+    candidate_engine = TREATMENT_SPECS[comparison.candidate.treatment].binary_name
     target_changed = (
-        comparison.baseline.target.row.git_sha,
-        comparison.baseline.target.row.is_dirty,
+        comparison.baseline.target.git_sha,
+        comparison.baseline.target.is_dirty,
         comparison.baseline.target.display_label,
     ) != (
-        comparison.candidate.target.row.git_sha,
-        comparison.candidate.target.row.is_dirty,
+        comparison.candidate.target.git_sha,
+        comparison.candidate.target.is_dirty,
         comparison.candidate.target.display_label,
     ) or (
-        baseline_engine == candidate_engine
-        and comparison.baseline.target.binary_sha256_for(comparison.baseline.treatment)
-        != comparison.candidate.target.binary_sha256_for(comparison.candidate.treatment)
+        baseline_engine == candidate_engine and comparison.baseline.binary_sha256 != comparison.candidate.binary_sha256
     )
     encoding_changed = comparison.baseline.disequality_encoding != comparison.candidate.disequality_encoding
     changed = (target_changed, comparison.baseline.treatment != comparison.candidate.treatment, encoding_changed)
@@ -186,17 +186,16 @@ def _comparison_caption(
     comparison: ComparisonSpec,
     file_labels: dict[FileSpec, str],
 ) -> str:
-    selected_files = ", ".join(_file_with_facts(file, file_labels[file]) for file in comparison.files)
+    selected_files = ", ".join(file_labels[file] for file in comparison.files)
+    profiles = [
+        "uncapped" if endpoint.memory_limit_bytes is None else f"{endpoint.memory_limit_bytes / 1024**3:g} GiB cap"
+        for endpoint in (comparison.baseline, comparison.candidate)
+    ]
+    allocator = profiles[0] if profiles[0] == profiles[1] else f"baseline {profiles[0]}, candidate {profiles[1]}"
     return (
         f"{len(comparison.files)} file(s): {selected_files} · {comparison.rounds} round(s) per endpoint/file · "
-        f"{comparison.timeout_sec} s timeout per run · Report: {report_path}"
+        f"{comparison.timeout_sec} s timeout per run · Allocator: {allocator} · Report: {report_path}"
     )
-
-
-def _file_with_facts(file: FileSpec, label: str) -> str:
-    if file.fact_directory is None:
-        return label
-    return f"{label} (facts: {file.fact_directory})"
 
 
 def _summary_section(
@@ -239,7 +238,11 @@ def _summary_section(
 
 
 def _endpoint_identity(endpoint: BenchmarkEndpoint) -> str:
-    encoding = f"/{endpoint.disequality_encoding}" if TREATMENT_SPECS[endpoint.treatment].engine == "egglog" else ""
+    encoding = (
+        f"/{endpoint.disequality_encoding}"
+        if TREATMENT_SPECS[endpoint.treatment].binary_name == "egglog-experimental"
+        else ""
+    )
     return f"{endpoint.target.display_label} {endpoint.treatment}{encoding}"
 
 
@@ -315,7 +318,6 @@ def _files_section(
                             "files",
                             metric,
                             comparison.files[row.file_order].sha256,
-                            comparison.files[row.file_order].fact_directory_sha256,
                         ),
                         file_labels[comparison.files[row.file_order]],
                         _estimate_cell(row.baseline, rss=metric == "max_rss_bytes"),
@@ -356,7 +358,7 @@ def _phases_section(
             label = f"Suite total ({file_count} {'file' if file_count == 1 else 'files'})"
         else:
             file = comparison.files[row.file_order]
-            row_id = report_id("row", "phases", file.sha256, file.fact_directory_sha256)
+            row_id = report_id("row", "phases", file.sha256)
             label = file_labels[file]
         deltas = row.mechanism_deltas
         wall_delta = row.wall_delta_ns
@@ -467,7 +469,7 @@ def _rulesets_section(
             status = f"Status: {breakdown.issue}" if breakdown is not None else "Timing unavailable."
             blocks.append(
                 ReportMessage(
-                    report_id("message", "rulesets", file.sha256, file.fact_directory_sha256),
+                    report_id("message", "rulesets", file.sha256),
                     title,
                     status,
                 )
@@ -573,7 +575,7 @@ def _rulesets_section(
             )
         blocks.append(
             _table(
-                report_id("table", "rulesets", file.sha256, file.fact_directory_sha256),
+                report_id("table", "rulesets", file.sha256),
                 title,
                 ("driver", "delta", "share", "important_phases"),
                 ("Driver", "Δ", "Wall share", "Important phase changes"),
@@ -610,7 +612,6 @@ def _ruleset_report_row(
             "row",
             "rulesets",
             file.sha256,
-            file.fact_directory_sha256,
             kind,
             mechanism,
             name,
@@ -642,7 +643,7 @@ def _important_phase_changes(phases: PhaseValues) -> str:
 
 
 def report_file_labels(files: Sequence[FileSpec]) -> dict[FileSpec, str]:
-    """Return shortest unambiguous labels, including fact directories."""
+    """Distinguish paths and historical contents with concise labels."""
 
     labels = {file: Path(file.display_path).name for file in files}
     by_basename: dict[str, list[FileSpec]] = {}
@@ -669,15 +670,8 @@ def report_file_labels(files: Sequence[FileSpec]) -> dict[FileSpec, str]:
     for label, group in by_label.items():
         if len(group) == 1:
             continue
-        fact_labels = {
-            file: file.fact_directory.name if file.fact_directory is not None else "no-facts" for file in group
-        }
-        if len(set(fact_labels.values())) != len(group):
-            fact_labels = {
-                file: str(file.fact_directory) if file.fact_directory is not None else "no-facts" for file in group
-            }
         for file in group:
-            labels[file] = f"{label}:{fact_labels[file]}"
+            labels[file] = f"{label}:{file.sha256.removeprefix('sha256:')[:8]}"
     return labels
 
 

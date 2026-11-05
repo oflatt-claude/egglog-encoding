@@ -19,8 +19,15 @@ from typing import Literal
 from rich.console import Console
 from rich.text import Text
 
-from .engines import TREATMENT_SPECS, Engine, Treatment, math_workload_arguments, validate_engine_workload
-from .models import EngineBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow
+from .engines import (
+    EGGLOG_FLAGS,
+    NATIVE_PARAMETER_ARGUMENTS,
+    TREATMENT_SPECS,
+    Treatment,
+    math_workload_arguments,
+    validate_binary_workload,
+)
+from .models import BuiltBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow
 
 BuildProfile = Literal["release", "profiling"]
 
@@ -51,20 +58,6 @@ def sha256_file(path: Path) -> str:
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def sha256_directory(path: Path) -> str:
-    digest = hashlib.sha256()
-    files = sorted(candidate for candidate in path.rglob("*") if candidate.is_file())
-    for file in files:
-        relative = file.relative_to(path).as_posix().encode()
-        digest.update(relative)
-        digest.update(b"\0")
-        with file.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        digest.update(b"\0")
     return f"sha256:{digest.hexdigest()}"
 
 
@@ -208,44 +201,26 @@ def build_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile = "release",
-    engine: Engine = "egglog",
+    treatment: Treatment = "off",
 ) -> tuple[Path, str]:
     checkout_path = Path(row.path)
-    engine_label = "" if engine == "egglog" else f" · {engine}"
-    console.print(Text.assemble(("Building", "bold"), " ", _display_target(row), engine_label))
-    package = {"egglog": "egglog-experimental", "egg": "egg-math-benchmark"}.get(engine)
-    target_dir = Path(os.environ.get("CARGO_TARGET_DIR", "target"))
+    specification = TREATMENT_SPECS[treatment]
+    binary_name = specification.binary_name
+    binary_label = "" if binary_name == "egglog-experimental" else f" · {binary_name}"
+    console.print(Text.assemble(("Building", "bold"), " ", _display_target(row), binary_label))
+    target_dir = Path(specification.target_directory or os.environ.get("CARGO_TARGET_DIR", "target"))
     if not target_dir.is_absolute():
         target_dir = checkout_path / target_dir
-    build_args = ["cargo", "build"]
-    if engine == "egglog":
-        build_args.append("--locked")
+    build_args = ["cargo", "build", *specification.build_args]
+    if specification.target_directory is not None:
+        build_args.extend(("--target-dir", str(target_dir)))
     if build_profile == "release":
         build_args.append("--release")
     else:
         build_args.extend(("--profile", build_profile))
-    if package is None:
-        native = checkout_path / "benchmarks/disequality/native"
-        target_dir = checkout_path / "benchmarks/local/parameter-native/target"
-        build_args.extend(
-            (
-                "--locked",
-                "--manifest-path",
-                str(native / "Cargo.toml"),
-                "--target-dir",
-                str(target_dir),
-                "--bin",
-                engine,
-            )
-        )
-    else:
-        build_args.extend(("-p", package))
-        if engine == "egglog":
-            build_args.extend(("--no-default-features", "--features", "bin", "--bin", package))
     subprocess.run(build_args, cwd=checkout_path, check=True, stdout=sys.stderr, stderr=sys.stderr)
-    binary_stem = package or engine
-    binary_name = f"{binary_stem}.exe" if os.name == "nt" else binary_stem
-    binary_path = target_dir / build_profile / binary_name
+    executable = f"{binary_name}.exe" if os.name == "nt" else binary_name
+    binary_path = target_dir / build_profile / executable
     if not binary_path.is_file():
         raise FileNotFoundError(f"{build_profile} binary was not produced: {binary_path}")
     binary_sha256 = sha256_file(binary_path)
@@ -257,15 +232,15 @@ def build_resolved_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile,
-    engines: Sequence[Engine] = ("egglog",),
+    treatments: Sequence[Treatment] = ("off",),
 ) -> ResolvedTarget:
-    required_engines = tuple(dict.fromkeys(engines))
-    if not required_engines:
+    required_binaries = {TREATMENT_SPECS[mode].binary_name: mode for mode in treatments}
+    if not required_binaries:
         raise ValueError("target build requires at least one engine")
     binaries = tuple(
-        EngineBinary(engine, binary_sha256, binary_path)
-        for engine in required_engines
-        for binary_path, binary_sha256 in (build_target(row, console, build_profile, engine),)
+        BuiltBinary(binary_name, binary_sha256, binary_path)
+        for binary_name, treatment in required_binaries.items()
+        for binary_path, binary_sha256 in (build_target(row, console, build_profile, treatment),)
     )
     primary = binaries[0]
     row = replace(row, is_dirty=git_dirty(Path(row.path)))
@@ -274,8 +249,8 @@ def build_resolved_target(
         row=row,
         binary_sha256=primary.sha256,
         binary_path=primary.path,
-        engine_binaries=binaries,
-        primary_engine=primary.engine,
+        binaries=binaries,
+        primary_binary=primary.binary_name,
     )
 
 
@@ -294,7 +269,7 @@ def resolve_profile_target(
         row,
         console,
         "profiling",
-        (TREATMENT_SPECS[treatment].engine,),
+        (treatment,),
     )
 
 
@@ -315,22 +290,20 @@ def workload_command(
     disequality_encoding: str = "nee",
 ) -> list[str]:
     specification = TREATMENT_SPECS[treatment]
-    file_spec = file_spec.for_engine(specification.engine)
-    if specification.engine != "egglog":
+    file_spec = file_spec.for_binary(specification.binary_name)
+    if specification.binary_name != "egglog-experimental":
         if disequality_encoding != "nee":
             raise ValueError("disequality encoding selection is only supported by egglog treatments")
-        validate_engine_workload(file_spec, treatment)
-        if specification.engine != "egg":
-            return [str(binary_path), str(file_spec.absolute_path), "100000", "10000"]
+        validate_binary_workload(file_spec, treatment)
+        if specification.binary_name == "slotted-reference":
+            return [str(binary_path), *specification.flags, str(file_spec.absolute_path)]
+        if specification.binary_name != "egg-math-benchmark":
+            return [str(binary_path), str(file_spec.absolute_path), *NATIVE_PARAMETER_ARGUMENTS]
         return [str(binary_path), *specification.flags, *math_workload_arguments(file_spec)]
     return [
         str(binary_path),
-        "--mode",
-        "no-messages",
-        "-j",
-        "1",
+        *EGGLOG_FLAGS,
         *(["--disequality-encoding", disequality_encoding] if disequality_encoding != "nee" else []),
-        *(["--fact-directory", str(file_spec.fact_directory)] if file_spec.fact_directory is not None else []),
         *specification.flags,
         str(file_spec.absolute_path),
     ]

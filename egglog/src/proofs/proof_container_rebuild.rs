@@ -195,7 +195,7 @@ fn collect_element_uf_names(eg: &EGraph, sort: &ArcSort, out: &mut HashMap<Strin
 /// Re-intern container `value` of `sort` with each contained value remapped
 /// through `leaders` (an old-value -> union-find-leader map); the value-level
 /// half of the container rebuild performed by the rebuild rules.
-fn rebuild_with_leaders(
+pub(crate) fn rebuild_with_leaders(
     cvs: &ContainerValues,
     es: &mut ExecutionState,
     sort: &ArcSort,

@@ -1,6 +1,5 @@
 {
   "rounds": 10,
-  "timeout_sec": 300,
   "figures": {
     "disequality-runtime": {
       "spec": "eval/disequality-runtime.vl.json",
@@ -9,10 +8,14 @@
       ],
       "treatments": [
         "egg-de",
-        "egg-ee",
         "egg-nee",
-        "egg-oee",
         "off"
+      ],
+      "checks": [
+        "egg-ee",
+        "egg-oee",
+        "term",
+        "proof-testing"
       ]
     },
     "math-runtime": {
@@ -25,22 +28,13 @@
         "egg-proof-testing",
         "off",
         "proof-testing"
-      ]
-    },
-    "math-memory": {
-      "spec": "eval/math-memory.vl.json",
-      "files": [
-        "../benchmarks/corpus/math/math-iteration-12.egg"
       ],
-      "treatments": [
-        "egg",
-        "egg-proof-testing",
-        "off",
-        "proof-testing"
+      "checks": [
+        "term"
       ]
     },
-    "corpus-runtime-cdf": {
-      "spec": "eval/corpus-runtime-cdf.vl.json",
+    "corpus-congruence-cdf": {
+      "spec": "eval/corpus-cdf.vl.json",
       "files": [
         "../benchmarks/corpus/eggcc/*.egg",
         "../benchmarks/corpus/hardboiled/*.egg",
@@ -51,12 +45,11 @@
       ],
       "treatments": [
         "off",
-        "term",
-        "proof-testing"
+        "term"
       ]
     },
-    "corpus-memory-cdf": {
-      "spec": "eval/corpus-memory-cdf.vl.json",
+    "corpus-proof-recording-cdf": {
+      "spec": "eval/corpus-cdf.vl.json",
       "files": [
         "../benchmarks/corpus/eggcc/*.egg",
         "../benchmarks/corpus/hardboiled/*.egg",
@@ -67,8 +60,40 @@
       ],
       "treatments": [
         "off",
-        "term",
+        "proofs"
+      ],
+      "checks": [
         "proof-testing"
+      ]
+    },
+    "corpus-proofs-cdf": {
+      "spec": "eval/corpus-cdf.vl.json",
+      "files": [
+        "../benchmarks/corpus/eggcc/*.egg",
+        "../benchmarks/corpus/hardboiled/*.egg",
+        "../benchmarks/corpus/misaal/*.egg",
+        "../benchmarks/corpus/churchroad/*.egg",
+        "../benchmarks/corpus/dialegg/*.egg",
+        "../benchmarks/corpus/luminal/*.egg"
+      ],
+      "treatments": [
+        "off",
+        "proof-testing"
+      ]
+    },
+    "slotted-runtime": {
+      "spec": "eval/slotted-runtime.vl.json",
+      "files": [
+        "../benchmarks/slotted/inputs/sdql/*.egg"
+      ],
+      "treatments": [
+        "slotted-ref-nested",
+        "slotted-no-aliasing"
+      ],
+      "checks": [
+        "slotted",
+        "slotted-ref-multi",
+        "slotted-ref-nested-snapshot"
       ]
     }
   }

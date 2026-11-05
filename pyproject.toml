@@ -30,7 +30,7 @@ exclude = [
     "^generated/",
     # Unannotated by design, like egglog/ above: these are differential-testing and
     # code-generation scripts. ruff does cover them, so they are linted and formatted.
-    "^slotted/",
+    "^benchmarks/reproduction/slotted/",
     "^target/",
 ]
 check_untyped_defs = true
@@ -45,8 +45,13 @@ pretty = true
 module = ["scipy.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["benchmarks.reproduction.slotted.*"]
+# Exclusion controls discovery; imported pure generators need the same boundary.
+follow_imports = "skip"
+
 [tool.pytest.ini_options]
-testpaths = ["tests", "benchmarks/reproduction/tests"]
+testpaths = ["benchmarking/tests", "benchmarks/reproduction/tests"]
 pythonpath = ["."]
 
 [tool.ruff]

@@ -22,47 +22,28 @@ Hygiene checks and tests can be run independently. `nits` never runs tests:
 
 ```bash
 make nits           # lockfile, formatting checks, linting, and type checking
-make test           # Python, Rust, and slotted reference/differential tests
-make python-check   # complete Python validation
-make rust-check     # complete Rust validation
-make python-nits    # Python hygiene only
-make rust-nits      # rustfmt check, Clippy, and doc-link check only
-make proof-tests    # proof-focused subset of the workspace tests
-make benchmark-smoke
+make test-python    # Python tooling and public CLI integration tests
+make test-rust      # Rust and cross-system paper checks
+make test-figures   # Vega numerical and selection tests
 make nightly        # benchmark the nightly endpoints and publish nightly/output/
-make nightly-local  # the same run at one round, for trying it out
-make update-snapshots
-make format         # apply Ruff and rustfmt formatting
 ```
 
-`make benchmark-smoke` uses a one-round comparison on small Math and disequality
-fixtures, not the full benchmark suite, and writes its disposable
-JSONL report to `/tmp/egglog-encoding-bench-smoke.jsonl`. Override
-`BENCHMARK_SMOKE_REPORT` to choose another path. `make update-snapshots` accepts
-intentional changes to Markdown reports and slotted compiler snapshots; review
-the resulting diff before committing it.
+The Python suite includes a real one-round comparison on small Math and
+disequality fixtures. It writes its disposable JSONL report under pytest's
+temporary directory.
 
-Slotted case studies have standalone runners:
+Paper experiments use the shared Rust correctness harness in
+`benchmarks/paper-tests/` and the cached benchmark runner:
 
 ```bash
-python3 slotted/eval.py array   # fresh timings; no cache or graph checks
-python3 slotted/check.py array  # all treatments, counts, and exact isomorphism
+./bench.py figures
+./bench.py example.egg --treatment term --compare-treatment off
 ```
 
-Both use the same workload selectors and [treatment definitions](slotted/treatments.py).
-`array` runs Figure 8's fixed sweep of 0–10 extra function parameters;
-`sdql` runs Table 1's ten kernel/phase combinations. Omit the study to run all
-case studies. See
-[the reference comparison documentation](egglog-experimental/src/slotted/ENCODING.md#against-the-reference)
-for substitution policies and comparison requirements.
-
-Case-study programs live in `egglog-experimental/benches/slotted/`; regression
-fixtures, shared languages, and compiler snapshots live in
-`egglog-experimental/tests/slotted/`. Artifact inputs and generators live in
-[`slotted/benchmarks/`](slotted/benchmarks/). `make test` (also part of `make check`)
-runs the Rust regressions, reference comparisons, and differential fuzz tests,
-including the benchmarks' shared generators. The
-[source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also
+Slotted's 23 benchmark pairs and 122 semantic pairs are frozen under
+[`benchmarks/slotted/`](benchmarks/slotted/). Historical acquisition and explicit
+regeneration live under [`benchmarks/reproduction/`](benchmarks/reproduction/).
+The [source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also
 included in the Rust documentation for `egglog_experimental::slotted`.
 
 The reusable Rust checker accepts `egraph-serialize` JSON from either engine,
@@ -74,7 +55,7 @@ cargo run -p egraph-isomorphism -- left.json right.json
 
 It prints a JSON verdict and a verified isomorphism witness.
 See the crate's [API documentation](egraph-isomorphism/src/lib.rs) for the format
-and comparison policy. `slotted/check.py` builds and invokes this checker.
+and comparison policy.
 
 The root workspace includes both `egglog` and `egglog-experimental`.
 `egglog-experimental` depends on the workspace `egglog` crate, keeping proof
@@ -85,8 +66,14 @@ fixtures under `tests/proofs` plus every proof-compatible file under
 proof-testing mode. Proof testing turns checks outside `fail` into proof queries
 and extracts into `prove-extract` commands, verifies each proof, and snapshots
 the certificates. Commands inside `fail` retain their ordinary behavior. Use
-`make proof-tests` for focused iteration and `make rust-check` or `make check`
-for complete validation.
+`cargo test -p egglog-experimental --test files proofs/` for focused iteration
+and `make check` for complete validation. Lean and its semantics-paper workflow
+use `make -C semantics`.
+
+## Experiment organization and correctness
+
+The [experiment guide](benchmarks/README.md) documents the shared inventory,
+normal/proof comparisons, native oracles, resource profiles and explicit exclusions.
 
 ## Benchmarking
 
@@ -137,10 +124,16 @@ Treatments map directly to engine modes:
 | `egg-proof-extraction` | current egg with explanation recording and extraction |
 | `egg-proof-testing` | current egg with extraction and explanation checking |
 | `egg-de`, `egg-ee`, `egg-nee`, `egg-oee` | original parameter-analysis drivers with the named encoding, without proofs |
+| `slotted`, `slotted-no-aliasing` | encoded slotted e-graphs with multipattern or nested compatibility matching |
+| `slotted-ref-multi`, `slotted-ref-nested-snapshot` | native slotted driver with matched snapshot substitution policies |
+| `slotted-ref-nested` | native slotted driver with syntactic substitution for the SDQL timing baseline |
 
-The five egglog treatments run `egglog-experimental`. The four Math treatments
-(`egg` and its proof variants) run the separate `egg-math-benchmark` executable and
-support only `egglog-experimental/tests/math-microbenchmark-rational.egg`.
+The source and encoded slotted treatments run `egglog-experimental`. The four
+Math treatments (`egg` and its proof variants) run `egg-math-benchmark` and support
+the fixed eleven-round `egglog-experimental/tests/math-microbenchmark-rational.egg`
+and twelve-round `benchmarks/corpus/math/math-iteration-12.egg` workloads.
+Native slotted treatments run `slotted-reference` on the selected input's frozen
+`.ref` companion.
 Results from either proof-extraction treatment are performance evidence only;
 the corresponding proof-testing treatment provides the strict validity check.
 
@@ -241,8 +234,8 @@ fully cached runs; raw `label=` lookup still follows recorded observations.
 One invocation cannot assign the same label and engine to different binaries.
 
 The baseline and candidate may share a binary, as the default proof-overhead
-comparison does, but their complete cache identities—binary SHA-256 and
-treatment and disequality encoding—must differ.
+comparison does, but their endpoint identities—binary SHA-256, treatment,
+disequality encoding and allocator cap—must differ.
 
 For disequality programs, `--disequality-encoding {nee,ee}` selects the candidate
 encoding and `--compare-disequality-encoding {nee,ee}` selects the baseline.
@@ -254,25 +247,21 @@ input and fixed encoding; `--disequality-encoding` applies only to Egglog.
 
 ### Files
 
-Positional paths select benchmark files. Use `--fact-directory` for explicitly
-selected workloads containing `(input ...)` commands:
+Positional paths select self-contained benchmark files:
 
 ```bash
 ./bench.py egglog/tests/foo.egg egglog/tests/bar.egg
-./bench.py egglog/tests/pointer-analysis-initdb.egg \
-  --fact-directory egglog/tests/pointer-analysis-initdb
 ```
 
-Paths are resolved relative to the command invocation directory, not relative
-to either target. Both endpoints therefore run the exact same file and fact
-directory contents. Their SHA-256 hashes are part of the cache identity.
+Paths resolve relative to the invocation directory, including comparisons against
+Git or PR targets. Expand `(include ...)` and `(input ...)` commands into the
+file before benchmarking. Both endpoints run the same bytes; the file's SHA-256
+is its workload identity.
 
 With no positional files, the representative suite is:
 
 - `egglog-experimental/tests/math-microbenchmark-rational.egg`
 - `egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg`
-- `egglog/tests/pointer-analysis-initdb.egg`, with
-  `egglog/tests/pointer-analysis-initdb`
 - `egglog/tests/hardboiled_conv1d_32.egg`
 - `egglog/tests/luminal-llama.egg`
 - `egglog/tests/web-demo/herbie.egg`
@@ -324,7 +313,7 @@ with:
 This workload is intentionally not part of the default suite. In the initial
 one-round baseline, proof recording took 20.38 seconds and 11.4 GiB of peak RSS
 versus 0.77 seconds and 296.7 MiB without proofs. Keeping it opt-in avoids
-placing that memory requirement on benchmark-smoke CI and nightly hosts; allow
+placing that memory requirement on ordinary CI and nightly hosts; allow
 substantial memory headroom when running it.
 
 The Math language, rewrites, and seeds come from
@@ -351,13 +340,33 @@ orchestration remains outside the ordinary runner.
 The [paper figures](figures/README.md) use the checked-in
 `benchmarks/corpus/manifest.json` rather than the default workload list.
 Run `./bench.py figures` from this checkout to build the required release engines,
-reuse compatible observations, collect missing runs, and render all five paper
-figures as PDF, SVG, and PNG. Setup requires the Python environment above, the
+reuse compatible observations, collect missing runs, and render all six paper
+figures into the ignored `figures/output/eval/` folder. Each figure has seven
+companions: PDF, SVG, PNG, bound specification, results JSON, numeric TeX macros,
+and a TeX table. Setup requires the Python environment above, the
 pinned Rust toolchain, and Node.js/npm (`npx`); renderer packages are pinned in
-the command. `./bench.py figures --help` lists configured figure names. Outputs
-default to `figures/eval/`; `--output-dir ../extended-egglog-paper/figures/eval`
-places the PDFs at the paper's expected paths. See the figure guide for the flat
-JSON catalog, observation identities, statistical protocol, and provenance receipts.
+the command. Generate, inspect, then copy the output folder into the manuscript:
+
+```sh
+./bench.py figures
+cp -R figures/output/eval ../extended-egglog-paper/figures/
+```
+
+This preserves `figures/eval/` include paths. In the manuscript, for example:
+
+```tex
+\input{figures/eval/slotted-runtime.numbers.tex}
+\EgglogFigureNumber{slotted-runtime/batax-1st-44rules/slotted-no-aliasing-over-slotted-ref-nested/runtime/ratio}
+\input{figures/eval/slotted-runtime.table.tex}
+```
+
+Authored specifications stay in this repository's `figures/eval/`.
+`--output-dir PATH` overrides the generated folder. PDF and TeX files need no
+JSON reader; bound specifications need the original cache for rerendering.
+Subset invocations update only selected filenames, so removed or renamed figures
+can leave obsolete outputs to remove before copying. `./bench.py figures --help`
+lists configured names. See the figure guide for the flat JSON catalog,
+observation identities, statistical protocol, and provenance receipts.
 Use `./bench.py figures --rounds 3` for a shorter
 run without changing the ten-run production catalog.
 
@@ -416,8 +425,14 @@ The remaining collection options are:
   A filesystem path is required; `-` is not a streaming destination.
 - `--rounds N`: selected observations required for every endpoint/file;
   default `6`.
-- `--timeout-sec N`: per-process timeout; default `1800` to accommodate the
-  full-size disequality proof workload. Smaller workloads may use a lower limit.
+- `--timeout-sec N`: per-process guard; the shared default is 500 seconds.
+- `--memory-limit-gib N`: allocator/address-space guard in GiB; fractions are
+  accepted, for example `--memory-limit-gib 2.5`. The cap is enabled at 16 GiB
+  without any memory flag. `--memory-limit` selects that default explicitly;
+  `--no-memory-limit` opts out. `--memory-limit-bytes` remains available for
+  existing scripts. Resource defaults live in
+  `benchmarking/config.py` and are shared by comparisons, figures, nightly,
+  profiling, and paper tests.
 - `--force-run`: append `N` fresh rows for both endpoints before selecting the
   newest rows.
 - `--format rich|markdown`: final human report format.
@@ -491,11 +506,11 @@ Churchroad wide multiply and DialEgg NMM-40. The ordinary CLI roster is separate
 
 ```bash
 make nightly
-uv run --locked python scripts/nightly_bench.py /path/to/output --rounds 1 --timeout-sec 120
+uv run --locked python -m benchmarking.nightly /path/to/output --rounds 1 --timeout-sec 120
 ```
 
-The initial request is one observation per endpoint/file, with a 120-second
-workload timeout. Compatible observations are shared by executable identity.
+The initial request is one observation per endpoint/file, with the shared
+resource defaults. Compatible observations are shared by executable identity.
 The default page shows checked/off overhead of the branch; `branch-vs-main.md`
 compares the two checked endpoints from the same snapshot. Identical executables
 share observations rather than appearing as distinct measurements.
@@ -513,7 +528,6 @@ The [egraphs-good nightly service](https://nightly.cs.washington.edu) runs
 `make nightly` and serves `nightly/output/`. The Make target installs pinned uv
 and rustup when missing; uv supplies the project's Python environment. The script
 puts rustup's cargo shims first on PATH. Existing installations are reused.
-`make nightly-local` runs the same one-round comparison.
 
 ### CPU profiling
 
@@ -527,7 +541,7 @@ separate Samply command when a particular endpoint needs call-stack diagnosis:
 ```
 
 Profiling selects one target, treatment, and file. Artifacts are cached under
-`.profiles/` by binary, file, fact-directory, treatment, and
+`.profiles/` by binary, file, treatment, and
 iteration policy. `--open` loads the artifact in Samply; `--force-run` replaces
 the cached profile. Profiling is deliberately separate from the repeated-run
 benchmark statistics and pair report.
@@ -556,38 +570,32 @@ The snapshot is refreshed even when all requested observations are cached.
 Unchanged output keeps its modification time. For another report path, `.jsonl`
 becomes `-grouped.json`; other names gain `-grouped.json`.
 
-Cache reuse is keyed by:
+Cache reuse is keyed by binary SHA-256, physical input file SHA-256, treatment,
+and disequality encoding. Target source, path, revision, dirty state, labels,
+and display paths are provenance. Time and memory guards are per-attempt limits,
+not cache identities. Allocator startup settings stay fixed with or without a cap.
 
-- binary SHA-256;
-- file SHA-256;
-- fact-directory SHA-256;
-- treatment; and
-- disequality encoding.
+The shared `select_records` function in `benchmarking/reports/store.py` selects
+the newest applicable `--rounds` rows, ordered by `started_at` then JSONL order:
 
-Target source, path, git revision, dirty state, labels, and display paths are
-provenance rather than cache-key dimensions. Resource bounds do not partition
-successful observations. The runner selects the newest applicable `--rounds`
-rows for each exact endpoint/file, ordering first by `started_at` and
-then by physical JSONL order. Without `--force-run`, it appends only missing
-rows. With `--force-run`, it appends a full fresh set and then selects the
-newest rows.
+| Saved status | Cache/retry behavior |
+| --- | --- |
+| `success` | Reuse even when either guard decreases or is removed |
+| `timed-out` | Retry only when the requested timeout increases |
+| `memory-limited` | Retry only when the requested memory bound increases or is removed |
+| `failure` | Retain until an explicit `--force-run` |
 
-A failed or timed-out attempt ends the remaining repetitions of that exact
-workload and endpoint; independent conditions continue. A compatible selected
-cached ordinary error also prevents automatic retries. A timeout or native
-allocation failure is retried only when its corresponding bound increases;
-successful rows still count toward the requested total. A success remains
-reusable at the same or a higher timeout. After lowering the timeout, its
-recorded deadline or completed wall time must fit. Use `--force-run` to explicitly
-retry failed conditions; earlier observations remain in the append-only cache.
+A failed attempt ends the remaining repetitions of that condition; independent
+conditions continue. `--force-run` appends a complete fresh set. Earlier rows
+remain append-only. Each row retains the guards used for that attempt, wall time,
+peak RSS, status, and an error message when available. A null memory bound means
+uncapped; the original author drivers always record null because they do not
+implement this guard. Peak RSS is measured independently of the address-space bound.
 
-Keep `.reports.jsonl` as the active append-only cache when changing resource
-bounds. New native allocation failures record the configured requested allowance
-in `error_memory_limit_bytes`; this is not RSS or necessarily the effective
-address-space limit under a stricter inherited limit. Older allocation failures
-without a recorded allowance do not block collection. If another observation is
-needed, a new allocation failure records the current allowance and prevents
-repeated retries at that bound.
+Reviewed correctness/unsupported exclusions remain explicit snapshot policy.
+A cap-specific resource entry can block fresh work without hiding a complete set
+of cached successes. Runtime flags and allocator environment are pinned by a
+schema contract test; changing them requires a schema bump.
 
 Before any measured row is appended, all targets needing collection are built.
 Fresh collection is serial; one untimed `<binary> --help` capability preflight
@@ -671,10 +679,6 @@ when an unrelated file is incomplete. Mechanism contributions and ruleset
 totals or component deltas are descriptive diagnostics; only endpoint
 estimates and ratios receive confidence intervals.
 
-The `<2x` proof goal is established only when the upper bound of the suite wall
-ratio's 95% confidence interval is below `2x` for a proofs-versus-off
-comparison.
-
 Methodology references:
 
 - Kalibera and Jones, “Rigorous Benchmarking in Reasonable Time” (ISMM 2013).
@@ -696,7 +700,7 @@ Top-level ownership:
 - `bench.py`: executable uv entrypoint.
 - `benchmarking/`: Python collection, reporting, interactive-view, and
   profiling code.
-- `tests/`: domain-focused pytest and Syrupy snapshot coverage.
+- `benchmarking/tests/`: pytest and Syrupy snapshot coverage for the tooling.
 - `Makefile`: canonical validation and maintenance commands.
 - `pyproject.toml` and `uv.lock`: Python configuration and locked environment.
 - `.reports.jsonl`: ignored, disposable benchmark cache.
@@ -722,7 +726,7 @@ Python ownership is layered so new code has one clear home:
   Python modules, and adjacent browser assets into the HTML artifact, then
   writes and opens it.
 
-Every module has a more precise ownership docstring. Package `__init__.py`
+Every module has a more precise ownership docstring. The `benchmarking` package `__init__.py`
 files are documentation-only; tests enforce that rule, the data-layer boundary,
 and an acyclic static import graph.
 
@@ -778,21 +782,17 @@ Each report row records the exact benchmark binary hash.
 
 ## CI
 
-CI runs on pull requests, manual dispatches, and pushes to `main`:
+PRs and pushes run `make nits`, `make test-python`, `make test-rust` and
+`make test-figures` as separate jobs. Only the Rust job sets
+`RUST_TEST_ARGS="--skip paper/"`, preserving the small semantic/reference checks
+while skipping the full paper workload trials.
+The complete suite runs locally with `make check`; there is no manual CI dispatch.
+The paper harness honors `--test-threads` and `RUST_TEST_THREADS`. The local Make
+invocation defaults to two paper workers; set `RUST_TEST_THREADS=1` for a serial
+paper run. The allocator cap is per child process. A previous serial full run
+took 2 hours 29 minutes on the local M4.
 
-- `python`: `make python-nits`, then `make python-test`.
-- `rust`: `make rust-nits`, then `make rust-test`.
-- `slotted`: `make slotted-test` builds the reference runners and runs their
-  unit and differential tests, including both fixed fuzz seeds. This runs in
-  parallel with the workspace Rust tests; `make test` still runs all three suites.
-- `benchmark-smoke`: a one-round `off`/`proof-testing` runner check on small Math and
-  disequality fixtures through `make benchmark-smoke`. The full parameter-analysis
-  benchmark is not included in this CI job.
-- `codspeed`: an in-process, proofs-only benchmark over a smaller workload set
-  in simulation and memory modes. CodSpeed includes phase-clock execution but
-  does not persist phase reports; `./bench.py` remains the source for
-  off/proofs and commit comparisons with stored observations.
-
-Ruff and Mypy discover all repository-owned Python files from project
-configuration, so new modules under `benchmarking/` or `tests/` require no
-Makefile edits.
+The semantics-paper job remains independent. The Python tests exercise the
+public small-input comparison CLI; CodSpeed retains its smaller in-process
+performance workload. Stored paper measurements come from `./bench.py`, with
+complete executable/input/settings identities in the cache.

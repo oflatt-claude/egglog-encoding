@@ -16,10 +16,16 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import NotRequired, TypedDict, cast
 
-from ..engines import TREATMENT_SPECS, Engine
-from ..models import BenchmarkEndpoint, ComparisonSpec, EngineBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow
+from ..engines import TREATMENT_SPECS
+from ..models import (
+    BenchmarkEndpoint,
+    ComparisonSpec,
+    FileSpec,
+    TargetRow,
+)
+from ..native_memory import NATIVE_LIMIT_BYTES
 from .catalog import CellTone, ReportCatalog, ReportCell, ReportMessage, report_id
 from .presentation import build_report_catalog, report_file_labels
 from .store import GroupedReport, ReportRecord, parse_grouped_report
@@ -65,23 +71,22 @@ class _FileSnapshot(TypedDict):
     display_path: str
     absolute_path: str
     sha256: str
-    fact_directory: str | None
-    fact_directory_sha256: str
 
 
-class _EngineInput(_FileSnapshot):
-    engine: Engine
+class _BinaryInput(_FileSnapshot):
+    binary_name: str
 
 
 class _InitialFile(_FileSnapshot):
-    engine_inputs: list[_EngineInput]
+    binary_inputs: list[_BinaryInput]
 
 
 class InitialScope(_ScopeRequest):
     """Generated initial selection, including logical-to-physical input bindings."""
 
     files: list[_InitialFile]
-    memory_limit_bytes: int
+    memory_limit_bytes: NotRequired[int | None]
+    endpoints: NotRequired[list[BenchmarkEndpoint]]
 
 
 class InteractiveRuntime:
@@ -92,6 +97,7 @@ class InteractiveRuntime:
         store: GroupedReport,
         initial_scope: InitialScope,
     ) -> None:
+        self._memory_limit_bytes = initial_scope.get("memory_limit_bytes", NATIVE_LIMIT_BYTES)
         self._store = store
         (
             self._endpoint_choices,
@@ -99,37 +105,51 @@ class InteractiveRuntime:
             self._timeouts,
             self._max_rounds,
         ) = _cache_universe(store.records)
+        # Fully excluded endpoints have no observation row. Retain the invocation's
+        # metadata for them, while existing identities keep latest cached provenance.
+        endpoint_choices = {choice.endpoint_id: choice for choice in self._endpoint_choices}
+        for endpoint in initial_scope.get("endpoints", []):
+            endpoint_id = _endpoint_id(endpoint)
+            endpoint_choices.setdefault(endpoint_id, _EndpointChoice(endpoint_id, endpoint))
+        self._endpoint_choices = tuple(endpoint_choices.values())
         self._timeouts = tuple(sorted({*self._timeouts, initial_scope["timeout_sec"]}))
         self._max_rounds = max(self._max_rounds, initial_scope["rounds"])
-        self._memory_limit_bytes = initial_scope["memory_limit_bytes"]
         # Observations identify physical inputs, which can differ from the selected
         # logical file. Keep its initial selection and bindings outside the grouped data.
-        choices = {choice.file_id: choice for choice in self._file_choices}
+        choices = {
+            choice.file_id: replace(
+                choice, file=replace(choice.file, exclusions=store.exclusions_by_input.get(choice.file.sha256, ()))
+            )
+            for choice in self._file_choices
+        }
         for logical in initial_scope["files"]:
             file = FileSpec(
                 logical["display_path"],
                 Path(logical["absolute_path"]),
                 logical["sha256"],
-                None if logical["fact_directory"] is None else Path(logical["fact_directory"]),
-                logical["fact_directory_sha256"],
             )
             file_id = _file_id(file)
             if file_id in choices:
                 file = choices[file_id].file
             inputs = tuple(
                 (
-                    item["engine"],
+                    item["binary_name"],
                     FileSpec(
                         item["display_path"],
                         Path(item["absolute_path"]),
                         item["sha256"],
-                        None if item["fact_directory"] is None else Path(item["fact_directory"]),
-                        item["fact_directory_sha256"],
                     ),
                 )
-                for item in logical["engine_inputs"]
+                for item in logical["binary_inputs"]
             )
-            choices[file_id] = _FileChoice(file_id, replace(file, engine_inputs=inputs))
+            choices[file_id] = _FileChoice(
+                file_id,
+                replace(
+                    file,
+                    binary_inputs=inputs,
+                    exclusions=store.exclusions_by_input.get(file.sha256, ()),
+                ),
+            )
         self._file_choices = tuple(choices.values())
         self._endpoint_by_id = {choice.endpoint_id: choice.endpoint for choice in self._endpoint_choices}
         self._file_by_id = {choice.file_id: choice.file for choice in self._file_choices}
@@ -149,7 +169,9 @@ class InteractiveRuntime:
         """Load the browser's typed grouped snapshot and restore its initial scope."""
 
         store = parse_grouped_report(path.read_bytes(), display_path)
-        return cls(store, cast(InitialScope, json.loads(initial_scope_json)))
+        scope = json.loads(initial_scope_json)
+        scope["endpoints"] = [BenchmarkEndpoint.from_json(endpoint) for endpoint in scope.get("endpoints", [])]
+        return cls(store, cast(InitialScope, scope))
 
     def payload(self) -> dict[str, JsonValue]:
         """Return the last successfully published selectors and catalog."""
@@ -207,12 +229,11 @@ class InteractiveRuntime:
     def _comparison(self, scope: InteractiveScope) -> ComparisonSpec:
         files = tuple(self._file_by_id[file_id] for file_id in scope.file_ids)
         return ComparisonSpec(
-            self._endpoint_by_id[scope.baseline_endpoint_id],
-            self._endpoint_by_id[scope.candidate_endpoint_id],
+            replace(self._endpoint_by_id[scope.baseline_endpoint_id], memory_limit_bytes=self._memory_limit_bytes),
+            replace(self._endpoint_by_id[scope.candidate_endpoint_id], memory_limit_bytes=self._memory_limit_bytes),
             files,
             scope.rounds,
             scope.timeout_sec,
-            self._memory_limit_bytes,
         )
 
     def _parse_scope(self, value: object) -> InteractiveScope:
@@ -272,8 +293,8 @@ class InteractiveRuntime:
                         "id": choice.endpoint_id,
                         "label": _endpoint_label(choice.endpoint),
                         "target": choice.endpoint.target.display_label,
-                        "git_sha": choice.endpoint.target.row.git_sha,
-                        "dirty": choice.endpoint.target.row.is_dirty,
+                        "git_sha": choice.endpoint.target.git_sha,
+                        "dirty": choice.endpoint.target.is_dirty,
                         "treatment": choice.endpoint.treatment,
                     }
                     for choice in endpoint_choices
@@ -298,32 +319,36 @@ class InteractiveRuntime:
 
 
 def scope_for_comparison(comparison: ComparisonSpec) -> InitialScope:
-    """Serialize one native comparison as the browser runtime's initial scope."""
+    """Build the initial selection using shared endpoints and physical input bindings."""
 
+    caps = {
+        endpoint.memory_limit_bytes
+        for endpoint in (comparison.baseline, comparison.candidate)
+        if endpoint.memory_limit_bytes is not None
+    }
+    if len(caps) > 1:
+        raise ValueError("interactive reports require one shared capped memory budget")
     return {
+        "memory_limit_bytes": next(iter(caps), None),
         "baseline_endpoint_id": _endpoint_id(comparison.baseline),
         "candidate_endpoint_id": _endpoint_id(comparison.candidate),
         "file_ids": [_file_id(file) for file in comparison.files],
         "timeout_sec": comparison.timeout_sec,
         "rounds": comparison.rounds,
-        "memory_limit_bytes": comparison.memory_limit_bytes,
+        "endpoints": [comparison.baseline, comparison.candidate],
         "files": [
             {
                 "display_path": file.display_path,
                 "absolute_path": str(file.absolute_path),
                 "sha256": file.sha256,
-                "fact_directory": None if file.fact_directory is None else str(file.fact_directory),
-                "fact_directory_sha256": file.fact_directory_sha256,
-                "engine_inputs": [
+                "binary_inputs": [
                     {
-                        "engine": engine,
+                        "binary_name": binary_name,
                         "display_path": physical.display_path,
                         "absolute_path": str(physical.absolute_path),
                         "sha256": physical.sha256,
-                        "fact_directory": None if physical.fact_directory is None else str(physical.fact_directory),
-                        "fact_directory_sha256": physical.fact_directory_sha256,
                     }
-                    for engine, physical in file.engine_inputs
+                    for binary_name, physical in file.binary_inputs
                 ],
             }
             for file in comparison.files
@@ -411,9 +436,7 @@ def _cache_universe(
             (_FileChoice(file_id, _file_from_record(record)) for file_id, (_order, record) in file_rows.items()),
             key=lambda choice: (
                 choice.file.display_path,
-                str(choice.file.fact_directory or ""),
                 choice.file.sha256,
-                choice.file.fact_directory_sha256,
             ),
         )
     )
@@ -421,34 +444,27 @@ def _cache_universe(
 
 
 def _endpoint_from_record(record: ReportRecord) -> BenchmarkEndpoint:
-    row = TargetRow(
-        record["target_source"],
-        record["target_path"],
-        record["target_git_ref"],
-        record["target_git_sha"],
-        record["target_is_dirty"],
-        record["target_label"],
-    )
-    engine = TREATMENT_SPECS[record["treatment"]].engine
-    target = ResolvedTarget(
-        TargetRequest(row.label or row.source, row.source, row.label),
-        row,
+    return BenchmarkEndpoint(
+        TargetRow(
+            record["target_source"],
+            record["target_path"],
+            record["target_git_ref"],
+            record["target_git_sha"],
+            record["target_is_dirty"],
+            record["target_label"],
+        ),
         record["binary_sha256"],
-        None,
-        engine_binaries=(EngineBinary(engine, record["binary_sha256"], None),),
-        primary_engine=engine,
+        record["treatment"],
+        record["disequality_encoding"],
+        record["memory_limit_bytes"],
     )
-    return BenchmarkEndpoint(target, record["treatment"], record["disequality_encoding"])
 
 
 def _file_from_record(record: ReportRecord) -> FileSpec:
-    fact_path = record["fact_directory_path"]
     return FileSpec(
         record["file_path"],
         Path(record["file_path"]),
         record["file_sha256"],
-        None if fact_path is None else Path(fact_path),
-        record["fact_directory_sha256"],
     )
 
 
@@ -457,25 +473,34 @@ def _endpoint_id(endpoint: BenchmarkEndpoint) -> str:
 
 
 def _record_endpoint_id(record: ReportRecord) -> str:
-    return report_id("endpoint", record["binary_sha256"], record["treatment"], record["disequality_encoding"])
+    return report_id(
+        "endpoint",
+        record["binary_sha256"],
+        record["treatment"],
+        record["disequality_encoding"],
+    )
 
 
 def _endpoint_label(endpoint: BenchmarkEndpoint) -> str:
-    dirty = " dirty" if endpoint.target.row.is_dirty else ""
-    short_git_sha = endpoint.target.row.git_sha[:12]
+    dirty = " dirty" if endpoint.target.is_dirty else ""
+    short_git_sha = endpoint.target.git_sha[:12]
     target = endpoint.target.display_label
     git = f"{short_git_sha}{dirty}"
     target_and_git = git if target == short_git_sha else f"{target} · {git}"
-    encoding = f"/{endpoint.disequality_encoding}" if TREATMENT_SPECS[endpoint.treatment].engine == "egglog" else ""
+    encoding = (
+        f"/{endpoint.disequality_encoding}"
+        if TREATMENT_SPECS[endpoint.treatment].binary_name == "egglog-experimental"
+        else ""
+    )
     return f"{target_and_git} · {endpoint.treatment}{encoding}"
 
 
 def _file_id(file: FileSpec) -> str:
-    return report_id("file", file.sha256, file.fact_directory_sha256)
+    return report_id("file", file.sha256)
 
 
 def _record_file_id(record: ReportRecord) -> str:
-    return report_id("file", record["file_sha256"], record["fact_directory_sha256"])
+    return report_id("file", record["file_sha256"])
 
 
 def _cell_payload(cell: ReportCell) -> JsonValue:

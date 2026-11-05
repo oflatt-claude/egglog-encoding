@@ -83,7 +83,7 @@ class ReportCatalog:
     sections: tuple[ReportSection, ...]
 
 
-def report_id(*parts: str | int) -> str:
+def report_id(*parts: str | int | None) -> str:
     """Return an unambiguous stable ID without relying on display labels."""
 
     return json.dumps(parts, ensure_ascii=False, separators=(",", ":"))
