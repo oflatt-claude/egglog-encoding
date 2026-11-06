@@ -343,7 +343,22 @@ mod tests {
                 EGraph::new_with_proofs(),
                 EGraph::new_with_proofs().with_proof_testing(),
             ] {
-                egraph.parse_and_run_program(None, &source).unwrap();
+                let outputs = egraph.parse_and_run_program(None, &source).unwrap();
+                if egraph.proof_state.proof_testing {
+                    let (store, id) = outputs
+                        .iter()
+                        .find_map(|output| match output {
+                            CommandOutput::ProveExists {
+                                proof_store,
+                                proof_id,
+                            } => Some((proof_store, *proof_id)),
+                            _ => None,
+                        })
+                        .expect("strict checking must produce the requested equality proof");
+                    let proof = store.get(id);
+                    assert_eq!(store.term_dag().to_string(proof.lhs()), "(Root (Wrap (A)))");
+                    assert_eq!(store.term_dag().to_string(proof.rhs()), "(Root (Wrap (B)))");
+                }
             }
         }
     }
