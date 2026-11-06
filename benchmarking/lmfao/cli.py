@@ -61,7 +61,7 @@ def run(args: argparse.Namespace) -> None:
                 "This is an explicitly labelled compiler control, not an e-graph result.",
                 "representation": "The original named SDQL Sum queries; "
                 "Batch, FusedBatch and GroupingBatch are introduced "
-                "only by rewrites. The partial-aggregate tensor experiment is a separate representation.",
+                "only by rewrites.",
             }
         )
         write_json(out / "metadata.json", metadata)

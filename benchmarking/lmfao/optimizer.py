@@ -73,7 +73,7 @@ def export_graph(
     timeout: int,
     memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES,
 ) -> dict[str, Any]:
-    """An untimed rerun adds only a read-only export to the exact frozen input."""
+    """Rerun a frozen input with read-only export, outside optimizer samples."""
     physical = file.for_binary("slotted-reference" if treatment == "slotted-ref-multi" else "egglog-experimental")
     if treatment == "slotted":
         source = physical.absolute_path.read_text() + f"\n(slotted-export {json.dumps(str(output))} {names})\n"

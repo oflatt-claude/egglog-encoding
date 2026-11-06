@@ -1,6 +1,5 @@
-;;; Programs are trees of named aggregate outputs. A task contains the original
-;;; two-argument aggregate body as a closed function of (row, multiplicity).
-;;; Batch preserves the program's ordered tree, including output names.
+;;; A task is a named aggregate body closed over (row, multiplicity).
+;;; Batches preserve the ordered output tree and every output name.
 (include "egglog-experimental/tests/slotted/languages/sdql.egg")
 (constructor Pair (U U) U)
 (constructor Output (U U) U)
@@ -16,9 +15,8 @@
   :when ((= output (Output name aggregate))
          (= aggregate (Sum input $row $count body))))
 
-;;; Join three existing roots, requiring both producers to have the SAME input.
-;;; The existing output tree bounds candidates; no arbitrary query subsets or
-;;; workload-specific table/column names are generated.
+;;; Merge adjacent batches only when their source eclasses agree.
+;;; Candidates follow the existing output tree.
 (rewrite program (Batch input (TaskPair a b))
   :name "batch-merge"
   :when ((= program (Pair left right))

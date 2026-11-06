@@ -46,8 +46,7 @@ def schema() -> tuple[list[list[str]], dict[str, list[str]], list[list[str]]]:
 def queries() -> list[Query]:
     """Count, first moments, continuous squares, and all distinct feature pairs.
 
-    Categorical features become grouping columns, as in LMFAO's generator;
-    they are not incorrectly treated as numerical category codes.
+    Categorical features become grouping columns, as in LMFAO's generator.
     """
     # Upstream loops over attribute IDs, not the order in features.conf (whose
     # first entry names the learning label).

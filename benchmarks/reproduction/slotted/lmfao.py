@@ -23,12 +23,7 @@ def balanced(op, terms):
 
 
 def join_term():
-    """Natural bag join, made explicit with sums, equality filters and records.
-
-    Records use dictionaries from field names to values. Sum binds a record
-    and its multiplicity; join output multiplicities multiply. Each shared
-    field is tested against the first relation that introduced it.
-    """
+    """Return a natural bag join preserving fields and product multiplicities."""
     attrs, relations, _ = lmfao.schema()
     owners = {}
     stages = []

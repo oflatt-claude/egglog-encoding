@@ -1,9 +1,7 @@
-"""Joint, time-bounded DAG extraction over every mandatory query root.
+"""Select an acyclic DAG covering every required root under a solver budget.
 
-The MILP pays for each chosen enode once. A selected node requires all its
-children; an active class has exactly one representative. Rank constraints
-within cyclic components exclude recursive choices.
-The incumbent is always retained if the solver cannot improve it.
+Charge each selected node once. Retain the feasible incumbent if the solver
+cannot improve its cost; report optimality only for the configured objective.
 """
 
 from __future__ import annotations

@@ -1,9 +1,8 @@
-"""Select and execute actual multi-output batch nodes from a slotted e-graph.
+"""Extract aggregate batches from an annotated slotted graph and compile SQL.
 
-The program root is an ordered tree containing every required query. A batch
-may replace any subtree, so batch sizes are extraction choices. Sources are
-shared DAG dependencies. Bodies and output names come exclusively from the
-export, including all binder/edge renamings; no optimized target is supplied.
+Requires one closed output-tree root, trivial class symmetries and unambiguous
+source/task bodies. Selections must contain actual exported nodes and preserve
+all named outputs. SQL lowering requires bodies linear in bag multiplicity.
 """
 
 from __future__ import annotations
@@ -312,8 +311,7 @@ class BatchExtractor:
                 src, qs = g.requests[n]
                 operators.append({"class": cid, "node": n, "op": op, "source": src, "queries": [asdict(q) for q in qs]})
         if lowering_control:
-            # Explicit counterfactual: batch across selected program boundaries
-            # in the compiler. Label separately; never credit this to rewrites.
+            # The compiler-only control batches across selected output boundaries.
             grouped: dict[str, list[Choice]] = defaultdict(list)
             for o in operators:
                 if "queries" in o:
