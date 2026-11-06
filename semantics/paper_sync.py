@@ -43,7 +43,7 @@ SECTION_ANCHOR = "\\input{disequality}"
 MACROS_ANCHOR = "\\input{macros}"
 
 GENERATED_HEADER = """%% GENERATED FILE. Do not edit.
-%% Written by scripts/paper_sync.py in the extended-proofs repository (`make paper-sync`)
+%% Written by semantics/paper_sync.py in the extended-proofs repository (`make -C semantics paper-sync`)
 %% from paper/semantics.tex there and from the @[blueprint] statements in
 %% semantics/EgglogSemantics/{Spec,Source,Congruence}/*.lean. Edit those and rerun.
 """
@@ -218,7 +218,7 @@ def main() -> int:
     if not main_tex.exists():
         sys.exit(f"paper_sync: {main_tex} missing")
     if not args.no_extract:
-        subprocess.run([sys.executable, str(ROOT / "scripts" / "check.py"), "paper-extract"], check=True)
+        subprocess.run(["make", "paper-extract"], cwd=ROOT / "semantics", check=True)
     generated = paper / GENERATED_DIR
     generated.mkdir(exist_ok=True)
     for stale in generated.glob("*.tex"):

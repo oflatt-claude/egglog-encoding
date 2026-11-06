@@ -109,7 +109,7 @@ and subsumes stale rows; `views := .indexed` writes a node's row with the node, 
 binary join of the index entry with the column's union-find edge; either way compiled queries read one view row per application and
 the congruence rule, whose query is the pattern the view caches, reads two rows at one key. `phased := true` saturates the union-find rules before
 the term rules inside each rebuild. `difftest congruence 64 --views=indexed --phased`
-and `DIFFTEST_OPTIONS="--views=indexed --phased" scripts/compiled-difftest.sh` check
+and `DIFFTEST_OPTIONS="--views=indexed --phased" semantics/compiled-difftest.sh` check
 that the optimized compilations agree with the source and with egglog; the proof pass works
 on the base compilation.
 
@@ -169,9 +169,9 @@ identity out of the data entirely.
   compiled programs in Rust egglog, with generated `@` names spelled `at_`, and compares
   a census of canonical e-nodes per constructor (an application joined with the live
   edges of its children, counted by the tuple of parents), which is independent of
-  representative choice: 104 of 104 agree. `scripts/difftest.sh` (source
+  representative choice: 104 of 104 agree. `semantics/difftest.sh` (source
   programs, Lean against egglog) passes 101 of 101, and the Rust checker judges the 120
-  exported source certificates like the Lean checker (`make lean-certificate-test`).
+  exported source certificates like the Lean checker (`make -C semantics lean-certificate-test`).
 - Interpreter: `execRunRules` matches every rule against the pre-state, then applies
   every firing's writes and subsumptions, in sequence, which is their union. The
   relational runtime (`Congruence/Relational.lean`, structural identity only) agrees with
