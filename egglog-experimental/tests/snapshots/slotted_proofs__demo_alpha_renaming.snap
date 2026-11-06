@@ -9,7 +9,5 @@ Source:
 (check (= input (Lam $b (V $b))))
 
 Proof:
-(let t0 (Lam $a (V $a)))
-(Claim
-  (= t0 (rename (renaming ($a $b) ($b $a)) (Lam $b (V $b))))
-  (Fiat (= t0 t0)))
+(let t (Lam $a (V $a)))
+(Claim (= t (rename (renaming ($a $b) ($b $a)) (Lam $b (V $b)))) (Fiat (= t t)))

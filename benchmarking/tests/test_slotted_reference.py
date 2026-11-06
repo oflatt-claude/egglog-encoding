@@ -76,7 +76,7 @@ def test_variable_constructor_is_optional_with_binders(tmp_path: Path) -> None:
     assert src.carriers["Expr"].var is None
     assert src.term(syntax.parse("(Lambda $x (Num 1))")[0]) == ("Lambda", src.slots.intern("$x"), ("Num", "1"))
     assert "(var $0)" not in driver.reference_spec(src.lang, 1, [], [], [], [])
-    assert "_variable_seed" not in driver.source_program("unused", src.lang, [], [], [], [], 1)
+    assert "_variable_seed" not in driver.program("unused", src.lang, [], [], [], [], 1)
     with pytest.raises(ValueError, match="no variable constructor"):
         driver.term(src.lang, ("var", 0))
 

@@ -17,8 +17,8 @@ fn shared_renaming_premise_prints_with_a_let_binding() {
         vec![guard, guard],
     );
     let text = store.proof_to_string(proof);
-    assert!(text.contains("(let prf0 (RenamingEq"), "{text}");
-    assert!(text.contains("(premises prf0 prf0)"), "{text}");
+    assert!(text.contains("(let prf (RenamingEq"), "{text}");
+    assert!(text.contains("(premises prf prf)"), "{text}");
 }
 
 #[test]

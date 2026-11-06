@@ -11,9 +11,9 @@ Source:
 (check (= input (Hit)))
 
 Proof:
-(let t0 (Pair (V $a) (V $b)))
+(let t (Pair (V $a) (V $b)))
 (Rule
-  (= t0 (Hit))
+  (= t (Hit))
   (name "guard")
-  (premises (Fiat (= t0 t0)) (Fiat (= (F (V $b)) (F (V $b)))) (Fiat (= () ())))
+  (premises (Fiat (= t t)) (Fiat (= (F (V $b)) (F (V $b)))) (Fiat (= () ())))
   (substitution ($x $a) ($y $b)))

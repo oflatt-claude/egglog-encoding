@@ -11,20 +11,20 @@ Source:
 (check (= input (Hit)))
 
 Proof:
-(let t0 (Pair (V $a) (V $b)))
-(let prf0 (Fiat (= (V $a) (V $a))))
-(let prop0 (= (V $b) (V $b)))
-(let prf1 (Equivariance prop0 prf0 (renaming ($a $b) ($b $a))))
-(let prf2 (Fiat (= () ())))
+(let t (Pair (V $a) (V $b)))
+(let prf (Fiat (= (V $a) (V $a))))
+(let prop (= (V $b) (V $b)))
+(let prf_1 (Equivariance prop prf (renaming ($a $b) ($b $a))))
+(let prf_2 (Fiat (= () ())))
 (Rule
-  (= t0 (Hit))
+  (= t (Hit))
   (name "guards")
   (premises
-    (Fiat (= t0 t0))
-    (RenamingEq (renaming-= (V $a) (V $b)) prf0 (Fiat prop0))
-    prf1
-    prf2
-    prf0
-    prf1
-    prf2)
+    (Fiat (= t t))
+    (RenamingEq (renaming-= (V $a) (V $b)) prf (Fiat prop))
+    prf_1
+    prf_2
+    prf
+    prf_1
+    prf_2)
   (substitution ($x $a) ($y $b)))

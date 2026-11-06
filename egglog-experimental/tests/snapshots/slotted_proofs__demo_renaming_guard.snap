@@ -12,12 +12,12 @@ Source:
 (check (= input (Hit)))
 
 Proof:
-(let t0 (Pair (V $a) (V $b)))
+(let t (Pair (V $a) (V $b)))
 (Rule
-  (= t0 (Hit))
+  (= t (Hit))
   (name "guard")
   (premises
-    (Fiat (= t0 t0))
+    (Fiat (= t t))
     (RenamingEq
       (renaming-= (F (V $a)) (G (V $b)))
       (Fiat (= (F (V $a)) (G (V $a))))

@@ -46,7 +46,6 @@ pub fn counts(graph: &EGraph) -> Result<Counts, String> {
         nodes: 0,
     };
     for symbols in &layouts.carriers {
-        counts.nodes += graph.get_size(&symbols.var);
         for constructor in layouts
             .constructors
             .values()

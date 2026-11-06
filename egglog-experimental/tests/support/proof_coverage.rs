@@ -10,7 +10,7 @@ struct Scope {
     constructors: BTreeMap<String, Vec<bool>>,
 }
 
-fn call(form: &Sexp) -> Option<(&str, &[Sexp])> {
+fn call<'a, 'src>(form: &'a Sexp<'src>) -> Option<(&'a str, &'a [Sexp<'src>])> {
     let Sexp::List(items, _) = form else {
         return None;
     };
@@ -20,13 +20,14 @@ fn call(form: &Sexp) -> Option<(&str, &[Sexp])> {
     Some((head, args))
 }
 
-fn read(source: &str) -> Result<Vec<Sexp>> {
-    let mut forms = Vec::new();
+fn read(source: &str) -> Result<String> {
+    let mut forms = String::new();
     for form in parse_sexps(None, source)? {
         if let Some(("include", [Sexp::Literal(Literal::String(path), _)])) = call(&form) {
-            forms.extend(read(&std::fs::read_to_string(path)?)?);
+            forms.push_str(&read(&std::fs::read_to_string(path)?)?);
         } else {
-            forms.push(form);
+            forms.push_str(form.span().string());
+            forms.push('\n');
         }
     }
     Ok(forms)
@@ -35,7 +36,7 @@ fn read(source: &str) -> Result<Vec<Sexp>> {
 impl Scope {
     fn constructor(&mut self, name: &str, inputs: &[Sexp]) {
         let columns = inputs.iter().take_while(|input| !matches!(input, Sexp::Atom(name, _) if name.starts_with(':')))
-            .map(|input| matches!(input, Sexp::Atom(sort, _) if matches!(sort.as_str(), "i64" | "String"))).collect();
+            .map(|input| matches!(input, Sexp::Atom(sort, _) if matches!(sort.as_ref(), "i64" | "String"))).collect();
         self.constructors.insert(name.into(), columns);
     }
 
@@ -66,7 +67,7 @@ impl Scope {
 
     fn ground(&self, expr: &Sexp) -> bool {
         match expr {
-            Sexp::Atom(name, _) => name.starts_with('$') || self.globals.contains(name),
+            Sexp::Atom(name, _) => name.starts_with('$') || self.globals.contains(name.as_ref()),
             Sexp::Literal(..) => true,
             Sexp::List(..) => {
                 let Some((head, args)) = call(expr) else {
@@ -90,7 +91,8 @@ impl Scope {
 
 /// Count supported positive claims from source, independently of proof emission.
 pub fn expected_proofs(source: &str) -> Result<usize> {
-    let forms = read(source)?;
+    let source = read(source)?;
+    let forms = parse_sexps(None, &source)?;
     let mut scope = Scope::default();
     let mut scopes = Vec::new();
     let mut region_start = 0;
@@ -107,7 +109,7 @@ pub fn expected_proofs(source: &str) -> Result<usize> {
         }
         match call(form) {
             Some(("let", [Sexp::Atom(name, _), _])) => {
-                scope.globals.insert(name.clone());
+                scope.globals.insert(name.to_string());
             }
             Some(("push", [])) => {
                 scopes.push(scope.clone());
@@ -126,7 +128,10 @@ pub fn expected_proofs(source: &str) -> Result<usize> {
                     }
                     // Internal existence sugar yields an equality for nullary constructors.
                     Some(("__internal-holds", [term, Sexp::Atom(ctor, _)]))
-                        if scope.constructors.get(ctor).is_some_and(Vec::is_empty)
+                        if scope
+                            .constructors
+                            .get(ctor.as_ref())
+                            .is_some_and(Vec::is_empty)
                             && scope.ground(term) =>
                     {
                         count += 1

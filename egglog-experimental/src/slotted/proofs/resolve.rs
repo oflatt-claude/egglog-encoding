@@ -353,8 +353,8 @@ fn is_guard(name: &str) -> bool {
 /// Resolve the original slotted source visible at a proof query.
 /// Rewrites become typed rules with their original conditions and nested terms.
 /// Includes resolve from the working directory; push/pop determines the visible scope.
-pub fn resolve_program<'a>(
-    source: impl IntoIterator<Item = &'a Sexp>,
+pub fn resolve_program<'a, 'src: 'a>(
+    source: impl IntoIterator<Item = &'a Sexp<'src>>,
 ) -> Result<ResolvedSlottedProgram, SourceError> {
     let forms = source
         .into_iter()
@@ -585,7 +585,7 @@ impl Reader {
                 match ResolvedCall::from_resolution(
                     head.name(),
                     &types,
-                    graph.type_info(),
+                    &*graph.type_info(),
                     Context::Read,
                     &span,
                 ) {

@@ -366,17 +366,13 @@ From Rust, use `Compiler::compile_program` with
 `CompiledProgram::run` on `new_egraph_with_proofs()`. `run_encoded` checks replayed
 commands against the same retained source programs. Serialized commands contain
 proof request IDs; they do not contain their checking programs.
-`make slotted-proof-tests` runs the supported source corpus through the Rust API
-and checks the generated benchmark goals and seeded fuzz cases with proofs.
-The benchmark checks use the same workload generators and iteration budgets as
-`slotted/eval.py`, in both matching modes. `make test` depends on these tests;
-`make check` runs them too. Proof fuzzing covers toy terms, deeper terms with
-binders and shared variables, and Array in both matching modes. For larger runs,
-use `uv run --locked python slotted/xdiff/proofs.py 100 0` (case count, seed).
-`--deep` selects the deeper toy terms; `--language array` selects the Array
-generator and supports `--no-aliasing`.
-The fuzzer checks equivalent probe pairs, reports cases whose proofs use rewrites,
-and saves failing source programs and diagnostics under `/tmp` or `--failures DIR`.
+`cargo test --locked -p egglog-experimental --test slotted_proof_files` runs the
+supported source corpus and frozen benchmark inputs through the Rust API.
+For frozen differential fixtures it also observes equivalent probe pairs in an
+ordinary execution and checks a source proof for every probe. Nested fixtures
+use the no-aliasing matcher. These tests run in the normal workspace suite and
+`make check`; they use committed inputs without Python orchestration or live
+fixture generation.
 Sources using `subst` are ignored because it has no proof translation;
 the CLI refuses them. `--slotted-proof-checks` runs the same encoding with ordinary
 checks for comparison.

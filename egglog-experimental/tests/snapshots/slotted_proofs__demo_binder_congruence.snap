@@ -10,17 +10,17 @@ Source:
 (check (= input (Wrap (Lam $b (G (V $b))))))
 
 Proof:
-(let t0 (Lam $a (F (V $a))))
-(let t1 (Wrap t0))
-(let t2 (Lam $a (G (V $a))))
+(let t (Lam $a (F (V $a))))
+(let t_1 (Wrap t))
+(let t_2 (Lam $a (G (V $a))))
 (Claim
-  (= t1 (rename (renaming ($a $b) ($b $a)) (Wrap (Lam $b (G (V $b))))))
+  (= t_1 (rename (renaming ($a $b) ($b $a)) (Wrap (Lam $b (G (V $b))))))
   (Congr
-    (= t1 (Wrap t2))
-    (Fiat (= t1 t1))
+    (= t_1 (Wrap t_2))
+    (Fiat (= t_1 t_1))
     (Congr
-      (= t0 t2)
-      (Fiat (= t0 t0))
+      (= t t_2)
+      (Fiat (= t t))
       (Rule
         (= (F (V $a)) (G (V $a)))
         (name "f-to-g")
