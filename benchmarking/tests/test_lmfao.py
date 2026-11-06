@@ -80,7 +80,8 @@ def evaluate(plan: dict[str, Any], data: dict[str, list[dict[str, Any]]]) -> lis
 
 
 @pytest.mark.parametrize("mode", ["single-root", "roots", "shared"])
-def test_extracted_dag_preserves_original_queries(mode: str) -> None:
+@pytest.mark.parametrize("cost_model", ["structural", "cardinality"])
+def test_extracted_dag_preserves_original_queries(mode: str, cost_model: str) -> None:
     manifest = json.loads((FIXTURES / "manifest.json").read_text())
     path = FIXTURES / f"{mode}.json"
     assert sha256_file(path) == manifest[mode]["graph_sha256"]
@@ -93,9 +94,10 @@ def test_extracted_dag_preserves_original_queries(mode: str) -> None:
     assert bool(g.producers) == (mode != "roots")
     stats = {(v.region, v.keys): (100, 10) for v in g.views.values()}
     stats.update(dict.fromkeys(g.producers.values(), (100, 10)))
-    ex = Extractor(g, stats)
+    ex = Extractor(g, stats if cost_model == "cardinality" else None)
     selected, info = ex.extract(5)
     assert info["solver"]["optimal"]
+    assert info["cost_model"] == cost_model
     with pytest.raises(ValueError, match="exported alternative"):
         ex.score(selected | {g.outputs[0][1]: "invented-node"})
     choices = [selected]
@@ -144,6 +146,7 @@ def test_cli_limits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     argv = ["--data", str(tmp_path), "--backend", str(tmp_path / "multifaq"), "--output-dir", str(tmp_path / "out")]
     assert cli.main([*argv, "--rounds", "1", "--dag-timeout", "2"]) == 0
     assert calls[0].samples == 1 and calls[0].dag_timeout == 2
+    assert calls[0].cost_model == "structural"
     for value in ["0", "-1", "nan", "inf"]:
         with pytest.raises(SystemExit):
             cli.main([*argv, "--dag-timeout", value])
@@ -190,8 +193,9 @@ def test_cpp_timing_retains_whole_process_and_upstream_scope(tmp_path: Path) -> 
     assert (tmp_path / "run-0.log").read_text().endswith("Data process: 37ms.\n")
 
 
+@pytest.mark.parametrize("cost_model", ["structural", "cardinality"])
 def test_pipeline_charges_statistics_and_export_but_not_validation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], cost_model: str
 ) -> None:
     now = 0.0
 
@@ -219,15 +223,19 @@ def test_pipeline_charges_statistics_and_export_but_not_validation(
             spend(1)
 
     def load(directory: Path) -> tuple[Database, dict[str, Any]]:
+        if cost_model == "structural":
+            assert all((tmp_path / "out" / f"{label}-plan.json").exists() for label in documents)
         spend(10)
         return Database(), {"input_rows": {"Sales": 2}}
 
     def statistics(db: Database, graph: dict[str, Any]) -> tuple[dict[Any, Any], list[Any]]:
+        assert cost_model == "cardinality"
         spend(graph["statistics"])
         return {}, []
 
     class Extraction:
         def __init__(self, *args: Any) -> None:
+            assert (args[1] is None) == (cost_model == "structural")
             spend(2)
 
         def extract(self, timeout: float) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -270,19 +278,34 @@ def test_pipeline_charges_statistics_and_export_but_not_validation(
     compiler.touch()
     output = tmp_path / "out"
     assert (
-        cli.main(["--data", str(tmp_path), "--backend", str(compiler), "--output-dir", str(output), "--rounds", "2"])
+        cli.main(
+            [
+                "--data",
+                str(tmp_path),
+                "--backend",
+                str(compiler),
+                "--output-dir",
+                str(output),
+                "--rounds",
+                "2",
+                "--cost-model",
+                cost_model,
+            ]
+        )
         == 0
     )
     report = json.loads(capsys.readouterr().out)
     assert report == json.loads((output / "pipeline.json").read_text())
     costs = report["accounted_pipeline"]
     assert costs["original"]["one_time_phase_sum_seconds"] == 42
-    assert costs["shared-slotted"]["one_time_phase_sum_seconds"] == 98
-    assert costs["shared-slotted-ref-multi"]["one_time_phase_sum_seconds"] == 110
+    assert costs["shared-slotted"]["one_time_phase_sum_seconds"] == (98 if cost_model == "cardinality" else 67)
+    assert costs["shared-slotted-ref-multi"]["one_time_phase_sum_seconds"] == (
+        110 if cost_model == "cardinality" else 69
+    )
     assert costs["shared-slotted-ref-multi"]["execution_label"] == "shared-slotted"
     assert costs["original"]["statistics_seconds"] == 0
     assert costs["original"]["optimization_and_generation_seconds"] == 2
-    assert costs["shared-slotted"]["statistics_seconds"] == 31
+    assert costs["shared-slotted"]["statistics_seconds"] == (31 if cost_model == "cardinality" else 0)
     assert costs["shared-slotted"]["optimization_and_generation_seconds"] == 27
     assert costs["shared-slotted"]["compilation_seconds"] == 40
     assert report["metadata"]["validation_preparation_seconds"] == 2011
@@ -291,7 +314,12 @@ def test_pipeline_charges_statistics_and_export_but_not_validation(
     comparison = (output / "comparison.md").read_text()
     assert "| shared / egglog | All six | Enabled | 0.2750 | 2 |" in comparison
     assert "| shared / native multipattern | All six | Enabled | 0.2750 | 2 |" in comparison
-    assert "| shared / egglog | 31.0000 | 27.0000 | 40.0000 |" in comparison
+    assert (
+        f"| shared / egglog | {'31.0000' if cost_model == 'cardinality' else '0.0000'} | 27.0000 | 40.0000 |"
+        in comparison
+    )
+    assert f"Egraph extraction cost model: {cost_model}." in comparison
+    assert bool(list(output.glob("*-statistics.json"))) == (cost_model == "cardinality")
 
 
 def test_comparison_caption_names_ablation_pairs_and_preserves_missing_results() -> None:
@@ -302,6 +330,7 @@ def test_comparison_caption_names_ablation_pairs_and_preserves_missing_results()
         {
             "optimizer": dict.fromkeys(labels[1:]),
             "accounted_pipeline": {},
+            "metadata": {"cost_model": "structural"},
         }
     )
     assert "| single-root / egglog | Sales only | Enabled | unavailable | — |" in result

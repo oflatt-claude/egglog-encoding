@@ -51,7 +51,12 @@ def run(args: argparse.Namespace) -> None:
         "cxx_version": subprocess.check_output(["g++", "--version"], text=True).splitlines()[0],
         "backend_corrections": ["dependent-output.patch"],
         "dag_timeout_seconds": args.dag_timeout,
-        "statistics": "exact cardinalities collected and charged separately for each graph; not a production estimator",
+        "cost_model": args.cost_model,
+        "statistics": (
+            "none used by the optimizer; data is read only for validation and execution"
+            if args.cost_model == "structural"
+            else "exact cardinalities collected and charged separately for each graph; not a production estimator"
+        ),
         "timing_scope": (
             "execution is whole C++ process wall time, including loading and sorting; "
             "code generation, compilation and checking excluded. "
@@ -68,18 +73,19 @@ def run(args: argparse.Namespace) -> None:
         start = time.perf_counter()
         g = Graph(document)
         phases["graph_decoding"] = time.perf_counter() - start
-        status(f"Collecting optimizer statistics for {label}")
-        start = time.perf_counter()
-        db, data_metadata = load_data(args.data)
-        phases["statistics_loading"] = time.perf_counter() - start
-        metadata.update(data_metadata)
-        start = time.perf_counter()
-        try:
-            stats, records = collect_statistics(db, g)
-        finally:
-            db.close()
-        phases["statistics_queries"] = time.perf_counter() - start
-        write_json(out / f"{label}-statistics.json", records)
+        stats = None
+        if args.cost_model == "cardinality":
+            status(f"Collecting optimizer statistics for {label}")
+            start = time.perf_counter()
+            db, _ = load_data(args.data)
+            phases["statistics_loading"] = time.perf_counter() - start
+            start = time.perf_counter()
+            try:
+                stats, records = collect_statistics(db, g)
+            finally:
+                db.close()
+            phases["statistics_queries"] = time.perf_counter() - start
+            write_json(out / f"{label}-statistics.json", records)
         status(f"Extracting {label}")
         start = time.perf_counter()
         ex = Extractor(g, stats)
@@ -109,7 +115,8 @@ def run(args: argparse.Namespace) -> None:
     write_json(out / "identical-plans.json", aliases)
     status("Computing independent decimal answers outside pipeline timing")
     start = time.perf_counter()
-    db, _ = load_data(args.data)
+    db, data_metadata = load_data(args.data)
+    metadata.update(data_metadata)
     try:
         expected = reference_results(db)
     finally:
@@ -177,6 +184,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--backend", type=Path, required=True, help="Pinned multifaq executable with import adapter")
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--cost-model",
+        choices=("structural", "cardinality"),
+        default="structural",
+        help="Structural costs use no data statistics; cardinality profiles candidate intermediates",
+    )
     parser.add_argument(
         "--treatment", choices=TREATMENTS, action="append", help="Repeat to select engines; default both"
     )

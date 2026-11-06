@@ -252,13 +252,16 @@ class Graph:
 
 
 class Extractor:
-    def __init__(self, graph: Graph, statistics: dict[tuple[str, tuple[int, ...]], tuple[int, int]]) -> None:
+    def __init__(
+        self, graph: Graph, statistics: dict[tuple[str, tuple[int, ...]], tuple[int, int]] | None = None
+    ) -> None:
         self.g, self.costs = graph, {}
+        self.cost_model = "structural" if statistics is None else "cardinality"
         for ns in graph.options.values():
             for n in ns:
                 v = graph.views.get(n)
                 region, keys = (v.region, v.keys) if v else graph.producers[n]
-                work, rows = statistics[region, keys]
+                work, rows = (1, 1) if statistics is None else statistics[region, keys]
                 base = work * (1 + len(graph.regions[region].children)) + rows * len(keys)
                 update = work * (1 + len(v.local)) + rows if v else 0
                 self.costs[n] = update + (base if v is None or v.producer is None else 0)
@@ -300,7 +303,13 @@ class Extractor:
             "estimated_cost": cost,
             "initial_tree_plan_dag_cost": initial,
             "solver": solver,
-            "cost_model": "scan/join rows + per-column update rows + output cells; shared producers charged once",
+            "cost_model": self.cost_model,
+            "cost_description": (
+                "producer + join inputs + grouping columns; per-column update/output + local functions; "
+                "shared producers charged once; no data statistics"
+                if self.cost_model == "structural"
+                else "scan/join rows + per-column update rows + output cells; shared producers charged once"
+            ),
             "selected_nodes": {c: selected[c] for c in order},
         }
 

@@ -65,6 +65,8 @@ def comparison_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            f"Egraph extraction cost model: {report['metadata']['cost_model']}.",
+            "",
             "Table: Execution of the original 140-query Favorita covariance workload through the same corrected "
             "LMFAO C++ backend. Within each egraph engine, compare shared with single-root to isolate the benefit "
             "of root choice, and shared with roots to isolate shared-producer merging. Queries, data, cost model "

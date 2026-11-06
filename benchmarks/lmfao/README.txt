@@ -11,8 +11,9 @@ into LMFAO's C++ backend, bypassing its logical optimizer.
 This reproduces the artifact's query workload and compares logical optimization
 on the same execution backend. It does not reproduce the paper's full 127M-row
 Favorita experiment, its other datasets/models, or parallel execution. The
-extractor uses measured cardinalities, not a production statistics estimator.
-An optimum for its cost model does not imply the fastest executable plan.
+extractor supports structural costs without data statistics, or measured
+cardinalities. An optimum for either cost model does not imply the fastest
+executable plan.
 
 "Covariance" names the query workload, not a dataset. The queries compute a
 non-centered covariance (Gram) matrix: counts, sums, squares and pairwise
@@ -60,6 +61,11 @@ engine comparison, use --treatment slotted --variant shared. Original LMFAO
 remains the control in every invocation. A single-engine run does not establish
 graph equivalence between engines.
 
+The default, --cost-model structural, skips optimizer statistics collection.
+--cost-model cardinality measures exact candidate cardinalities. Both retain
+the same egraph rules, DAG extraction algorithm and execution backend. Data is
+still read for independent validation and execution in either mode.
+
 --timeout-sec and --memory-limit-gib/--no-memory-limit bound optimizer processes;
 the timeout also bounds timed generated executables. The memory limit does not
 cover statistics, extraction or C++ execution. Status goes to stderr; the final
@@ -104,13 +110,38 @@ once, plus each selected column's work. The backend adapter serializes those
 selected identities; it does not discover or merge compatible views. This avoids
 enumerating all possible column subsets in the graph.
 
-The objective counts scan/join rows, scalar updates and output cells. DuckDB
-queries measure exact candidate output cardinalities and joins against incoming
-distinct keys. Collection is timed separately for each variant and charged in
-full to its pipeline cost. These queries provide costs, not root choices or view
-plans. HiGHS selects one acyclic DAG jointly across all required outputs; the
-report includes its bound, gap and time limit. Decoder validation rejects plans
-that change a query's keys/functions or violate directional pushdown semantics.
+HiGHS selects one acyclic DAG jointly across all required outputs; the report
+includes its bound, gap and time limit. Decoder validation rejects plans that
+change a query's keys/functions or violate directional pushdown semantics.
+
+Cost models
+-----------
+Both models charge each selected producer once and each aggregate column once.
+Let C be the number of incoming regions, K the number of grouping columns, and
+F the number of local scalar functions in an aggregate column.
+
+  structural    Producer: 1 + C + K. Column: 2 + F.
+  cardinality   Producer: J * (1 + C) + R * K. Column: J * (1 + F) + R.
+
+ComputeView pays both costs; ViewColumn pays the column cost and references a
+shared producer. Coefficients are fixed unit weights, not fitted to execution
+times. The structural objective favors fewer shared intermediates and fewer
+carried grouping columns. It uses only the exported graph, without reading data
+or using the configured per-feature root preferences; its unit weights are not
+claims about the number of input rows.
+
+For cardinality costs, J is the origin relation's join cardinality against
+incoming distinct keys, and R is the output cardinality. DuckDB measures both
+over the data. Collection is timed separately for each variant and charged in
+full. These queries supply costs, not root choices or view plans.
+
+The paper's Section 3.3 uses grouping-attribute coverage and batch-wide root
+weights, breaking ties by relation size. The pinned covariance application reads
+per-feature root preferences from features.conf and assigns query roots from
+them. Its runtime does not profile candidate views as our cardinality model does;
+this does not imply that its supplied configuration was chosen without data-size
+knowledge. Our structural objective pursues similar goals through joint DAG
+selection, but is not an implementation of the paper's root-assignment heuristic.
 
 Controls and backend
 --------------------
@@ -170,6 +201,8 @@ comparison with original LMFAO measures plan quality against its logical optimiz
 the ablations explain which choices help within the egraph optimizer.
 
 A separate table reports statistics, optimization/generation and C++ compilation.
+The report identifies the selected cost model. Structural extraction reports zero
+optimizer-statistics time and produces no statistics file for that run.
 pipeline.json retains computation and whole-process execution under execution,
 and these preparation categories under accounted_pipeline:
 
@@ -202,8 +235,9 @@ The paper's Table 3 excludes compilation and data loading, uses sorted inputs,
 and reports the mean of four runs after a warmup (Section 4.1 and Appendix B).
 Our primary table follows that computation scope but reports medians. Its
 join-tree layer takes cardinality constraints as input; the paper does not report
-a separate statistics-collection time. Our exact statistics are measured over
-the data and must be included in any claim about total optimization cost.
+a separate statistics-collection time. When using our cardinality model, its
+exact statistics are measured over the data and must be included in any claim
+about total optimization cost.
 
 Read logical.egg, logical.py (decoding/costs/serialization), and dag.py (joint
 extraction). statistics.py provides costs; backend.py compiles/checks/runs the
