@@ -2,9 +2,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use egglog::{
-    ArcSort, CommandOutput, Context, Core, EGraph, Enode, Error, Function, Read, Term, TermDag,
-    TermId, UserDefinedCommand, Value,
-    api::RawValues,
+    ArcSort, CommandOutput, Context, Core, EGraph, Enode, Error, Function, Term, TermDag, TermId,
+    UserDefinedCommand, Value,
     ast::{Expr, Literal},
     extract::TreeCostModel,
     sort::MapContainer,
@@ -215,20 +214,11 @@ impl UserDefinedCommand for ExtractCommand {
         let Expr::Var(_, name) = root else {
             return Err(error("expected a prepared root global"));
         };
-        let function = graph
-            .get_function(name)
-            .filter(|function| function.is_let_binding() && function.func_type().input.is_empty())
-            .ok_or_else(|| error("expected a prepared root global"))?;
-        let sort = function.func_type().output().clone();
-        let root = graph
-            .read(|state| {
-                if function.is_view() {
-                    state.eclass_of(name, RawValues(vec![]))
-                } else {
-                    state.lookup(name, RawValues(vec![]))
-                }
-            })?
-            .ok_or_else(|| error("prepared root has no value"))?;
+        // Globals live in shared per-sort tables. Ground lookup resolves their
+        // source names in both ordinary and proof-encoded graphs.
+        let mut terms = TermDag::default();
+        let root = terms.app(name.clone(), vec![]);
+        let (sort, root) = graph.lookup_term_dag(&terms, &[(root, None)])?.remove(0);
         let renaming_sort = graph
             .get_sort_by_name("Renaming")
             .cloned()
