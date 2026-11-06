@@ -19,10 +19,8 @@ from benchmarking.targets import sha256_file
 
 from . import backend, model
 from .data import load_data, reference_results
-from .logical import Extractor, Graph
 from .optimizer import TREATMENTS, collect_optimizers, seconds_summary, write_json
-from .report import comparison_markdown, preparation_costs
-from .statistics import collect as collect_statistics
+from .report import comparison_markdown, plan_text, preparation_costs
 
 
 def status(message: str) -> None:
@@ -51,12 +49,6 @@ def run(args: argparse.Namespace) -> None:
         "cxx_version": subprocess.check_output(["g++", "--version"], text=True).splitlines()[0],
         "backend_corrections": ["dependent-output.patch"],
         "dag_timeout_seconds": args.dag_timeout,
-        "cost_model": args.cost_model,
-        "statistics": (
-            "none used by the optimizer; data is read only for validation and execution"
-            if args.cost_model == "structural"
-            else "exact cardinalities collected and charged separately for each graph; not a production estimator"
-        ),
         "timing_scope": (
             "execution is whole C++ process wall time, including loading and sorting; "
             "code generation, compilation and checking excluded. "
@@ -65,53 +57,37 @@ def run(args: argparse.Namespace) -> None:
         "lmfao_commit": model.COMMIT,
     }
     plans: dict[str, Any] = {}
-    canonical: dict[str, Path | None] = {"original": None}
     aliases: dict[str, str] = {}
     signatures: dict[str, str] = {}
-    for label, document in documents.items():
-        phases = {"rewriting_and_export": optimizer["graph_collection"][label]["seconds"]}
-        start = time.perf_counter()
-        g = Graph(document)
-        phases["graph_decoding"] = time.perf_counter() - start
-        stats = None
-        if args.cost_model == "cardinality":
-            status(f"Collecting optimizer statistics for {label}")
-            start = time.perf_counter()
-            db, _ = load_data(args.data)
-            phases["statistics_loading"] = time.perf_counter() - start
-            start = time.perf_counter()
-            try:
-                stats, records = collect_statistics(db, g)
-            finally:
-                db.close()
-            phases["statistics_queries"] = time.perf_counter() - start
-            write_json(out / f"{label}-statistics.json", records)
-        status(f"Extracting {label}")
-        start = time.perf_counter()
-        ex = Extractor(g, stats)
-        selected, info = ex.extract(args.dag_timeout)
-        phases["extraction"] = time.perf_counter() - start
-        start = time.perf_counter()
-        plan = ex.plan(selected)
-        path = out / f"{label}-plan.json"
-        write_json(path, plan)
-        phases["plan_serialization"] = time.perf_counter() - start
-        info.update(
-            {
-                "phases_seconds": phases,
-                "source_graph_sha256": sha256_file(out / f"{label}-graph.json"),
-                "views": len(plan["views"]),
-                "aggregates": sum(len(v["aggregates"]) for v in plan["views"]),
+    builds: dict[str, Any] = {}
+    canonical = ["original"]
+    for label in ["original", *documents]:
+        settings = None
+        if label != "original":
+            variant, treatment = label.split("-slotted", 1)
+            treatment = "slotted" + treatment
+            settings = {
+                "variant": variant,
+                "treatment": treatment,
+                "binary": optimizer["binary_paths"][treatment],
+                "timeout": args.timeout,
+                "memory_limit_bytes": args.memory_limit_bytes,
+                "dag_timeout": args.dag_timeout,
             }
-        )
-        write_json(out / f"{label}-extraction.json", info)
-        plans[label] = info
+        status(f"Running LMFAO frontend, logical optimizer and code generation: {label}")
+        directory = out / label
+        builds[label] = backend.generate(args.backend, args.data, directory, settings, timeout=args.build_timeout)
+        plan = model.read_plan(directory / "plan.json")
+        (directory / "plan.txt").write_text(plan_text(plan))
+        if label == "original":
+            continue
+        plans[label] = json.loads((directory / "extraction.json").read_text())
         signature = json.dumps(plan, sort_keys=True)
         if signature in signatures:
             aliases[label] = signatures[signature]
         else:
             signatures[signature] = label
-            canonical[label] = path
+            canonical.append(label)
     write_json(out / "identical-plans.json", aliases)
     status("Computing independent decimal answers outside pipeline timing")
     start = time.perf_counter()
@@ -123,12 +99,12 @@ def run(args: argparse.Namespace) -> None:
         db.close()
     metadata["validation_preparation_seconds"] = time.perf_counter() - start
     write_json(out / "metadata.json", metadata)
-    builds, validation = {}, {}
-    for label, path in canonical.items():
-        status(f"Generating and compiling {label}")
+    validation = {}
+    for label in canonical:
+        status(f"Compiling {label}")
         directory = out / label
-        builds[label] = backend.prepare(
-            args.backend, args.data, directory, path, flags=args.cxxflags, jobs=args.jobs, timeout=args.build_timeout
+        builds[label].update(
+            backend.compile(directory, flags=args.cxxflags, jobs=args.jobs, timeout=args.build_timeout)
         )
         status(f"Checking all 140 outputs for {label}")
         validation[label] = backend.validate(directory, expected, flags=args.cxxflags, timeout=args.build_timeout)
@@ -166,12 +142,13 @@ def run(args: argparse.Namespace) -> None:
         },
         "phase_scope": (
             "Execution reports computation time separately from whole-process time including loading/sorting. "
-            "accounted_pipeline separates statistics, optimization/generation and compilation, "
+            "accounted_pipeline separates optimization/generation and compilation, "
             "with one observation per preparation phase. Its phase sum is not a measured end-to-end runtime. "
-            "Each variant pays its full statistics cost. Identical plans reuse backend observations, charged in full. "
+            "Generation includes the frontend, optimizer subprocess and backend. Identical plans reuse compilation "
+            "and execution observations, charged in full. "
             "Original logical optimization is included in its code-generation phase. Independent validation, "
             "isomorphism checks and tool builds are excluded for both. Separate optimizer-only benchmark "
-            "samples are not added again to rewriting/export time."
+            "samples and diagnostic graph exports are excluded; the hook reruns rewriting for the exported workload."
         ),
     }
     write_json(out / "pipeline.json", report)
@@ -182,14 +159,8 @@ def run(args: argparse.Namespace) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, required=True)
-    parser.add_argument("--backend", type=Path, required=True, help="Pinned multifaq executable with import adapter")
+    parser.add_argument("--backend", type=Path, required=True, help="Pinned multifaq executable with optimizer bridge")
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument(
-        "--cost-model",
-        choices=("structural", "cardinality"),
-        default="structural",
-        help="Structural costs use no data statistics; cardinality profiles candidate intermediates",
-    )
     parser.add_argument(
         "--treatment", choices=TREATMENTS, action="append", help="Repeat to select engines; default both"
     )

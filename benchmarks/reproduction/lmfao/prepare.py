@@ -1,4 +1,4 @@
-"""Build the import adapter in a separate checkout of the pinned LMFAO commit."""
+"""Build the optimizer bridge in a separate checkout of the pinned LMFAO commit."""
 
 import argparse
 import shutil
@@ -22,9 +22,10 @@ def main() -> None:
         parser.error("--output must be a new directory")
     out.mkdir(parents=True)
     subprocess.run(["git", "-C", str(args.source), "worktree", "add", "--detach", str(source), COMMIT], check=True)
-    subprocess.run(["git", "-C", str(source), "apply", str(adapter / "import-plan.patch")], check=True)
+    subprocess.run(["git", "-C", str(source), "apply", str(adapter / "optimizer-bridge.patch")], check=True)
     subprocess.run(["git", "-C", str(source), "apply", str(adapter / "dependent-output.patch")], check=True)
-    shutil.copy2(adapter / "ImportPlan.hpp", source / "src/compiler/ImportPlan.hpp")
+    for header in ("ImportPlan.hpp", "OptimizerBridge.hpp"):
+        shutil.copy2(adapter / header, source / "src/compiler" / header)
     cmake = ["cmake", "-S", str(source), "-B", str(out / "build")]
     if args.boost:
         boost = args.boost.resolve()

@@ -38,7 +38,7 @@ class View:
 
 
 class Graph:
-    def __init__(self, document: dict[str, Any]) -> None:
+    def __init__(self, document: dict[str, Any], workload: model.Workload = model.WORKLOAD) -> None:
         self.nodes = document["nodes"]
         self.classes: dict[str, list[str]] = defaultdict(list)
         self.args: dict[str, list[Edge | int]] = {}
@@ -57,8 +57,8 @@ class Graph:
             if data["group"] != [list(range(len(data["slots"])))]:
                 raise ValueError("logical decoder requires trivial class symmetries")
         self._weights: dict[str, tuple[int, ...]] = {}
-        self.function_specs = model.function_specs()
-        self.relations = model.schema()[1]
+        self.function_specs = workload.functions
+        self.relations = workload.relations
         self.regions: dict[str, Region] = {}
         for cid, ns in self.classes.items():
             for n in ns:
@@ -252,18 +252,14 @@ class Graph:
 
 
 class Extractor:
-    def __init__(
-        self, graph: Graph, statistics: dict[tuple[str, tuple[int, ...]], tuple[int, int]] | None = None
-    ) -> None:
+    def __init__(self, graph: Graph) -> None:
         self.g, self.costs = graph, {}
-        self.cost_model = "structural" if statistics is None else "cardinality"
         for ns in graph.options.values():
             for n in ns:
                 v = graph.views.get(n)
                 region, keys = (v.region, v.keys) if v else graph.producers[n]
-                work, rows = (1, 1) if statistics is None else statistics[region, keys]
-                base = work * (1 + len(graph.regions[region].children)) + rows * len(keys)
-                update = work * (1 + len(v.local)) + rows if v else 0
+                base = 1 + len(graph.regions[region].children) + len(keys)
+                update = 2 + len(v.local) if v else 0
                 self.costs[n] = update + (base if v is None or v.producer is None else 0)
 
     def score(self, selected: dict[str, str]) -> tuple[float, list[str]]:
@@ -303,12 +299,9 @@ class Extractor:
             "estimated_cost": cost,
             "initial_tree_plan_dag_cost": initial,
             "solver": solver,
-            "cost_model": self.cost_model,
             "cost_description": (
                 "producer + join inputs + grouping columns; per-column update/output + local functions; "
-                "shared producers charged once; no data statistics"
-                if self.cost_model == "structural"
-                else "scan/join rows + per-column update rows + output cells; shared producers charged once"
+                "shared producers charged once"
             ),
             "selected_nodes": {c: selected[c] for c in order},
         }
@@ -317,7 +310,7 @@ class Extractor:
         """Serialize selected producer identities and columns, without merging views."""
         g = self.g
         _, order = self.score(selected)
-        tables = list(model.schema()[1])
+        tables = list(g.relations)
         views: list[dict[str, Any]] = []
         producers: dict[str, int] = {}
         columns: dict[str, tuple[int, int]] = {}

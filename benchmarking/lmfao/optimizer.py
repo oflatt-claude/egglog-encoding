@@ -123,6 +123,7 @@ def collect_optimizers(
         "graph_collection": {},
         "graph_comparisons": {},
         "binary_sha256": {mode: target.binary_sha256_for(mode) for mode in treatments},
+        "binary_paths": {mode: str(target.binary_path_for(mode)) for mode in treatments},
         "optimizer_report": str(store.path),
         "optimizer_memory_limit_bytes": memory_limit_bytes,
         "timing_scope": "Optimizer process wall time includes startup, parsing/frontend, "

@@ -1,21 +1,14 @@
-"""Pinned upstream query definitions; categorical features are grouping keys."""
+"""Read the pinned LMFAO frontend export; categorical features are grouping keys."""
 
+from __future__ import annotations
+
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 FIXTURES = Path(__file__).resolve().parents[2] / "benchmarks/lmfao"
 COMMIT = "df6a5f59d597e9d7dd5984f268700223553789d0"
-
-
-def config_lines(path: Path) -> list[str]:
-    return [line.strip() for line in path.read_text().splitlines() if line.strip() and not line.startswith("#")]
-
-
-@dataclass(frozen=True)
-class Feature:
-    name: str
-    categorical: bool
-    relation: str
 
 
 @dataclass(frozen=True)
@@ -24,53 +17,58 @@ class Query:
     factors: tuple[str, ...] = ()
 
 
-def features() -> list[Feature]:
-    lines = config_lines(FIXTURES / "features.conf")
-    result = [Feature(name, kind == "1", relation) for name, kind, relation in (s.split(":") for s in lines[1:])]
-    assert len(result) == int(lines[0].split(",")[0])
-    return result
-
-
-def schema() -> tuple[list[list[str]], dict[str, list[str]], list[list[str]]]:
-    lines = config_lines(FIXTURES / "treedecomposition.conf")
-    nattrs, nrels, nedges = map(int, lines[0].split())
-    attrs = [line.split()[1:] for line in lines[1 : 1 + nattrs]]
-    relations = {}
-    for line in lines[1 + nattrs : 1 + nattrs + nrels]:
-        head, columns = line.split(":")
-        relations[head.split()[1]] = columns.split(",")
-    edges = [line.split("-") for line in lines[1 + nattrs + nrels : 1 + nattrs + nrels + nedges]]
-    return attrs, relations, edges
-
-
-def queries() -> list[Query]:
-    """Count, first moments, continuous squares, and all distinct feature pairs.
-
-    Categorical features become grouping columns, as in LMFAO's generator.
-    """
-    # Upstream loops over attribute IDs, not the order in features.conf (whose
-    # first entry names the learning label).
-    by_name = {f.name: f for f in features()}
-    fs = [by_name[name] for name, _ in schema()[0] if name in by_name]
-    out = [Query()]
-    for i, a in enumerate(fs):
-        out.append(Query((a.name,), ()) if a.categorical else Query((), (a.name,)))
-        if not a.categorical:
-            out.append(Query((), (a.name, a.name)))
-        for b in fs[i + 1 :]:
-            out.append(
-                Query(
-                    tuple(f.name for f in (a, b) if f.categorical),
-                    tuple(f.name for f in (a, b) if not f.categorical),
-                )
+class Workload:
+    def __init__(self, document: dict[str, Any]) -> None:
+        self.document = document
+        self.attributes = [(a["name"], a["type"]) for a in document["attributes"]]
+        names = [a for a, _ in self.attributes]
+        relations = document["relations"]
+        self.relations = {r["name"]: [names[int(a)] for a in r["attributes"]] for r in relations}
+        self.edges = [
+            (r["name"], relations[int(n)]["name"])
+            for i, r in enumerate(relations)
+            for n in r["neighbors"]
+            if i < int(n)
+        ]
+        self.root = relations[int(document["root"])]["name"]
+        self.functions = [(names[int(f["attributes"][0])], int(f["power"])) for f in document["functions"]]
+        self.queries = [
+            Query(
+                tuple(names[int(a)] for a in q["keys"]),
+                tuple(name for f in q["functions"] for name, power in [self.functions[int(f)]] for _ in range(power)),
             )
-    return out
+            for q in document["queries"]
+        ]
+
+    @classmethod
+    def read(cls, path: Path) -> Workload:
+        return cls(json.loads(path.read_text()))
 
 
-def function_specs() -> list[tuple[str, int]]:
-    names = {f.name for f in features() if not f.categorical}
-    numeric = [name for name, _ in schema()[0] if name in names]
-    return [(name, power) for power in (1, 2) for name in numeric]
+WORKLOAD = Workload.read(FIXTURES / "workload.json")
+
+
+def read_plan(path: Path) -> dict[str, Any]:
+    """Normalize Boost property_tree's string scalars and empty arrays."""
+    plan = json.loads(path.read_text())
+    return {
+        "views": [
+            {
+                "origin": int(v["origin"]),
+                "destination": int(v["destination"]),
+                "keys": list(map(int, v["keys"])),
+                "aggregates": [
+                    {
+                        "functions": list(map(int, a["functions"])),
+                        "incoming": [list(map(int, e)) for e in a["incoming"]],
+                    }
+                    for a in v["aggregates"]
+                ],
+            }
+            for v in plan["views"]
+        ],
+        "outputs": [{k: int(v) for k, v in o.items()} for o in plan["outputs"]],
+    }
 
 
 def ident(name: str) -> str:

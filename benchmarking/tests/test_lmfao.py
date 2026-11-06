@@ -44,8 +44,8 @@ def join(tables: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
 
 
 def evaluate(plan: dict[str, Any], data: dict[str, list[dict[str, Any]]]) -> list[dict[tuple[Any, ...], Fraction]]:
-    attrs, schema, _ = model.schema()
-    names, tables, functions = [a for a, _ in attrs], list(schema), model.function_specs()
+    attrs, schema = model.WORKLOAD.attributes, model.WORKLOAD.relations
+    names, tables, functions = [a for a, _ in attrs], list(schema), model.WORKLOAD.functions
     computed: dict[int, list[dict[tuple[Any, ...], Fraction]]] = {}
 
     def view(i: int) -> list[dict[tuple[Any, ...], Fraction]]:
@@ -80,8 +80,7 @@ def evaluate(plan: dict[str, Any], data: dict[str, list[dict[str, Any]]]) -> lis
 
 
 @pytest.mark.parametrize("mode", ["single-root", "roots", "shared"])
-@pytest.mark.parametrize("cost_model", ["structural", "cardinality"])
-def test_extracted_dag_preserves_original_queries(mode: str, cost_model: str) -> None:
+def test_extracted_dag_preserves_original_queries(mode: str) -> None:
     manifest = json.loads((FIXTURES / "manifest.json").read_text())
     path = FIXTURES / f"{mode}.json"
     assert sha256_file(path) == manifest[mode]["graph_sha256"]
@@ -90,19 +89,16 @@ def test_extracted_dag_preserves_original_queries(mode: str, cost_model: str) ->
     assert len(g.outputs) == len(QUERIES)
     for _, root, _ in g.outputs:
         roots = {g.regions[g.views[n].region].origin for n in g.options[root]}
-        assert roots == ({"Sales"} if mode == "single-root" else set(model.schema()[1]))
+        assert roots == ({"Sales"} if mode == "single-root" else set(model.WORKLOAD.relations))
     assert bool(g.producers) == (mode != "roots")
-    stats = {(v.region, v.keys): (100, 10) for v in g.views.values()}
-    stats.update(dict.fromkeys(g.producers.values(), (100, 10)))
-    ex = Extractor(g, stats if cost_model == "cardinality" else None)
+    ex = Extractor(g)
     selected, info = ex.extract(5)
     assert info["solver"]["optimal"]
-    assert info["cost_model"] == cost_model
     with pytest.raises(ValueError, match="exported alternative"):
         ex.score(selected | {g.outputs[0][1]: "invented-node"})
     choices = [selected]
     # Exercise every orientation, including roots the cost model did not choose.
-    for root in ["Sales"] if mode == "single-root" else model.schema()[1]:
+    for root in ["Sales"] if mode == "single-root" else model.WORKLOAD.relations:
         forced = {c: ns[0] for c, ns in g.options.items()}
         for _, c, _ in g.outputs:
             forced[c] = next(n for n in g.options[c] if g.regions[g.views[n].region].origin == root)
@@ -110,7 +106,7 @@ def test_extracted_dag_preserves_original_queries(mode: str, cost_model: str) ->
     rng = random.Random(804)
     for trial in range(8):
         data = {}
-        for name, fields in model.schema()[1].items():
+        for name, fields in model.WORKLOAD.relations.items():
             rows = [
                 {
                     k: Fraction(rng.randrange(-3, 4), 2)
@@ -135,9 +131,16 @@ def test_extracted_dag_preserves_original_queries(mode: str, cost_model: str) ->
 
 
 def test_fixed_workload_is_original_covariance_configuration() -> None:
-    assert len(model.queries()) == 140
-    assert Counter(len(q.groups) for q in model.queries()) == {0: 10, 1: 52, 2: 78}
-    assert len(model.schema()[1]) == 6 and len(model.features()) == 16
+    assert len(model.WORKLOAD.queries) == 140
+    assert Counter(len(q.groups) for q in model.WORKLOAD.queries) == {0: 10, 1: 52, 2: 78}
+    assert len(model.WORKLOAD.relations) == 6
+
+
+def test_frozen_inputs_match_upstream_frontend_export() -> None:
+    from benchmarks.reproduction.slotted.lmfao import frozen
+
+    for name, contents in frozen().items():
+        assert (model.FIXTURES / "inputs" / name).read_text() == contents
 
 
 def test_cli_limits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -146,7 +149,6 @@ def test_cli_limits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     argv = ["--data", str(tmp_path), "--backend", str(tmp_path / "multifaq"), "--output-dir", str(tmp_path / "out")]
     assert cli.main([*argv, "--rounds", "1", "--dag-timeout", "2"]) == 0
     assert calls[0].samples == 1 and calls[0].dag_timeout == 2
-    assert calls[0].cost_model == "structural"
     for value in ["0", "-1", "nan", "inf"]:
         with pytest.raises(SystemExit):
             cli.main([*argv, "--dag-timeout", value])
@@ -178,7 +180,7 @@ def test_backend_requires_explicit_import_acknowledgement(tmp_path: Path, monkey
 
     monkeypatch.setattr(backend, "command", fake_command)
     with pytest.raises(ValueError, match="did not acknowledge"):
-        backend.prepare(tmp_path / "multifaq", tmp_path, tmp_path / "out", tmp_path / "plan.json")
+        backend.generate(tmp_path / "multifaq", tmp_path, tmp_path / "out", {})
 
 
 def test_cpp_timing_retains_whole_process_and_upstream_scope(tmp_path: Path) -> None:
@@ -193,9 +195,8 @@ def test_cpp_timing_retains_whole_process_and_upstream_scope(tmp_path: Path) -> 
     assert (tmp_path / "run-0.log").read_text().endswith("Data process: 37ms.\n")
 
 
-@pytest.mark.parametrize("cost_model", ["structural", "cardinality"])
-def test_pipeline_charges_statistics_and_export_but_not_validation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], cost_model: str
+def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     now = 0.0
 
@@ -204,57 +205,45 @@ def test_pipeline_charges_statistics_and_export_but_not_validation(
         now += seconds
 
     monkeypatch.setattr(cli, "time", SimpleNamespace(perf_counter=lambda: now))
-    documents = {"shared-slotted": {"statistics": 20}, "shared-slotted-ref-multi": {"statistics": 30}}
+    documents: dict[str, Any] = {"shared-slotted": {}, "shared-slotted-ref-multi": {}}
 
     def collect(output: Path, *args: Any, **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-        for label, document in documents.items():
-            cli.write_json(output / f"{label}-graph.json", document)
+        spend(999)
         return documents, {
             "optimizer": {label: {"process_seconds": 999} for label in documents},
-            "graph_collection": {label: {"seconds": 11 + 2 * i} for i, label in enumerate(documents)},
+            "graph_collection": {label: {"seconds": 999} for label in documents},
+            "binary_paths": {"slotted": "/encoded", "slotted-ref-multi": "/native"},
         }
-
-    def graph(document: dict[str, Any]) -> dict[str, Any]:
-        spend(2)
-        return document
 
     class Database:
         def close(self) -> None:
             spend(1)
 
     def load(directory: Path) -> tuple[Database, dict[str, Any]]:
-        if cost_model == "structural":
-            assert all((tmp_path / "out" / f"{label}-plan.json").exists() for label in documents)
+        assert all((tmp_path / "out" / label / "plan.json").exists() for label in documents)
         spend(10)
         return Database(), {"input_rows": {"Sales": 2}}
-
-    def statistics(db: Database, graph: dict[str, Any]) -> tuple[dict[Any, Any], list[Any]]:
-        assert cost_model == "cardinality"
-        spend(graph["statistics"])
-        return {}, []
-
-    class Extraction:
-        def __init__(self, *args: Any) -> None:
-            assert (args[1] is None) == (cost_model == "structural")
-            spend(2)
-
-        def extract(self, timeout: float) -> tuple[dict[str, Any], dict[str, Any]]:
-            spend(3)
-            return {}, {}
-
-        def plan(self, selected: Any) -> dict[str, Any]:
-            spend(7)
-            return {"views": [{"aggregates": [{}]}]}  # Both engines select the same plan.
 
     def oracle(db: Database) -> list[Any]:
         spend(2000)
         return []
 
-    def prepare(compiler: Path, data: Path, directory: Path, plan: Path | None, **kwargs: Any) -> dict[str, Any]:
+    def generate(compiler: Path, data: Path, directory: Path, optimizer: Any, **kwargs: Any) -> dict[str, Any]:
         directory.mkdir()
+        plan = {
+            "views": [{"origin": 0, "destination": 0, "keys": [], "aggregates": [{"functions": [], "incoming": []}]}],
+            "outputs": [{"view": 0, "aggregate": 0, "root": 0}],
+        }
+        cli.write_json(directory / "plan.json", plan)
+        elapsed = 2 if optimizer is None else (27 if optimizer["treatment"] == "slotted" else 29)
+        cli.write_json(directory / "extraction.json", {"phases_seconds": {"rewriting_and_export": elapsed - 2}})
+        spend(elapsed)
+        return {"generation_seconds": elapsed}
+
+    def compile(directory: Path, **kwargs: Any) -> dict[str, Any]:
         (directory / "lmfao").touch()
-        spend(42)
-        return {"generation_seconds": 2, "compilation_seconds": 40}
+        spend(40)
+        return {"compilation_seconds": 40}
 
     def validate(*args: Any, **kwargs: Any) -> dict[str, Any]:
         spend(1000)
@@ -266,60 +255,48 @@ def test_pipeline_charges_statistics_and_export_but_not_validation(
         return {"process_seconds": elapsed, "computation_seconds": elapsed / 2}
 
     monkeypatch.setattr(cli, "collect_optimizers", collect)
-    monkeypatch.setattr(cli, "Graph", graph)
     monkeypatch.setattr(cli, "load_data", load)
-    monkeypatch.setattr(cli, "collect_statistics", statistics)
-    monkeypatch.setattr(cli, "Extractor", Extraction)
     monkeypatch.setattr(cli, "reference_results", oracle)
-    monkeypatch.setattr(cli.backend, "prepare", prepare)
+    monkeypatch.setattr(cli.backend, "generate", generate)
+    monkeypatch.setattr(cli.backend, "compile", compile)
     monkeypatch.setattr(cli.backend, "validate", validate)
     monkeypatch.setattr(cli.backend, "execute", execute)
     compiler = tmp_path / "multifaq"
     compiler.touch()
     output = tmp_path / "out"
     assert (
-        cli.main(
-            [
-                "--data",
-                str(tmp_path),
-                "--backend",
-                str(compiler),
-                "--output-dir",
-                str(output),
-                "--rounds",
-                "2",
-                "--cost-model",
-                cost_model,
-            ]
-        )
+        cli.main(["--data", str(tmp_path), "--backend", str(compiler), "--output-dir", str(output), "--rounds", "2"])
         == 0
     )
     report = json.loads(capsys.readouterr().out)
     assert report == json.loads((output / "pipeline.json").read_text())
     costs = report["accounted_pipeline"]
     assert costs["original"]["one_time_phase_sum_seconds"] == 42
-    assert costs["shared-slotted"]["one_time_phase_sum_seconds"] == (98 if cost_model == "cardinality" else 67)
-    assert costs["shared-slotted-ref-multi"]["one_time_phase_sum_seconds"] == (
-        110 if cost_model == "cardinality" else 69
-    )
+    assert costs["shared-slotted"]["one_time_phase_sum_seconds"] == 67
+    assert costs["shared-slotted-ref-multi"]["one_time_phase_sum_seconds"] == 69
     assert costs["shared-slotted-ref-multi"]["execution_label"] == "shared-slotted"
-    assert costs["original"]["statistics_seconds"] == 0
     assert costs["original"]["optimization_and_generation_seconds"] == 2
-    assert costs["shared-slotted"]["statistics_seconds"] == (31 if cost_model == "cardinality" else 0)
     assert costs["shared-slotted"]["optimization_and_generation_seconds"] == 27
     assert costs["shared-slotted"]["compilation_seconds"] == 40
     assert report["metadata"]["validation_preparation_seconds"] == 2011
-    assert len(report["builds"]) == len(report["validation"]) == 2
+    assert len(report["builds"]) == 3 and len(report["validation"]) == 2
+    assert "compilation_seconds" not in report["builds"]["shared-slotted-ref-multi"]
     assert "not a measured end-to-end" in report["phase_scope"]
     comparison = (output / "comparison.md").read_text()
     assert "| shared / egglog | All six | Enabled | 0.2750 | 2 |" in comparison
     assert "| shared / native multipattern | All six | Enabled | 0.2750 | 2 |" in comparison
-    assert (
-        f"| shared / egglog | {'31.0000' if cost_model == 'cardinality' else '0.0000'} | 27.0000 | 40.0000 |"
-        in comparison
-    )
-    assert f"Egraph extraction cost model: {cost_model}." in comparison
-    assert bool(list(output.glob("*-statistics.json"))) == (cost_model == "cardinality")
+    assert "| shared / egglog | 27.0000 | 40.0000 |" in comparison
+
+
+def test_optimizer_rejects_workload_drift_before_rewriting(tmp_path: Path) -> None:
+    from benchmarking.lmfao.optimize import run
+
+    source = tmp_path / "workload.json"
+    changed = {**model.WORKLOAD.document, "root": "1"}
+    source.write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="frontend differs"):
+        run({}, source, tmp_path / "plan.json")
+    assert not (tmp_path / "plan.json").exists()
 
 
 def test_comparison_caption_names_ablation_pairs_and_preserves_missing_results() -> None:
@@ -330,7 +307,6 @@ def test_comparison_caption_names_ablation_pairs_and_preserves_missing_results()
         {
             "optimizer": dict.fromkeys(labels[1:]),
             "accounted_pipeline": {},
-            "metadata": {"cost_model": "structural"},
         }
     )
     assert "| single-root / egglog | Sales only | Enabled | unavailable | — |" in result

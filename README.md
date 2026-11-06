@@ -49,7 +49,8 @@ included in the Rust documentation for `egglog_experimental::slotted`.
 The [LMFAO case study](benchmarks/lmfao/README.txt) uses egraph rules and joint
 DAG extraction for root selection, aggregate pushdown and view sharing on the
 artifact's 140-query covariance workload. `./bench.py lmfao` compares the selected
-plans with the original logical optimizer using the same C++ backend.
+plans with the original logical optimizer using the same upstream frontend and
+C++ backend. LMFAO calls the egraph optimizer through a subprocess bridge.
 
 The reusable Rust checker accepts `egraph-serialize` JSON from either engine,
 with optional annotations for slotted graphs:

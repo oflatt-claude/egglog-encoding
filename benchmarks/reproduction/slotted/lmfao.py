@@ -49,10 +49,10 @@ def source():
     return src
 
 
-def input_terms(qs=None, roots=None):
-    attrs, relations, edges = model.schema()
+def input_terms(qs=None, roots=None, definition=model.WORKLOAD):
+    attrs, relations, edges = definition.attributes, definition.relations, definition.edges
     names, tables = [a for a, _ in attrs], list(relations)
-    functions = model.function_specs()
+    functions = definition.functions
     owner = {a: next(t for t in tables if a in relations[t]) for a in names}
     aw, fw = 1 << (len(names) - 1).bit_length(), 1 << (len(functions) - 1).bit_length()
     neighbors = {t: [] for t in tables}
@@ -84,7 +84,7 @@ def input_terms(qs=None, roots=None):
     domain = symbol("favorita")
     orientations = [["TreeRoot", domain, region(root, root)[0]] for root in (tables if roots is None else roots)]
     outputs = []
-    for i, q in enumerate(model.queries() if qs is None else qs):
+    for i, q in enumerate(definition.queries if qs is None else qs):
         requested = (
             [(q.factors[0], 2)] if len(q.factors) == 2 and q.factors[0] == q.factors[1] else [(a, 1) for a in q.factors]
         )
@@ -104,12 +104,12 @@ def input_terms(qs=None, roots=None):
     return ["Program", balanced("Pair", outputs)], orientations
 
 
-def workload(mode="shared", *, rounds=64, qs=None):
+def workload(mode="shared", *, rounds=64, qs=None, definition=model.WORKLOAD):
     if mode not in ("single-root", "roots", "shared"):
         raise ValueError(mode)
     src = source()
-    roots = [next(iter(model.schema()[1]))] if mode == "single-root" else None
-    inp, facts = input_terms(qs, roots)
+    roots = [definition.root] if mode == "single-root" else None
+    inp, facts = input_terms(qs, roots, definition)
     rules = [
         f
         for f, _ in src.body
@@ -136,10 +136,10 @@ def workload(mode="shared", *, rounds=64, qs=None):
     )
 
 
-def frozen(qs=None, modes=("single-root", "roots", "shared")):
+def frozen(qs=None, modes=("single-root", "roots", "shared"), *, definition=model.WORKLOAD):
     files, variants = {}, []
     for mode in modes:
-        w = workload(mode, qs=qs)
+        w = workload(mode, qs=qs, definition=definition)
         files[f"{mode}.egg"] = w.program
         files[f"{mode}.ref"] = (
             json.dumps({"multi": w.multi, "nested": None, "unsupported_reason": w.unsupported_reason}, indent=2) + "\n"
@@ -163,7 +163,7 @@ def main():
     parser.add_argument("--fixtures", action="store_true")
     parser.add_argument("--graphs", action="store_true")
     args = parser.parse_args()
-    qs = model.queries()[: args.queries] if args.queries else None
+    qs = model.WORKLOAD.queries[: args.queries] if args.queries else None
     if args.fixtures or args.graphs:
         qs = [
             model.Query(),

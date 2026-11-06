@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -32,22 +34,25 @@ def command(
     return elapsed
 
 
-def prepare(
+def generate(
     compiler: Path,
     data: Path,
     directory: Path,
-    plan: Path | None,
+    optimizer: dict[str, Any] | None = None,
     *,
-    flags: str = FLAGS,
-    jobs: int = 4,
     timeout: int = 300,
 ) -> dict[str, Any]:
     directory.mkdir(parents=True, exist_ok=True)
-    # An inherited import variable must not contaminate the original control.
-    env = dict(os.environ)
-    env.pop("LMFAO_PLAN_FILE", None)
-    if plan is not None:
-        env["LMFAO_PLAN_FILE"] = str(plan.resolve())
+    for name in ("workload.json", "plan.json", "extraction.json"):
+        (directory / name).unlink(missing_ok=True)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("LMFAO_")}
+    env["LMFAO_WORKLOAD_FILE"] = str(directory / "workload.json")
+    env["LMFAO_PLAN_FILE"] = str(directory / "plan.json")
+    if optimizer is not None:
+        config = directory / "optimizer.json"
+        config.write_text(json.dumps({"command": [sys.executable, "-m", "benchmarking.lmfao.optimize"], **optimizer}))
+        env["LMFAO_OPTIMIZER"] = str(config)
+        env["PYTHONPATH"] = str(model.FIXTURES.parents[1]) + os.pathsep + env.get("PYTHONPATH", "")
     generated = command(
         [
             str(compiler),
@@ -69,16 +74,22 @@ def prepare(
         env=env,
         timeout=timeout,
     )
-    if plan is not None and "LMFAO imported selected DAG:" not in (directory / "generate.log").read_text():
-        raise ValueError("backend did not acknowledge plan import; install the pinned adapter")
-    built = command(["make", f"-j{jobs}", "CXX=g++", "CXXFLAG=" + flags], directory, "build.log", timeout=timeout)
+    if optimizer is not None and "LMFAO imported selected DAG:" not in (directory / "generate.log").read_text():
+        raise ValueError("backend did not acknowledge plan import; install the pinned optimizer bridge")
+    if not (directory / "workload.json").exists() or not (directory / "plan.json").exists():
+        raise ValueError("backend did not export its workload and plan; install the pinned optimizer bridge")
+    if model.Workload.read(directory / "workload.json").document != model.WORKLOAD.document:
+        raise ValueError("LMFAO frontend differs from the frozen benchmark workload")
     return {
         "generation_seconds": generated,
-        "compilation_seconds": built,
         "compiler_counts": (directory / "compiler-data.out").read_text(),
-        "flags": flags,
-        "logical_optimizer": "original LMFAO" if plan is None else "bypassed; imported selected egraph DAG",
+        "logical_optimizer": "original LMFAO" if optimizer is None else "egraph subprocess",
     }
+
+
+def compile(directory: Path, *, flags: str = FLAGS, jobs: int = 4, timeout: int = 300) -> dict[str, Any]:
+    elapsed = command(["make", f"-j{jobs}", "CXX=g++", "CXXFLAG=" + flags], directory, "build.log", timeout=timeout)
+    return {"compilation_seconds": elapsed, "flags": flags}
 
 
 def validate(directory: Path, expected: Results, *, flags: str = FLAGS, timeout: int = 300) -> dict[str, Any]:
@@ -127,7 +138,7 @@ def validate(directory: Path, expected: Results, *, flags: str = FLAGS, timeout:
     for i, (view, aggregate) in enumerate(mapping):
         lines = (directory / f"output/V{view}.tbl").read_text().splitlines()
         keys, columns = map(int, lines[0].split())
-        if keys != len(model.queries()[i].groups) or aggregate >= columns:
+        if keys != len(model.WORKLOAD.queries[i].groups) or aggregate >= columns:
             raise AssertionError("query output shape differs")
         got = {}
         for line in lines[1:]:
@@ -142,7 +153,7 @@ def validate(directory: Path, expected: Results, *, flags: str = FLAGS, timeout:
         for key, value in want.items():
             equal = (
                 math.isclose(got[key], value, rel_tol=1e-9, abs_tol=1e-7)
-                if model.queries()[i].factors
+                if model.WORKLOAD.queries[i].factors
                 else got[key] == value
             )
             if not equal:

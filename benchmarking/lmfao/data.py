@@ -18,7 +18,7 @@ def load_data(directory: Path) -> tuple[duckdb.DuckDBPyConnection, dict[str, Any
     for filename in ("features.conf", "treedecomposition.conf"):
         if (directory / filename).read_bytes() != (model.FIXTURES / filename).read_bytes():
             raise ValueError(f"{filename} differs from the pinned artifact")
-    attrs, relations, _ = model.schema()
+    attrs, relations = model.WORKLOAD.attributes, model.WORKLOAD.relations
     types = {name: "DECIMAL(18,6)" if kind == "double" else "BIGINT" for name, kind in attrs}
     db = duckdb.connect()
     db.execute("SET threads=1")
@@ -36,9 +36,11 @@ def load_data(directory: Path) -> tuple[duckdb.DuckDBPyConnection, dict[str, Any
 
 
 def reference_results(db: duckdb.DuckDBPyConnection) -> Results:
-    db.execute("CREATE TEMP TABLE oracle AS SELECT * FROM " + " NATURAL JOIN ".join(map(ident, model.schema()[1])))
+    db.execute(
+        "CREATE TEMP TABLE oracle AS SELECT * FROM " + " NATURAL JOIN ".join(map(ident, model.WORKLOAD.relations))
+    )
     expected = []
-    for query in model.queries():
+    for query in model.WORKLOAD.queries:
         groups = [ident(g) for g in query.groups]
         weight = " * ".join(f"CAST({ident(f)} AS DECIMAL(38,6))" for f in query.factors) or "1"
         fields = [f"{g} AS g{i}" for i, g in enumerate(groups)] + [f"COALESCE(SUM({weight}), 0) AS value"]
