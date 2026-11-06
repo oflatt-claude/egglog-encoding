@@ -48,10 +48,8 @@ def solve(extractor: Any, incumbent: dict[str, str], timeout: float) -> tuple[di
     objective = np.zeros(count)
     integer = np.zeros(count)
     upper = np.ones(count)
-    positive = [extractor.costs[n] for n in nodes if extractor.costs[n] > 0]
-    scale = max(1.0, min(max(positive, default=1) / 1e4, min(positive, default=1) / 1e-3))
     for n, i in x.items():
-        objective[i] = extractor.costs[n] / scale
+        objective[i] = extractor.costs[n]
         integer[i] = 1
     for c, i in h.items():
         upper[i] = sizes[component[index[c]]] - 1
@@ -81,7 +79,7 @@ def solve(extractor: Any, incumbent: dict[str, str], timeout: float) -> tuple[di
             if parent in cyclic and component[index[parent]] == component[index[child]]:
                 size = sizes[component[index[parent]]]
                 constraint([(h[parent], 1), (h[child], -1), (x[n], -size)], lo=1 - size)
-    constraint([(i, c) for i, c in enumerate(objective) if c], hi=best / scale + 1e-8)
+    constraint([(i, c) for i, c in enumerate(objective) if c], hi=best)
     matrix = coo_array((data, (ri, ci)), shape=(len(lower), count)).tocsc()
     warm = np.zeros(count)
     heights: dict[str, int] = {}
@@ -96,7 +94,7 @@ def solve(extractor: Any, incumbent: dict[str, str], timeout: float) -> tuple[di
     activity = matrix @ warm
     if np.any(activity < np.array(lower) - 1e-6) or np.any(activity > np.array(bounds) + 1e-6):
         raise AssertionError("the DAG incumbent does not satisfy the MILP")
-    if not np.isclose(objective @ warm, best / scale, rtol=1e-10, atol=1e-8):
+    if not np.isclose(objective @ warm, best, rtol=1e-10, atol=1e-8):
         raise AssertionError("the MILP and executable DAG cost disagree")
     model = highspy.HighsLp()
     model.num_col_, model.num_row_ = count, len(lower)
@@ -131,7 +129,7 @@ def solve(extractor: Any, incumbent: dict[str, str], timeout: float) -> tuple[di
             selected = incumbent | {c: choices[c] for c in order}
             best, accepted = score, True
     bound = result.mip_dual_bound if result.valid else None
-    lower_bound = None if bound is None or not np.isfinite(bound) else max(0.0, float(bound) * scale)
+    lower_bound = None if bound is None or not np.isfinite(bound) else max(0.0, float(bound))
     gap = None if lower_bound is None else max(0.0, best - lower_bound) / max(best, 1e-12)
     return selected, {
         "method": "HiGHS MILP: one joint DAG over all output roots",
@@ -146,7 +144,6 @@ def solve(extractor: Any, incumbent: dict[str, str], timeout: float) -> tuple[di
         "seconds": time.perf_counter() - start,
         "preparation_seconds": prepared,
         "time_limit_seconds": timeout,
-        "objective_scale": scale,
         "node_variables": len(x),
         "cyclic_classes": len(cyclic),
         "constraints": len(lower),

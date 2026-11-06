@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from benchmarking.processes import terminate_process_group, wait4_process
+
 from . import model
 from .data import Results
 
@@ -22,15 +24,25 @@ def command(
     args: list[str], directory: Path, log: str, *, env: dict[str, str] | None = None, timeout: int = 300
 ) -> float:
     start = time.perf_counter()
-    try:
-        result = subprocess.run(
-            args, cwd=directory, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True, timeout=timeout
+    with (directory / log).open("wb") as output:
+        process = subprocess.Popen(
+            args,
+            cwd=directory,
+            env=env,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        (directory / log).write_bytes(error.output or b"")
-        raise RuntimeError(f"{args[0]} failed; see {directory / log}") from error
-    elapsed = time.perf_counter() - start
-    (directory / log).write_bytes(result.stdout)
+        try:
+            returncode, _ = wait4_process(process, timeout)
+            elapsed = time.perf_counter() - start
+            if returncode:
+                raise subprocess.CalledProcessError(returncode, args)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError(f"{args[0]} failed; see {directory / log}") from error
+        finally:
+            terminate_process_group(process)
     return elapsed
 
 

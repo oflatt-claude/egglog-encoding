@@ -61,8 +61,8 @@ def comparison_markdown(report: dict[str, Any]) -> str:
             "and backend are fixed across these ablations. All variants retain identical-subexpression reuse and "
             "backend multi-output optimization. Times are medians of warm executions, excluding "
             "optimization, code generation, compilation, data loading and sorting. This matches the paper's "
-            "computation timing scope, but uses medians rather than its means; dataset size and hardware come "
-            "from metadata.json. Only selected variants are shown. Unavailable plans are not timing results; "
+            "computation timing scope, but uses medians rather than its means; dataset size and CPU affinity "
+            "are recorded in metadata.json. Only selected variants are shown. Unavailable plans are not timings; "
             "see pipeline.json for failure details. "
             "Identical plans reuse execution observations as recorded by execution_aliases.",
             "",

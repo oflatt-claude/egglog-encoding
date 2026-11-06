@@ -1,55 +1,46 @@
 LMFAO logical optimization case study
 ====================================
 
-This runs the public LMFAO Favorita covariance workload: 140 aggregate queries
-on six relations and 16 features, using the artifact's 2,000,000-row Sales
-fragment. Egraph rules choose join-tree roots, push aggregates into directional
-views, and expose compatible views for sharing. A joint cost-based DAG extractor
-selects the implementations of all 140 outputs. LMFAO generates the input queries
-and calls our optimizer as a subprocess, then imports the selected DAG and
-continues through its C++ backend.
+This runs LMFAO's 140-query covariance workload on the public Favorita fragment:
+six relations, 16 features and 2,000,000 Sales rows. The queries compute counts,
+sums, squares and pairwise products over the join, with categorical features as
+grouping keys. They form a non-centered covariance (Gram) matrix used in linear
+regression; this experiment computes the aggregates without training a model.
 
-This reproduces the artifact's query workload and compares logical optimization
-on the same execution backend. It does not reproduce the paper's full 127M-row
-Favorita experiment, its other datasets/models, or parallel execution. The
-extractor minimizes a fixed structural cost. An optimum for that cost does not
-imply the fastest executable plan.
+  LMFAO frontend -> original optimizer OR egraph + DAG extraction
+                 -> LMFAO views -> grouping/code generation -> C++ execution
 
-"Covariance" names the query workload, not a dataset. The queries compute a
-non-centered covariance (Gram) matrix: counts, sums, squares and pairwise
-products over the joined data. Categorical features become grouping keys, so
-the workload includes counts by city and sales sums by city. These are reusable
-inputs to linear-regression training; this case study does not train a model.
+Rules expose root choices, aggregate pushdown and shared views in one egraph.
+A cost-based DAG extractor selects roots and implementations jointly across all
+outputs. The comparison retains the same corrected LMFAO backend. It reproduces
+the artifact's query workload, not the paper's full 127M-row Favorita experiment,
+other datasets/models, or parallel execution.
 
-Provenance:
+Provenance and ownership
+-----------------------
   Paper: https://arxiv.org/abs/1906.08687
   Artifact: https://github.com/fdbresearch/LMFAO
   Commit: df6a5f59d597e9d7dd5984f268700223553789d0
 
-features.conf, treedecomposition.conf and LICENSE come from that commit.
-workload.json is a frozen export from its CovarianceMatrix frontend, including
-function IDs, queries and parsed join tree. Python reads this export; it does not
-reimplement query enumeration or configuration parsing. The engine comparison
-uses egglog's slotted encoding and the native slotted-egraphs MultiPattern matcher
-with snapshot substitution.
+Reused upstream code supplies query generation, schema/configuration parsing,
+view grouping, multi-output loops, execution data structures and C++ generation.
+features.conf, treedecomposition.conf and LICENSE are copied from that commit.
+workload.json is a frozen frontend export, including functions and the join tree.
 
-Code ownership:
-  Reused upstream: query generation, schema/configuration parsing, view grouping,
-    multi-output loops, execution data structures and C++ code generation.
-  Optimizer bridge: optimizer-bridge.patch hooks QueryCompiler::compile();
-    OptimizerBridge.hpp exports queries/plans and invokes a subprocess;
-    ImportPlan.hpp validates and imports the selected views.
-  Backend correction: dependent-output.patch, applied to both pipelines.
-  New Python/rules: translation, egraph rules, decoding, structural cost, DAG
-    extraction, benchmark orchestration/reporting and independent checking.
+The additions under benchmarks/reproduction/lmfao are:
+  optimizer-bridge.patch  Hook in QueryCompiler::compile().
+  OptimizerBridge.hpp    Export queries/plans and invoke the optimizer subprocess.
+  ImportPlan.hpp         Validate and import the selected DAG.
+  dependent-output.patch Correct accumulation across terminal output keys.
 
-All Python files are new code. The two C++ adapter headers are additions to the
-pinned checkout; the patches are kept separately from those headers.
+All Python under benchmarking/lmfao and the egraph translation/rules are new.
+Python reads the frontend export; it does not reimplement query enumeration.
+The two headers are additions to the pinned checkout, separate from its patches.
 
 Run
 ---
-Prepare the pinned backend explicitly; collection never acquires sources or
-regenerates inputs. CMake, a C++ compiler and Boost are required.
+Prepare the backend explicitly; collection never acquires sources or regenerates
+frozen inputs. CMake, a C++ compiler and Boost are required.
 
   git clone https://github.com/fdbresearch/LMFAO /tmp/LMFAO
   git -C /tmp/LMFAO checkout df6a5f59d597e9d7dd5984f268700223553789d0
@@ -57,46 +48,43 @@ regenerates inputs. CMake, a C++ compiler and Boost are required.
     --source /tmp/LMFAO --output /tmp/lmfao-backend
   ./bench.py lmfao --data /tmp/LMFAO/data/favorita-small \
     --backend /tmp/lmfao-backend/build/multifaq \
-    --output-dir /tmp/lmfao-results --rounds 5 --timeout-sec 900
+    --output-dir /tmp/lmfao-results --treatment slotted --variant shared \
+    --rounds 5 --timeout-sec 900
 
-The preparation command creates a separate checkout. --boost PREFIX supports
-an unpacked Boost installation; supply its include path through --cxxflags when
-compiling generated programs if it is not on the compiler's default path.
+Preparation creates a separate checkout. --boost PREFIX supports an unpacked
+Boost installation; also pass its include path through --cxxflags if needed when
+compiling generated programs. Compiler flags are identical across variants.
 
---rounds/--samples specifies measured repetitions; frozen rewrite budgets are
-64 rounds. A budget does not establish saturation. --cpu N pins the experiment;
-extraction and generated executables use one thread. --jobs controls
-C++ compilation, --build-timeout bounds each build/diagnostic subprocess, and
---dag-timeout bounds the joint solver. Compiler flags are identical for controls
-and extracted plans. --report PATH selects the shared append-only optimizer
-cache (default OUTPUT/optimizer.jsonl). Execution samples are fresh.
---treatment and --variant restrict the selected engines and ablations; both may
-be repeated. For the full logical optimizer against LMFAO without the additional
-engine comparison, use --treatment slotted --variant shared. Original LMFAO
-remains the control in every invocation. A single-engine run does not establish
-graph equivalence between engines.
+--treatment and --variant may be repeated. Omitting both requests all three
+variants on egglog's slotted encoding and the native slotted-egraphs MultiPattern
+matcher with snapshot substitution. Original LMFAO is always the control.
+A single-engine invocation does not establish graph equivalence.
 
---timeout-sec and --memory-limit-gib/--no-memory-limit bound optimizer processes;
-the timeout also bounds timed generated executables. The memory limit does not
-cover extraction or C++ execution. Status goes to stderr; the final
-pipeline JSON goes to stdout.
+--rounds/--samples sets measured repetitions, not the frozen 64-round rewrite
+budget; a budget does not establish saturation. --cpu N pins the experiment;
+extraction and generated executables use one thread. --jobs controls compilation.
+--dag-timeout bounds the joint solver; --build-timeout bounds each backend build
+or diagnostic subprocess. --timeout-sec bounds optimizer processes and timed
+executables. --memory-limit-gib/--no-memory-limit applies only to optimizer
+processes, not extraction or C++ execution.
 
-Optimizer-only comparisons need no data or backend:
+--report PATH selects the shared append-only optimizer cache (default
+OUTPUT/optimizer.jsonl). Execution samples are fresh. Status goes to stderr;
+the final pipeline JSON goes to stdout. Optimizer-only comparisons need no data
+or backend:
 
   ./bench.py benchmarks/lmfao/inputs/shared.egg \
     --treatment slotted --compare-treatment slotted-ref-multi \
     --rounds 5 --timeout-sec 900 --report /tmp/lmfao-engines.jsonl --format markdown
 
-Rules and extraction
---------------------
-logical.egg contains three IRs: AggregateQuery, directional ComputeView, and
-ViewColumn with an explicit SharedView producer. Input terms contain original
-queries and query-independent orientations of the supplied tree, never optimized
-target plans. All six relation roots are candidates; there is no arbitrary
-join-order search. Scalar functions are closed lambdas with fresh source binder
-names. Their alpha-equivalence permits common aggregate kernels to share.
+Rules, extraction and controls
+-----------------------------
+logical.egg connects AggregateQuery, directional ComputeView, and ViewColumn
+with an explicit SharedView producer. Inputs contain original queries and
+orientations of the supplied tree, never optimized targets. All six roots are
+candidates; arbitrary join orders are outside the search space.
 
-The main multipattern rules, in abbreviated form, are:
+The main multipattern rules, abbreviated, are:
 
   query = AggregateQuery(domain, keys, weights), TreeRoot(domain, region)
     => query = ViewRequest(region, keys, weights)
@@ -109,138 +97,109 @@ The main multipattern rules, in abbreviated form, are:
   b = ComputeView(region, keys, wb, lb, cb), wa != wb
     => a = ViewColumn(SharedView(region, keys), wa, la, ca)
 
-For each child, rules retain the separator keys and required query keys in that
-subtree, and send it the corresponding scalar functions. Balanced mask/vector
-operations and the distinct-weight test are themselves normalized by rewrites.
-Views retain bag multiplicities; they do not assume dimension keys are unique.
+Child requests retain separator keys and required query keys, and receive the
+scalar functions belonging to that subtree. Rewrites normalize masks, function
+vectors and the distinct-weight test. Views preserve bag multiplicities without
+assuming unique dimension keys. Closed scalar lambdas have fresh binder names;
+slotted identifies alpha-equivalent kernels. Planning treats these kernels as
+opaque, so canonicalized binders also suffice in ordinary egglog.
 
-A column owns its incoming aggregate dependencies. Compatible selected columns
-reference the same explicit SharedView node. Extraction pays for that producer
-once, plus each selected column's work. The backend adapter serializes those
-selected identities; it does not discover or merge compatible views. This avoids
-enumerating all possible column subsets in the graph.
+Each column owns its incoming aggregate dependencies. Compatible selected columns
+reference one SharedView. HiGHS selects an acyclic DAG, charging each producer
+and column once. The adapter serializes these identities without discovering or
+merging compatible views. Decoder validation checks query keys/functions and
+directional pushdown semantics.
 
-HiGHS selects one acyclic DAG jointly across all required outputs; the report
-includes its bound, gap and time limit. Decoder validation rejects plans that
-change a query's keys/functions or violate directional pushdown semantics.
+A producer costs 1 + incoming regions + grouping columns. An aggregate column
+costs 2 + local scalar functions. ComputeView pays both; ViewColumn pays the
+column cost and references a shared producer. These fixed unit weights use only
+the graph, without reading data or configured root preferences. Reports include
+the solver's bound, gap and time limit. Optimality concerns this structural
+objective within the exported graph, not executable runtime.
 
-Cost model
-----------
-Each selected producer costs 1 + C + K, where C is its number of incoming
-regions and K its number of grouping columns. Each selected aggregate column
-costs 2 + F, where F is its number of local scalar functions. ComputeView pays
-both costs; ViewColumn pays the column cost and references a shared producer.
-The joint DAG objective charges each selected producer and column once.
-
-Coefficients are fixed unit weights, not fitted to execution times. The objective
-favors fewer shared intermediates and fewer carried grouping columns. It uses
-only the exported graph, without reading data or using the configured per-feature
-root preferences. This is joint DAG selection, not an implementation of the
-paper's root-assignment heuristic.
-
-Controls and backend
---------------------
-  single-root  Sales root only, pushdown and sharing enabled
+  single-root  Sales only, pushdown and shared producers enabled
   roots        All six roots, pushdown enabled, shared producers disabled
-  shared       All six roots, pushdown and sharing enabled
-  original     LMFAO's original query/root/decomposition/view-merging logic
+  shared       All six roots, pushdown and shared producers enabled
+  original     LMFAO's original root/decomposition/view-merging policy
 
-A root is the relation where an aggregate's traversal ends; partial aggregates
-flow toward it. Sharing lets several aggregate columns use one intermediate
-producer. These ablations keep the queries fixed: compare single-root with
-shared to test root choice, and roots with shared to test shared producers.
-Identical-subexpression reuse and the backend's multi-output optimization remain
-enabled in every variant; roots does not disable all forms of sharing.
+A root is where an aggregate's traversal ends. Compare shared with single-root
+for root choice, and shared with roots for shared producers. Every variant still
+has identical-subexpression reuse and backend multi-output optimization.
+The original covariance frontend uses Sales for ungrouped queries, a configured
+relation for one categorical feature, and the second feature's relation in
+schema order for a categorical pair. This differs from the paper's batch
+coverage-weight heuristic; original measures that shipped policy.
 
-The first three are frozen egraph workloads run on both engines. The original
-control runs the same backend executable without an optimizer subprocess. All
-variants retain LMFAO's view grouping, multi-output loops, data structures and
-C++ compilation. The bridge exports the original queries before logical optimization. For egraph
-runs, it invokes optimize.py, which translates that actual export, runs the
-selected engine, extracts a DAG and writes the imported plan. Each invocation
-checks the frontend export against the frozen benchmark workload. A mismatch
-requires explicit regeneration. An unpatched executable is rejected.
+Backend and correctness
+-----------------------
+The bridge exports queries before optimization. For egraph runs it calls
+optimize.py to translate the export, rewrite, extract and serialize the plan.
+Each invocation checks the export against the frozen workload; drift requires
+explicit regeneration. An unpatched executable is rejected.
 
-The original control also exports its selected views. Each variant gets a
-plan.json and a readable plan.txt with view equations and output references.
-These show actual plans; printing does not choose roots or combine producers.
+dependent-output.patch applies to every variant, including original. It fixes a
+terminal output loop that accumulated a register across keys before writing each
+result. It evaluates a product per output tuple when all enclosing loops are
+output loops and no nested aggregate remains, preserving accumulation for reduced
+loops. On the public data, this corrects a count by store/holiday_type from 3158
+to 1989 for (1, 2). Report results as a corrected-backend comparison.
 
-Preparation also applies dependent-output.patch to the code generator for every
-variant, including original. Arbitrary root choices exposed an upstream running-
-total error: a terminal loop over an output key accumulated a register across
-keys before writing each result. On the public data, a query grouped by store
-and holiday_type returned 3158 instead of 1989 for (1, 2). The patch evaluates a
-product per output tuple when all enclosing loops are output loops and no nested
-aggregate remains. It preserves accumulation for loops that are reduced. This
-is a backend correctness correction, not an egraph optimization. Reports must
-identify this patched-backend comparison; it is not an untouched artifact run.
+Every plan is selected before the independent Python checker reads data. All 140
+answers are checked with DECIMAL arithmetic: exact keys/counts, rtol=1e-9 and
+atol=1e-7 for floating moments. Checking uses a separate executable with 17-digit
+output; timed executables omit dumping and checking. Validation is the warmup;
+subsequent executions rotate/reverse plan order.
 
-Each generated plan is checked against an independent DECIMAL computation of
-all 140 original queries. Keys and counts must match exactly; floating moments
-use rtol=1e-9 and atol=1e-7. Checking uses a separate executable with 17-digit
-diagnostic output. Timed executables omit output dumping and checking.
+Reports and timing
+------------------
+  comparison.md          Computation table, ablations and preparation costs.
+  pipeline.json          Phase summaries, failures and artifact references.
+  optimizer.jsonl        Shared cache with input/binary hashes and peak RSS.
+  *-graph.json           Frozen engine-comparison graphs.
+  *-isomorphism.json     Full graph verdict; limits/timeouts are inconclusive.
+  VARIANT/workload.json  Actual frontend export.
+  VARIANT/graph.json     Optimizer subprocess graph.
+  VARIANT/extraction.json Selected enodes, costs, bound/gap, phases and graph hash.
+  VARIANT/plan.json      Views, columns and query references.
+  VARIANT/plan.txt       Readable equations for the selected plan.
+  metadata.json         Dataset hashes, versions, affinity and timing scopes.
+  builds.json           Generation/compilation times, flags and binary hashes.
+  execution.jsonl       Fresh C++ process-wall and computation samples.
+  validation.json       Independent output checks.
 
-Reports and validation
-----------------------
-  comparison.md       computation-time table, ablation caption and preparation costs
-  pipeline.json       phase summaries, failures, plans, builds and validation
-  optimizer.jsonl     shared cache with input/binary hashes and peak RSS
-  *-graph.json        diagnostic graphs from the frozen engine comparison
-  *-isomorphism.json  full comparison verdict; limits/timeouts are inconclusive
-  VARIANT/workload.json  actual LMFAO frontend export
-  VARIANT/graph.json     graph produced by the optimizer subprocess
-  VARIANT/extraction.json selected enodes, costs, solver bound/gap and graph hash
-  VARIANT/plan.json      serialized views, aggregate columns and query references
-  VARIANT/plan.txt       readable view equations and query references
-  metadata.json       dataset hashes, versions, CPU affinity and timing scopes
-  builds.json         generation/compilation times, flags and binary hashes
-  execution.jsonl     fresh C++ process-wall and computation samples
-  validation.json    independent output checks
+The primary table reports computation medians, excluding loading/sorting,
+optimization and compilation. The paper's Table 3 uses this scope with means of
+four runs after warmup (Section 4.1 and Appendix B). Whole-process execution
+remains in pipeline.json. Missing results are unavailable, not timings.
 
-comparison.md leads with aggregate computation time, excluding loading/sorting,
-optimization and compilation. Shared versus single-root isolates root choice;
-shared versus roots isolates shared-producer merging. Missing results appear as
-unavailable. The comparison with original LMFAO measures plan quality against its
-logical optimizer; the ablations test which choices help within the egraph.
+Preparation reports one observation each for optimization/generation and C++
+compilation. Generation includes the entire LMFAO compiler process and optimizer
+subprocess. Its phase breakdown is in extraction.json; do not add it again.
+Identical serialized plans reuse compilation/execution observations, charged in
+full and identified by execution_aliases. Tool builds, graph diagnostics and
+independent checking are excluded; oracle loading/computation is recorded as
+validation_preparation_seconds. Separate optimizer-only samples include startup,
+parsing, graph construction and rewriting. Egglog's ruleset_work_seconds is
+exclusive ruleset work, not rewrite wall time. Those samples and graph-export
+reruns are excluded from generation.
 
-A separate table reports optimization/generation and C++ compilation. Generation
-measures the complete LMFAO compiler process: frontend, optimizer subprocess and
-C++ generation. The subprocess's translation, rewriting/export, decoding,
-extraction and serialization breakdown remains in extraction.json and is not
-added to generation again. Preparation phases are observed once; their sum is
-not a measured end-to-end runtime. For N executions of a reused plan, estimate
-total time as preparation + N times execution, specifying whether execution
-includes loading/sorting.
+For N executions of a reused plan, preparation + N times execution is an
+amortization estimate, not a measured end-to-end runtime; specify whether
+execution includes loading/sorting.
 
-Identical serialized plans reuse compilation and execution observations, charged
-in full to each variant and identified by execution_aliases. Tool builds, graph
-isomorphism, diagnostic graph exports and independent correctness checks are
-excluded for both pipelines. validation_preparation_seconds records the oracle's
-loading/computation. Every plan is selected before the Python checker reads data.
+Validation and regeneration
+---------------------------
+Read logical.egg, logical.py (decoding/costs/serialization) and dag.py (extraction).
+optimize.py is the subprocess; backend.py invokes LMFAO and its generated programs;
+optimizer.py adapts the shared collector; cli.py connects the stages.
 
-Separate optimizer-only samples include startup, parsing/frontend, graph
-construction and rewriting. Egglog's ruleset_work_seconds measures exclusive
-ruleset work, not rewrite-loop wall time. These samples and their diagnostic
-export reruns are not added to generation. The live optimizer subprocess runs
-the same frozen translation, verified against LMFAO's actual frontend export.
-Validation provides a warmup; subsequent executions rotate/reverse plan order.
+make check includes live two-engine count checks and Python tests for sharing,
+cycles, all root orientations, bag duplicates, negative weights, squares and
+cross-relation products. Matching counts do not establish graph equivalence;
+the CLI checks full isomorphism separately. Real-data C++ validation belongs to
+the explicit experiment. Checked proofs are not supported with --slotted.
 
-The paper's Table 3 excludes compilation and data loading, uses sorted inputs,
-and reports the mean of four runs after a warmup (Section 4.1 and Appendix B).
-Our primary table follows that computation scope but reports medians.
-
-Read logical.egg, logical.py (decoding/costs/serialization), and dag.py (joint
-extraction). optimize.py implements the subprocess; backend.py handles the
-upstream compiler and generated executables. optimizer.py adapts the shared
-benchmark collector; cli.py joins the stages.
-
-make check includes live two-engine count checks and Python tests of joint
-sharing, cycles, every root orientation, bag duplicates, negative weights,
-squares and cross-relation products. Full graph isomorphism is checked separately
-by the CLI; matching counts alone are not proof. Real-data C++ validation is part
-of the explicit CLI experiment, not ordinary tests.
-
-Regeneration is explicit. After building the bridge, export the upstream input:
+After building the bridge, explicitly export the upstream input:
 
   mkdir -p /tmp/lmfao-export
   (cd /tmp/lmfao-export && \
@@ -249,7 +208,7 @@ Regeneration is explicit. After building the bridge, export the upstream input:
       --model covar --parallel none --mo 1 --compress 1 --out /tmp/lmfao-export)
   cp /tmp/lmfao-export/workload.json benchmarks/lmfao/workload.json
 
-Then freeze the engine inputs and correctness graphs:
+Then freeze engine inputs and correctness graphs:
 
   uv run --locked python -m benchmarks.reproduction.slotted.lmfao --check
   uv run --locked python -m benchmarks.reproduction.slotted.lmfao

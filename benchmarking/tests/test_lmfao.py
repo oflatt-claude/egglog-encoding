@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import random
+import signal
+import subprocess
+import sys
+import time
 from collections import Counter, defaultdict
+from contextlib import suppress
 from fractions import Fraction
 from pathlib import Path
 from types import SimpleNamespace
@@ -193,6 +199,36 @@ def test_cpp_timing_retains_whole_process_and_upstream_scope(tmp_path: Path) -> 
     assert row["process_seconds"] > 0
     assert row["computation_seconds"] == 0.037
     assert (tmp_path / "run-0.log").read_text().endswith("Data process: 37ms.\n")
+
+
+def test_backend_timeout_stops_optimizer_and_compiler_children(tmp_path: Path) -> None:
+    from benchmarking.lmfao import backend
+
+    script = (
+        "import subprocess, sys, time; from pathlib import Path; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+        "Path('child.pid').write_text(str(child.pid)); print('started', flush=True); time.sleep(60)"
+    )
+    try:
+        with pytest.raises(RuntimeError, match="failed; see") as error:
+            backend.command([sys.executable, "-c", script], tmp_path, "command.log", timeout=1)
+        assert isinstance(error.value.__cause__, subprocess.TimeoutExpired)
+        assert (tmp_path / "command.log").read_text() == "started\n"
+        pid = int((tmp_path / "child.pid").read_text())
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            state = subprocess.run(
+                ["ps", "-o", "state=", "-p", str(pid)], capture_output=True, text=True, check=False
+            ).stdout.strip()
+            if not state or state.startswith("Z"):
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("backend descendant survived timeout")
+    finally:
+        if (tmp_path / "child.pid").exists():
+            with suppress(ProcessLookupError):
+                os.kill(int((tmp_path / "child.pid").read_text()), signal.SIGKILL)
 
 
 def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
