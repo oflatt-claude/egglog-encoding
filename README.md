@@ -46,6 +46,13 @@ regeneration live under [`benchmarks/reproduction/`](benchmarks/reproduction/).
 The [source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also
 included in the Rust documentation for `egglog_experimental::slotted`.
 
+The [LMFAO batching case study](benchmarks/lmfao/README.txt) extends SDQL with
+multi-output rules, DAG extraction and execution of the 140 Favorita covariance
+queries. `./bench.py lmfao --data DATA/favorita-small --output-dir /tmp/lmfao`
+uses the shared optimizer collector and reports optimization and SQL execution
+separately. Its frozen inputs also work with ordinary `./bench.py` comparisons;
+its correctness tests run as part of `make check`.
+
 The reusable Rust checker accepts `egraph-serialize` JSON from either engine,
 with optional annotations for slotted graphs:
 

@@ -135,6 +135,14 @@ define_language! {
         C() = "C",
         Identity(AppliedId) = "Identity",
         LogicLet(Bind<AppliedId>, AppliedId) = "Let",
+        // Named aggregate outputs and multi-output physical alternatives.
+        Pair(AppliedId, AppliedId) = "Pair",
+        Output(AppliedId, AppliedId) = "Output",
+        Task(AppliedId, AppliedId) = "Task",
+        TaskPair(AppliedId, AppliedId) = "TaskPair",
+        Batch(AppliedId, AppliedId) = "Batch",
+        FusedBatch(AppliedId, AppliedId) = "FusedBatch",
+        GroupingBatch(AppliedId, AppliedId) = "GroupingBatch",
     }
 }
 

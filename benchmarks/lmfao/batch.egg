@@ -1,0 +1,32 @@
+;;; Programs are trees of named aggregate outputs. A task contains the original
+;;; two-argument aggregate body as a closed function of (row, multiplicity).
+;;; Batch preserves the program's ordered tree, including output names.
+(include "egglog-experimental/tests/slotted/languages/sdql.egg")
+(constructor Pair (U U) U)
+(constructor Output (U U) U)
+(constructor Task (U U) U)
+(constructor TaskPair (U U) U)
+(constructor Batch (U U) U)
+(constructor FusedBatch (U U) U)
+(constructor GroupingBatch (U U) U)
+
+;;; Only required outputs seed tasks; internal sums in the join are untouched.
+(rewrite output (Batch input (Task name (Lambda $row (Lambda $count body))))
+  :name "batch-seed"
+  :when ((= output (Output name aggregate))
+         (= aggregate (Sum input $row $count body))))
+
+;;; Join three existing roots, requiring both producers to have the SAME input.
+;;; The existing output tree bounds candidates; no arbitrary query subsets or
+;;; workload-specific table/column names are generated.
+(rewrite program (Batch input (TaskPair a b))
+  :name "batch-merge"
+  :when ((= program (Pair left right))
+         (= left (Batch input a))
+         (= right (Batch input b))))
+
+;;; Physical alternatives preserve every task and its result. FusedBatch shares
+;;; a scan for identical grouping keys. GroupingBatch additionally evaluates
+;;; distinct groupings with identical sets of weights using GROUPING SETS.
+(rewrite (Batch input tasks) (FusedBatch input tasks) :name "batch-fuse")
+(rewrite (Batch input tasks) (GroupingBatch input tasks) :name "batch-grouping-sets")

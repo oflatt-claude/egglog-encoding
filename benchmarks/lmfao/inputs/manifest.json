@@ -1,0 +1,20 @@
+{
+  "variants": [
+    {
+      "name": "independent",
+      "file": "independent.egg",
+      "rewrite_round_budget": 0
+    },
+    {
+      "name": "fuse",
+      "file": "fuse.egg",
+      "rewrite_round_budget": 12
+    },
+    {
+      "name": "grouping",
+      "file": "grouping.egg",
+      "rewrite_round_budget": 12
+    }
+  ],
+  "export_names": "(Lambda \"lambda\") (Sing \"sing\") (Add \"+\") (Mult \"*\") (Sub \"-\") (Equality \"eq\") (Get \"get\") (Range \"range\") (App \"apply\") (IfThen \"ifthen\") (Binop \"binop\") (SubArray \"subarray\") (Unique \"unique\") (Sum \"sum\") (Merge \"merge\") (Let \"sdql-let\") (Num \"=payload\") (Symbol \"=payload\" \"sym:\") (Null \"null\") (Pair \"Pair\") (Output \"Output\") (Task \"Task\") (TaskPair \"TaskPair\") (Batch \"Batch\") (FusedBatch \"FusedBatch\") (GroupingBatch \"GroupingBatch\")"
+}
