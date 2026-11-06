@@ -52,8 +52,12 @@ frozen inputs. CMake, a C++ compiler and Boost are required.
     --rounds 5 --timeout-sec 900
 
 Preparation creates a separate checkout. --boost PREFIX supports an unpacked
-Boost installation; also pass its include path through --cxxflags if needed when
-compiling generated programs. Compiler flags are identical across variants.
+Boost installation. For generated programs, --cxxflags replaces all default
+flags; retain the optimization flags when adding its include path:
+
+  --cxxflags '-std=c++11 -O3 -pthread -mtune=native -ftree-vectorize -fopenmp -I/PREFIX/include'
+
+Compiler flags are identical across variants.
 
 --treatment and --variant may be repeated. Omitting both requests all three
 variants on egglog's slotted encoding and the native slotted-egraphs MultiPattern
