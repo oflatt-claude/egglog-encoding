@@ -14,6 +14,12 @@ Favorita experiment, its other datasets/models, or parallel execution. The
 extractor uses measured cardinalities, not a production statistics estimator.
 An optimum for its cost model does not imply the fastest executable plan.
 
+"Covariance" names the query workload, not a dataset. The queries compute a
+non-centered covariance (Gram) matrix: counts, sums, squares and pairwise
+products over the joined data. Categorical features become grouping keys, so
+the workload includes counts by city and sales sums by city. These are reusable
+inputs to linear-regression training; this case study does not train a model.
+
 Provenance:
   Paper: https://arxiv.org/abs/1906.08687
   Artifact: https://github.com/fdbresearch/LMFAO
@@ -48,6 +54,11 @@ C++ compilation, --build-timeout bounds each build/diagnostic subprocess, and
 --dag-timeout bounds the joint solver. Compiler flags are identical for controls
 and extracted plans. --report PATH selects the shared append-only optimizer
 cache (default OUTPUT/optimizer.jsonl). Execution samples are fresh.
+--treatment and --variant restrict the selected engines and ablations; both may
+be repeated. For the full logical optimizer against LMFAO without the additional
+engine comparison, use --treatment slotted --variant shared. Original LMFAO
+remains the control in every invocation. A single-engine run does not establish
+graph equivalence between engines.
 
 --timeout-sec and --memory-limit-gib/--no-memory-limit bound optimizer processes;
 the timeout also bounds timed generated executables. The memory limit does not
@@ -93,9 +104,10 @@ once, plus each selected column's work. The backend adapter serializes those
 selected identities; it does not discover or merge compatible views. This avoids
 enumerating all possible column subsets in the graph.
 
-The objective counts scan/join rows, scalar updates and output cells. Untimed
-DuckDB queries measure exact candidate output cardinalities and joins against
-incoming distinct keys. These queries provide costs, not root choices or view
+The objective counts scan/join rows, scalar updates and output cells. DuckDB
+queries measure exact candidate output cardinalities and joins against incoming
+distinct keys. Collection is timed separately for each variant and charged in
+full to its pipeline cost. These queries provide costs, not root choices or view
 plans. HiGHS selects one acyclic DAG jointly across all required outputs; the
 report includes its bound, gap and time limit. Decoder validation rejects plans
 that change a query's keys/functions or violate directional pushdown semantics.
@@ -106,6 +118,13 @@ Controls and backend
   roots        All six roots, pushdown enabled, shared producers disabled
   shared       All six roots, pushdown and sharing enabled
   original     LMFAO's original query/root/decomposition/view-merging logic
+
+A root is the relation where an aggregate's traversal ends; partial aggregates
+flow toward it. Sharing lets several aggregate columns use one intermediate
+producer. These ablations keep the queries fixed: compare single-root with
+shared to test root choice, and roots with shared to test shared producers.
+Identical-subexpression reuse and the backend's multi-output optimization remain
+enabled in every variant; roots does not disable all forms of sharing.
 
 The first three are frozen egraph workloads run on both engines. The original
 control runs the same backend executable without a plan-import request. All
@@ -136,21 +155,44 @@ Reports and validation
   *-isomorphism.json  full comparison verdict; limits/timeouts are inconclusive
   *-extraction.json   selected enodes, costs, solver bound/gap and graph hash
   *-plan.json         serialized views, aggregate columns and query references
-  statistics.json    measured candidate cardinalities
+  *-statistics.json  measured candidate cardinalities for each graph
   metadata.json      dataset hashes, versions, CPU affinity and timing scopes
   builds.json        code generation/compilation times, flags and binary hashes
   execution.jsonl    fresh C++ process-wall samples
   validation.json    independent output checks
 
-Optimizer time includes process startup, parsing/frontend, graph construction
-and rewriting. Export/comparison are separate diagnostic reruns. Egglog's
-ruleset_work_seconds measures exclusive ruleset work, not rewrite-loop wall
-time. Extraction, statistics and compilation are separate observations. Timed
-C++ process time includes loading and sorting. The additional computation time
-is the upstream millisecond report excluding those two phases. Validation provides a warmup;
-subsequent samples rotate/reverse plan order. Separate phase medians must not
-be presented as a measured end-to-end runtime. Structurally identical serialized
-plans share execution samples, with aliases recorded explicitly.
+pipeline.json reports two scopes:
+
+  execution            C++ process time, including loading and sorting, plus the
+                       upstream computation-only time excluding both phases.
+  accounted_pipeline   Sum of setup phases plus execution. Setup includes graph
+                       construction/rewriting/export, decoding, statistics data
+                       loading and queries, extraction, plan serialization,
+                       code generation and compilation. Original LMFAO's logical
+                       optimization is included in its code-generation time.
+
+The phase sum combines one observation of each setup phase with each warm
+execution sample. It is not a measured end-to-end runtime or an end-to-end
+confidence interval; its range reflects execution variation only. Each variant
+pays its full statistics cost. Identical serialized plans reuse backend build
+and execution observations, charged in full to each variant and identified by
+execution_aliases. Tool builds, graph isomorphism and independent correctness
+checks are excluded for both pipelines. validation_preparation_seconds records
+the independent oracle's loading/computation, separate from optimizer statistics.
+
+The optimizer-only samples include startup, parsing/frontend, graph construction
+and rewriting. Their separate export rerun supplies the graph for extraction;
+accounted_pipeline charges that rerun once without adding the optimizer-only
+samples again. Egglog's ruleset_work_seconds measures exclusive ruleset work,
+not rewrite-loop wall time. Validation provides a warmup; subsequent execution
+samples rotate/reverse plan order.
+
+The paper's Table 3 excludes compilation and data loading, uses sorted inputs,
+and reports the mean of four runs after a warmup (Section 4.1 and Appendix B).
+Its join-tree layer takes cardinality constraints as input; it does not report
+a separate statistics-collection time. Our measured-statistics cost must not be
+omitted when comparing total pipeline costs. This harness retains both execution
+and setup costs rather than treating execution improvements as overall speedups.
 
 Read logical.egg, logical.py (decoding/costs/serialization), and dag.py (joint
 extraction). statistics.py provides costs; backend.py compiles/checks/runs the

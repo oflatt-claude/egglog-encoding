@@ -8,6 +8,7 @@ import random
 from collections import Counter, defaultdict
 from fractions import Fraction
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -146,6 +147,9 @@ def test_cli_limits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     for value in ["0", "-1", "nan", "inf"]:
         with pytest.raises(SystemExit):
             cli.main([*argv, "--dag-timeout", value])
+    for name, value in [("treatment", "slotted"), ("variant", "shared")]:
+        with pytest.raises(SystemExit):
+            cli.main([*argv, f"--{name}", value, f"--{name}", value])
     assert seconds_summary([]) is None
 
 
@@ -184,3 +188,104 @@ def test_cpp_timing_retains_whole_process_and_upstream_scope(tmp_path: Path) -> 
     assert row["process_seconds"] > 0
     assert row["computation_seconds"] == 0.037
     assert (tmp_path / "run-0.log").read_text().endswith("Data process: 37ms.\n")
+
+
+def test_pipeline_charges_statistics_and_export_but_not_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    now = 0.0
+
+    def spend(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(cli, "time", SimpleNamespace(perf_counter=lambda: now))
+    documents = {"shared-slotted": {"statistics": 20}, "shared-slotted-ref-multi": {"statistics": 30}}
+
+    def collect(output: Path, *args: Any, **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+        for label, document in documents.items():
+            cli.write_json(output / f"{label}-graph.json", document)
+        return documents, {
+            "optimizer": {"process_seconds": 999},  # Separate engine samples must not be added again.
+            "graph_collection": {label: {"seconds": 11 + 2 * i} for i, label in enumerate(documents)},
+        }
+
+    def graph(document: dict[str, Any]) -> dict[str, Any]:
+        spend(2)
+        return document
+
+    class Database:
+        def close(self) -> None:
+            spend(1)
+
+    def load(directory: Path) -> tuple[Database, dict[str, Any]]:
+        spend(10)
+        return Database(), {"input_rows": {"Sales": 2}}
+
+    def statistics(db: Database, graph: dict[str, Any]) -> tuple[dict[Any, Any], list[Any]]:
+        spend(graph["statistics"])
+        return {}, []
+
+    class Extraction:
+        def __init__(self, *args: Any) -> None:
+            spend(2)
+
+        def extract(self, timeout: float) -> tuple[dict[str, Any], dict[str, Any]]:
+            spend(3)
+            return {}, {}
+
+        def plan(self, selected: Any) -> dict[str, Any]:
+            spend(7)
+            return {"views": [{"aggregates": [{}]}]}  # Both engines select the same plan.
+
+    def oracle(db: Database) -> list[Any]:
+        spend(2000)
+        return []
+
+    def prepare(compiler: Path, data: Path, directory: Path, plan: Path | None, **kwargs: Any) -> dict[str, Any]:
+        directory.mkdir()
+        (directory / "lmfao").touch()
+        spend(42)
+        return {"generation_seconds": 2, "compilation_seconds": 40}
+
+    def validate(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        spend(1000)
+        return {"queries_checked": 140}
+
+    def execute(directory: Path, repeat: int, timeout: int) -> dict[str, float]:
+        elapsed = (1.0 if directory.name == "original" else 0.5) + repeat / 10
+        spend(elapsed)
+        return {"process_seconds": elapsed, "computation_seconds": elapsed / 2}
+
+    monkeypatch.setattr(cli, "collect_optimizers", collect)
+    monkeypatch.setattr(cli, "Graph", graph)
+    monkeypatch.setattr(cli, "load_data", load)
+    monkeypatch.setattr(cli, "collect_statistics", statistics)
+    monkeypatch.setattr(cli, "Extractor", Extraction)
+    monkeypatch.setattr(cli, "reference_results", oracle)
+    monkeypatch.setattr(cli.backend, "prepare", prepare)
+    monkeypatch.setattr(cli.backend, "validate", validate)
+    monkeypatch.setattr(cli.backend, "execute", execute)
+    compiler = tmp_path / "multifaq"
+    compiler.touch()
+    output = tmp_path / "out"
+    assert (
+        cli.main(["--data", str(tmp_path), "--backend", str(compiler), "--output-dir", str(output), "--rounds", "2"])
+        == 0
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert report == json.loads((output / "pipeline.json").read_text())
+    costs = report["accounted_pipeline"]
+    assert costs["original"]["setup_phase_sum_seconds"] == 42
+    assert costs["shared-slotted"]["setup_phase_sum_seconds"] == 98
+    assert costs["shared-slotted-ref-multi"]["setup_phase_sum_seconds"] == 110
+    assert costs["shared-slotted-ref-multi"]["execution_label"] == "shared-slotted"
+    assert costs["shared-slotted"]["setup_plus_execution_phase_sum_seconds"] == {
+        "median_seconds": 98.55,
+        "min_seconds": 98.5,
+        "max_seconds": 98.6,
+        "samples": 2,
+    }
+    assert report["metadata"]["validation_preparation_seconds"] == 2011
+    assert len(report["builds"]) == len(report["validation"]) == 2
+    assert "not a measured end-to-end" in report["phase_scope"]

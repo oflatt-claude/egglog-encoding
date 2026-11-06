@@ -20,7 +20,7 @@ from benchmarking.targets import sha256_file
 from . import backend, model
 from .data import load_data, reference_results
 from .logical import Extractor, Graph
-from .optimizer import collect_optimizers, seconds_summary, write_json
+from .optimizer import TREATMENTS, collect_optimizers, seconds_summary, write_json
 from .statistics import collect as collect_statistics
 
 
@@ -33,62 +33,65 @@ def run(args: argparse.Namespace) -> None:
         os.sched_setaffinity(0, {args.cpu})
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
-    documents, optimizer = collect_optimizers(out, args.samples, args.timeout, args.report, args.memory_limit_bytes)
-    if "shared-slotted" not in documents:
-        raise RuntimeError("the full logical experiment requires the rewritten egglog graph")
-    parsed = {name: Graph(doc) for name, doc in documents.items()}
-    start = time.perf_counter()
-    db, metadata = load_data(args.data)
-    try:
-        status("Computing untimed cardinalities and independent decimal answers")
-        expected = reference_results(db)
-        largest = parsed["shared-slotted"]
-        statistics, records = collect_statistics(db, largest)
-        cardinalities = {
-            (largest.regions[r].origin, largest.regions[r].destination, keys): counts
-            for (r, keys), counts in statistics.items()
-        }
-    finally:
-        db.close()
-    metadata.update(
-        {
-            "preparation_seconds": time.perf_counter() - start,
-            "cpu_affinity": sorted(os.sched_getaffinity(0)),
-            "backend_sha256": sha256_file(args.backend),
-            "cxx_version": subprocess.check_output(["g++", "--version"], text=True).splitlines()[0],
-            "backend_corrections": ["dependent-output.patch"],
-            "dag_timeout_seconds": args.dag_timeout,
-            "statistics": "exact cardinalities measured outside optimization; not a production estimator",
-            "statistics_graph_sha256": sha256_file(out / "shared-slotted-graph.json"),
-            "timing_scope": (
-                "execution is whole C++ process wall time, including loading and sorting; "
-                "code generation, compilation and checking excluded. "
-                "Upstream computation time excludes loading and sorting"
-            ),
-            "lmfao_commit": model.COMMIT,
-        }
+    documents, optimizer = collect_optimizers(
+        out,
+        args.samples,
+        args.timeout,
+        args.report,
+        args.memory_limit_bytes,
+        treatments=tuple(args.treatment or TREATMENTS),
+        variants=tuple(args.variant or ("single-root", "roots", "shared")),
     )
-    write_json(out / "metadata.json", metadata)
-    write_json(out / "statistics.json", records)
+    if not documents:
+        raise RuntimeError("the logical experiment requires at least one successfully exported graph")
+    metadata: dict[str, Any] = {
+        "cpu_affinity": sorted(os.sched_getaffinity(0)),
+        "backend_sha256": sha256_file(args.backend),
+        "cxx_version": subprocess.check_output(["g++", "--version"], text=True).splitlines()[0],
+        "backend_corrections": ["dependent-output.patch"],
+        "dag_timeout_seconds": args.dag_timeout,
+        "statistics": "exact cardinalities collected and charged separately for each graph; not a production estimator",
+        "timing_scope": (
+            "execution is whole C++ process wall time, including loading and sorting; "
+            "code generation, compilation and checking excluded. "
+            "Upstream computation time excludes loading and sorting"
+        ),
+        "lmfao_commit": model.COMMIT,
+    }
     plans: dict[str, Any] = {}
     canonical: dict[str, Path | None] = {"original": None}
     aliases: dict[str, str] = {}
     signatures: dict[str, str] = {}
-    for label, g in parsed.items():
+    for label, document in documents.items():
+        phases = {"rewriting_and_export": optimizer["graph_collection"][label]["seconds"]}
+        start = time.perf_counter()
+        g = Graph(document)
+        phases["graph_decoding"] = time.perf_counter() - start
+        status(f"Collecting optimizer statistics for {label}")
+        start = time.perf_counter()
+        db, data_metadata = load_data(args.data)
+        phases["statistics_loading"] = time.perf_counter() - start
+        metadata.update(data_metadata)
+        start = time.perf_counter()
+        try:
+            stats, records = collect_statistics(db, g)
+        finally:
+            db.close()
+        phases["statistics_queries"] = time.perf_counter() - start
+        write_json(out / f"{label}-statistics.json", records)
         status(f"Extracting {label}")
         start = time.perf_counter()
-        stats = {
-            (r, keys): cardinalities[g.regions[r].origin, g.regions[r].destination, keys]
-            for r, keys in {(v.region, v.keys) for v in g.views.values()} | set(g.producers.values())
-        }
         ex = Extractor(g, stats)
         selected, info = ex.extract(args.dag_timeout)
-        info["extraction_seconds"] = time.perf_counter() - start
+        phases["extraction"] = time.perf_counter() - start
+        start = time.perf_counter()
         plan = ex.plan(selected)
         path = out / f"{label}-plan.json"
         write_json(path, plan)
+        phases["plan_serialization"] = time.perf_counter() - start
         info.update(
             {
+                "phases_seconds": phases,
                 "source_graph_sha256": sha256_file(out / f"{label}-graph.json"),
                 "views": len(plan["views"]),
                 "aggregates": sum(len(v["aggregates"]) for v in plan["views"]),
@@ -103,6 +106,15 @@ def run(args: argparse.Namespace) -> None:
             signatures[signature] = label
             canonical[label] = path
     write_json(out / "identical-plans.json", aliases)
+    status("Computing independent decimal answers outside pipeline timing")
+    start = time.perf_counter()
+    db, _ = load_data(args.data)
+    try:
+        expected = reference_results(db)
+    finally:
+        db.close()
+    metadata["validation_preparation_seconds"] = time.perf_counter() - start
+    write_json(out / "metadata.json", metadata)
     builds, validation = {}, {}
     for label, path in canonical.items():
         status(f"Generating and compiling {label}")
@@ -129,6 +141,23 @@ def run(args: argparse.Namespace) -> None:
                 stream.write(json.dumps(row) + "\n")
                 stream.flush()
                 status(f"  {label}: {row['process_seconds']:.3f}s")
+    accounted = {}
+    for label in ["original", *plans]:
+        executed = aliases.get(label, label)
+        phases = {
+            **(plans[label]["phases_seconds"] if label in plans else {}),
+            "code_generation": builds[executed]["generation_seconds"],
+            "compilation": builds[executed]["compilation_seconds"],
+        }
+        setup = sum(phases.values())
+        accounted[label] = {
+            "setup_phases_seconds": phases,
+            "setup_phase_sum_seconds": setup,
+            "execution_label": executed,
+            "setup_plus_execution_phase_sum_seconds": seconds_summary(
+                setup + row["process_seconds"] for row in rows if row["label"] == executed
+            ),
+        }
     report = {
         **optimizer,
         "metadata": metadata,
@@ -136,6 +165,7 @@ def run(args: argparse.Namespace) -> None:
         "builds": builds,
         "validation": validation,
         "execution_aliases": aliases,
+        "accounted_pipeline": accounted,
         "execution": {
             label: {
                 phase: seconds_summary(row[phase] for row in rows if row["label"] == label)
@@ -144,8 +174,14 @@ def run(args: argparse.Namespace) -> None:
             for label in labels
         },
         "phase_scope": (
-            "Optimizer and execution samples are separate. Extraction, statistics, code generation "
-            "and compilation are reported separately; sums of medians are not measured end-to-end times."
+            "accounted_pipeline sums one observation of every setup phase and each warm execution sample. "
+            "It includes statistics loading/queries, rewriting with export, decoding, extraction, serialization, "
+            "code generation, compilation, and execution including loading/sorting. It is not a measured "
+            "end-to-end runtime; its range reflects only execution variation. Each variant pays its full "
+            "statistics cost. Identical plans reuse backend observations, charged in full to each variant. "
+            "Original logical optimization is included in its code-generation phase. Independent validation, "
+            "isomorphism checks and tool builds are excluded for both. Separate optimizer-only benchmark "
+            "samples are not added again to rewriting/export time."
         ),
     }
     write_json(out / "pipeline.json", report)
@@ -158,6 +194,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--backend", type=Path, required=True, help="Pinned multifaq executable with import adapter")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
+        "--treatment", choices=TREATMENTS, action="append", help="Repeat to select engines; default both"
+    )
+    parser.add_argument(
+        "--variant",
+        choices=("single-root", "roots", "shared"),
+        action="append",
+        help="Repeat to select variants; default all",
+    )
+    parser.add_argument(
         "--rounds", "--samples", dest="samples", type=int, default=5, help="Measured executions, not rewrite rounds"
     )
     parser.add_argument("--timeout-sec", "--timeout", dest="timeout", type=int, default=DEFAULT_TIMEOUT_SEC)
@@ -169,6 +214,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cxxflags", default=backend.FLAGS)
     parser.add_argument("--cpu", type=int)
     args = parser.parse_args(argv)
+    for name in ("treatment", "variant"):
+        values = getattr(args, name)
+        if values and len(values) != len(set(values)):
+            parser.error(f"duplicate --{name} selection")
     if args.report == Path("-"):
         parser.error("--report requires a filesystem path, not '-'")
     if min(args.samples, args.timeout, args.build_timeout, args.jobs) < 1:

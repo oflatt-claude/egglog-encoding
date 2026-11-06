@@ -100,13 +100,17 @@ def collect_optimizers(
     timeout: int,
     report_path: Path | None = None,
     memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES,
+    *,
+    treatments: tuple[Treatment, ...] = TREATMENTS,
+    variants: tuple[str, ...] = ("single-root", "roots", "shared"),
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     manifest = json.loads((INPUTS / "manifest.json").read_text())
+    manifest["variants"] = [v for v in manifest["variants"] if v["name"] in variants]
     files = resolve_files([str(INPUTS / v["file"]) for v in manifest["variants"]], ROOT)
     request = parse_target(str(ROOT))
     requests = tuple(
         BenchmarkRequest(EndpointRequest(request, treatment, memory_limit_bytes=memory_limit_bytes), files)
-        for treatment in TREATMENTS
+        for treatment in treatments
     )
     store = ReportStore(report_path or output / "optimizer.jsonl")
     console = Console(stderr=True)
@@ -118,7 +122,7 @@ def collect_optimizers(
         "optimizer": {},
         "graph_collection": {},
         "graph_comparisons": {},
-        "binary_sha256": {mode: target.binary_sha256_for(mode) for mode in TREATMENTS},
+        "binary_sha256": {mode: target.binary_sha256_for(mode) for mode in treatments},
         "optimizer_report": str(store.path),
         "optimizer_memory_limit_bytes": memory_limit_bytes,
         "timing_scope": "Optimizer process wall time includes startup, parsing/frontend, "
@@ -128,17 +132,19 @@ def collect_optimizers(
         "Graph collection is a separate rerun, including export; extraction and C++ execution are excluded.",
     }
     graphs = {}
-    checker = target.binary_path_for("slotted")
-    assert checker is not None
-    checker = checker.with_name("egraph-isomorphism")
-    subprocess.run(
-        ["cargo", "build", "--locked", "--release", "-p", "egraph-isomorphism"],
-        cwd=ROOT,
-        check=True,
-        stdout=sys.stderr,
-    )
+    checker = None
+    if len(treatments) == 2:
+        binary = target.binary_path_for("slotted")
+        assert binary is not None
+        checker = binary.with_name("egraph-isomorphism")
+        subprocess.run(
+            ["cargo", "build", "--locked", "--release", "-p", "egraph-isomorphism"],
+            cwd=ROOT,
+            check=True,
+            stdout=sys.stderr,
+        )
     for variant, file in zip(manifest["variants"], files, strict=True):
-        for treatment in TREATMENTS:
+        for treatment in treatments:
             label = f"{variant['name']}-{treatment}"
             endpoint = BenchmarkEndpoint(
                 target.row, target.binary_sha256_for(treatment), treatment, memory_limit_bytes=memory_limit_bytes
@@ -175,6 +181,7 @@ def collect_optimizers(
             report["graph_collection"][label] = {"seconds": time.perf_counter() - start, "issue": issue}
         labels = [f"{variant['name']}-{t}" for t in TREATMENTS]
         if all(label in graphs for label in labels):
+            assert checker is not None
             # Full graph comparison is a diagnostic, separate from measured runs.
             try:
                 result = subprocess.run(

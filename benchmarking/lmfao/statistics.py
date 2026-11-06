@@ -1,4 +1,4 @@
-"""Untimed exact cardinalities for the finite view alternatives in an export."""
+"""Exact cardinalities for the finite view alternatives in an export."""
 
 from __future__ import annotations
 
