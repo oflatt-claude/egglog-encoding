@@ -26,6 +26,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from benchmarking.lmfao.cli import main as lmfao_main
 
         return lmfao_main(raw_argv[1:])
+    if raw_argv and raw_argv[0] == "lmfao-hoist":
+        from benchmarking.lmfao.hoist import main as hoist_main
+
+        return hoist_main(raw_argv[1:])
     from benchmarking.benchmark import main as benchmark_main
 
     return benchmark_main(raw_argv)

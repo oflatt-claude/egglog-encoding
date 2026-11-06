@@ -1,0 +1,14 @@
+;;; A scalar factor outside the sum's scope can multiply its result once.
+(sort E)
+(constructor Sum (E E E) E :binder 1)
+(constructor ScaleSum (E E E E) E :binder 2)
+(constructor Mul (E E) E)
+(constructor Field (E String) E)
+(constructor Rows (E) E)
+(constructor Blocks () E)
+
+(rewrite total (ScaleSum rows factor $row rest)
+  :name "hoist-independent-factor"
+  :when ((= total (Sum rows $row body))
+         (= body (Mul factor rest))
+         (not-free $row factor)))
