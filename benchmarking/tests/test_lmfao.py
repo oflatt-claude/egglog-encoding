@@ -206,7 +206,7 @@ def test_pipeline_charges_statistics_and_export_but_not_validation(
         for label, document in documents.items():
             cli.write_json(output / f"{label}-graph.json", document)
         return documents, {
-            "optimizer": {"process_seconds": 999},  # Separate engine samples must not be added again.
+            "optimizer": {label: {"process_seconds": 999} for label in documents},
             "graph_collection": {label: {"seconds": 11 + 2 * i} for i, label in enumerate(documents)},
         }
 
@@ -276,16 +276,37 @@ def test_pipeline_charges_statistics_and_export_but_not_validation(
     report = json.loads(capsys.readouterr().out)
     assert report == json.loads((output / "pipeline.json").read_text())
     costs = report["accounted_pipeline"]
-    assert costs["original"]["setup_phase_sum_seconds"] == 42
-    assert costs["shared-slotted"]["setup_phase_sum_seconds"] == 98
-    assert costs["shared-slotted-ref-multi"]["setup_phase_sum_seconds"] == 110
+    assert costs["original"]["one_time_phase_sum_seconds"] == 42
+    assert costs["shared-slotted"]["one_time_phase_sum_seconds"] == 98
+    assert costs["shared-slotted-ref-multi"]["one_time_phase_sum_seconds"] == 110
     assert costs["shared-slotted-ref-multi"]["execution_label"] == "shared-slotted"
-    assert costs["shared-slotted"]["setup_plus_execution_phase_sum_seconds"] == {
-        "median_seconds": 98.55,
-        "min_seconds": 98.5,
-        "max_seconds": 98.6,
-        "samples": 2,
-    }
+    assert costs["original"]["statistics_seconds"] == 0
+    assert costs["original"]["optimization_and_generation_seconds"] == 2
+    assert costs["shared-slotted"]["statistics_seconds"] == 31
+    assert costs["shared-slotted"]["optimization_and_generation_seconds"] == 27
+    assert costs["shared-slotted"]["compilation_seconds"] == 40
     assert report["metadata"]["validation_preparation_seconds"] == 2011
     assert len(report["builds"]) == len(report["validation"]) == 2
     assert "not a measured end-to-end" in report["phase_scope"]
+    comparison = (output / "comparison.md").read_text()
+    assert "| shared / egglog | All six | Enabled | 0.2750 | 2 |" in comparison
+    assert "| shared / native multipattern | All six | Enabled | 0.2750 | 2 |" in comparison
+    assert "| shared / egglog | 31.0000 | 27.0000 | 40.0000 |" in comparison
+
+
+def test_comparison_caption_names_ablation_pairs_and_preserves_missing_results() -> None:
+    from benchmarking.lmfao.report import comparison_markdown
+
+    labels = ("original", "single-root-slotted", "roots-slotted", "shared-slotted-ref-multi")
+    result = comparison_markdown(
+        {
+            "optimizer": dict.fromkeys(labels[1:]),
+            "accounted_pipeline": {},
+        }
+    )
+    assert "| single-root / egglog | Sales only | Enabled | unavailable | — |" in result
+    assert "| roots / egglog | All six | Disabled | unavailable | — |" in result
+    assert "| shared / native multipattern | All six | Enabled | unavailable | — |" in result
+    assert "compare shared with single-root" in result and "shared with roots" in result
+    assert "identical-subexpression reuse" in result and "loading and sorting" in result
+    assert "N × execution" in result

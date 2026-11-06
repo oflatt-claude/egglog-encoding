@@ -149,6 +149,7 @@ diagnostic output. Timed executables omit output dumping and checking.
 
 Reports and validation
 ----------------------
+  comparison.md       computation-time table, ablation caption and separate costs
   pipeline.json       phase summaries, failures, plans, builds and validation
   optimizer.jsonl     shared cache with input/binary hashes and peak RSS
   *-graph.json        annotated graphs from each engine
@@ -161,24 +162,34 @@ Reports and validation
   execution.jsonl    fresh C++ process-wall samples
   validation.json    independent output checks
 
-pipeline.json reports two scopes:
+comparison.md leads with aggregate computation time, excluding loading/sorting,
+optimization, statistics and compilation. Its caption identifies the controlled
+comparisons: shared versus single-root isolates root choice; shared versus roots
+isolates shared-producer merging. Missing results appear as unavailable. The
+comparison with original LMFAO measures plan quality against its logical optimizer;
+the ablations explain which choices help within the egraph optimizer.
 
-  execution            C++ process time, including loading and sorting, plus the
-                       upstream computation-only time excluding both phases.
-  accounted_pipeline   Sum of setup phases plus execution. Setup includes graph
-                       construction/rewriting/export, decoding, statistics data
-                       loading and queries, extraction, plan serialization,
-                       code generation and compilation. Original LMFAO's logical
-                       optimization is included in its code-generation time.
+A separate table reports statistics, optimization/generation and C++ compilation.
+pipeline.json retains computation and whole-process execution under execution,
+and these preparation categories under accounted_pipeline:
 
-The phase sum combines one observation of each setup phase with each warm
-execution sample. It is not a measured end-to-end runtime or an end-to-end
-confidence interval; its range reflects execution variation only. Each variant
-pays its full statistics cost. Identical serialized plans reuse backend build
-and execution observations, charged in full to each variant and identified by
-execution_aliases. Tool builds, graph isomorphism and independent correctness
-checks are excluded for both pipelines. validation_preparation_seconds records
-the independent oracle's loading/computation, separate from optimizer statistics.
+  statistics_seconds                  Data loading and exact cardinality queries
+  optimization_and_generation_seconds Rewriting/export, decoding, extraction,
+                                      serialization and C++ generation
+  compilation_seconds                 Compilation of the generated C++
+
+Original LMFAO's logical optimization is included in generation. Preparation
+phases are observed once, and each variant pays its full statistics cost. The
+one_time_phase_sum_seconds field is their sum, not a measured end-to-end runtime.
+For N executions of a reused plan, estimate total time as preparation + N times
+execution, specifying whether execution includes loading/sorting. Recollecting
+statistics or recompiling incurs those costs again.
+
+Identical serialized plans reuse backend build and execution observations,
+charged in full to each variant and identified by execution_aliases. Tool builds,
+graph isomorphism and independent correctness checks are excluded for both
+pipelines. validation_preparation_seconds records the independent oracle's
+loading/computation, separate from optimizer statistics.
 
 The optimizer-only samples include startup, parsing/frontend, graph construction
 and rewriting. Their separate export rerun supplies the graph for extraction;
@@ -189,10 +200,10 @@ samples rotate/reverse plan order.
 
 The paper's Table 3 excludes compilation and data loading, uses sorted inputs,
 and reports the mean of four runs after a warmup (Section 4.1 and Appendix B).
-Its join-tree layer takes cardinality constraints as input; it does not report
-a separate statistics-collection time. Our measured-statistics cost must not be
-omitted when comparing total pipeline costs. This harness retains both execution
-and setup costs rather than treating execution improvements as overall speedups.
+Our primary table follows that computation scope but reports medians. Its
+join-tree layer takes cardinality constraints as input; the paper does not report
+a separate statistics-collection time. Our exact statistics are measured over
+the data and must be included in any claim about total optimization cost.
 
 Read logical.egg, logical.py (decoding/costs/serialization), and dag.py (joint
 extraction). statistics.py provides costs; backend.py compiles/checks/runs the

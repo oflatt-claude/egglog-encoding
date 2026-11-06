@@ -21,6 +21,7 @@ from . import backend, model
 from .data import load_data, reference_results
 from .logical import Extractor, Graph
 from .optimizer import TREATMENTS, collect_optimizers, seconds_summary, write_json
+from .report import comparison_markdown, preparation_costs
 from .statistics import collect as collect_statistics
 
 
@@ -141,23 +142,6 @@ def run(args: argparse.Namespace) -> None:
                 stream.write(json.dumps(row) + "\n")
                 stream.flush()
                 status(f"  {label}: {row['process_seconds']:.3f}s")
-    accounted = {}
-    for label in ["original", *plans]:
-        executed = aliases.get(label, label)
-        phases = {
-            **(plans[label]["phases_seconds"] if label in plans else {}),
-            "code_generation": builds[executed]["generation_seconds"],
-            "compilation": builds[executed]["compilation_seconds"],
-        }
-        setup = sum(phases.values())
-        accounted[label] = {
-            "setup_phases_seconds": phases,
-            "setup_phase_sum_seconds": setup,
-            "execution_label": executed,
-            "setup_plus_execution_phase_sum_seconds": seconds_summary(
-                setup + row["process_seconds"] for row in rows if row["label"] == executed
-            ),
-        }
     report = {
         **optimizer,
         "metadata": metadata,
@@ -165,7 +149,7 @@ def run(args: argparse.Namespace) -> None:
         "builds": builds,
         "validation": validation,
         "execution_aliases": aliases,
-        "accounted_pipeline": accounted,
+        "accounted_pipeline": preparation_costs(plans, builds, aliases),
         "execution": {
             label: {
                 phase: seconds_summary(row[phase] for row in rows if row["label"] == label)
@@ -174,17 +158,17 @@ def run(args: argparse.Namespace) -> None:
             for label in labels
         },
         "phase_scope": (
-            "accounted_pipeline sums one observation of every setup phase and each warm execution sample. "
-            "It includes statistics loading/queries, rewriting with export, decoding, extraction, serialization, "
-            "code generation, compilation, and execution including loading/sorting. It is not a measured "
-            "end-to-end runtime; its range reflects only execution variation. Each variant pays its full "
-            "statistics cost. Identical plans reuse backend observations, charged in full to each variant. "
+            "Execution reports computation time separately from whole-process time including loading/sorting. "
+            "accounted_pipeline separates statistics, optimization/generation and compilation, "
+            "with one observation per preparation phase. Its phase sum is not a measured end-to-end runtime. "
+            "Each variant pays its full statistics cost. Identical plans reuse backend observations, charged in full. "
             "Original logical optimization is included in its code-generation phase. Independent validation, "
             "isomorphism checks and tool builds are excluded for both. Separate optimizer-only benchmark "
             "samples are not added again to rewriting/export time."
         ),
     }
     write_json(out / "pipeline.json", report)
+    (out / "comparison.md").write_text(comparison_markdown(report))
     print(json.dumps(report, indent=2))
 
 
