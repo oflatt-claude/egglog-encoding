@@ -1,1 +1,1 @@
-"""The LMFAO Favorita multi-output aggregation case study."""
+"""The LMFAO Favorita logical optimization case study."""

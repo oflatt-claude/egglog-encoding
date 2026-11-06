@@ -1,22 +1,14 @@
 {
-  "independent": {
-    "input_sha256": "sha256:b93edf06fa7e800a40c3b2823b626c9a01491fad18fcd0e5eb364059b410a1a5",
-    "graph_sha256": "sha256:5aef19dda14d9d084af802c97e4dfa1be24386e23195824c2727a1e9c2b594f6"
+  "single-root": {
+    "input_sha256": "sha256:a97048c936c2657a470829cb735ca007439e2849f28ac6211af09c7aa2bc0a87",
+    "graph_sha256": "sha256:3ca542dff49abe0d908bbc1ddb14a5b71ad8111728d632cbd09814f1a81e25f4"
   },
-  "pack": {
-    "input_sha256": "sha256:93e14b9306ef1df614cad230857ed34b26c519a441c5cef63d1de5a85aea7683",
-    "graph_sha256": "sha256:b0ab2765909e6b6c2aebfa589886007d0ae2b480eb5ffdebc52fcbad73f77599"
+  "roots": {
+    "input_sha256": "sha256:53f18587aadd10926f818d884e8b3f80354a063bd4c96c2cd237187ad775bde2",
+    "graph_sha256": "sha256:8351e6b99f405ef4865fb86dda99e02f684b45b4f286560fbec3b0068918a625"
   },
-  "fuse": {
-    "input_sha256": "sha256:73c5131f9604d05dc3e1bfb0fcc44b9271b93b402a1b85d817b73f51dcd981cb",
-    "graph_sha256": "sha256:e5bbe916b6f75172e654e3b8efb388d8300f90424e5cfba38d0a0ab1ed196c7c"
-  },
-  "grouping": {
-    "input_sha256": "sha256:3de19cc2d6da2e8ef4408c511c7ccb9b1f7199bcb12e1a6be1824ef41904f005",
-    "graph_sha256": "sha256:523344d53535f60cd215a0790592c5214cad3e8414a9017a7ede98740dc77c5e"
-  },
-  "nonlinear": {
-    "input_sha256": "sha256:b5d15ab30a55cb9559d626ee5c84a80243c9fbe75a65c87888b931bc815c359f",
-    "graph_sha256": "sha256:7a612bfd4bb93024ee5beac25776673d01d369add1374ca059476ba48a261d96"
+  "shared": {
+    "input_sha256": "sha256:fb7cbd95ecb4ea5f4b6e0224597d3b81fee45975733c5213f5008d8f71a2475d",
+    "graph_sha256": "sha256:7acda570bdc3c2a146e87bfa38a7c2466966ae98c37672262f7e8bfbcb86ba81"
   }
 }

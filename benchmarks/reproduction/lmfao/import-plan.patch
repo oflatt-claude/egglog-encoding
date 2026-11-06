@@ -1,0 +1,23 @@
+diff --git a/src/compiler/QueryCompiler.cpp b/src/compiler/QueryCompiler.cpp
+index 3196e89..f7e3bb8 100644
+--- a/src/compiler/QueryCompiler.cpp
++++ b/src/compiler/QueryCompiler.cpp
+@@ -15,6 +15,7 @@
+ #include <boost/dynamic_bitset.hpp>
+ 
+ #include <QueryCompiler.h>
++#include "ImportPlan.hpp"
+ 
+ using namespace std;
+ using namespace multifaq::params;
+@@ -43,6 +44,10 @@ QueryCompiler::~QueryCompiler()
+  */
+ void QueryCompiler::compile()
+ {
++    if (const char* plan = std::getenv("LMFAO_PLAN_FILE")) {
++        importPlan(plan, _td, _queryList, _viewList, _functionList);
++        return;
++    }
+     DINFO("Compiling the queries into views - number of queries: " + 
+           to_string(_queryList.size())+"\n");
+ 

@@ -1,17 +1,15 @@
-"""Same-backend execution and an independent decimal oracle for all outputs."""
+"""Load the pinned data and compute independent decimal answers."""
 
 from __future__ import annotations
 
 import hashlib
-import math
-import time
 from pathlib import Path
 from typing import Any
 
 import duckdb
 
 from . import model
-from .sql import Choice, execution_sql, ident
+from .model import ident
 
 type Results = list[list[tuple[Any, ...]]]
 
@@ -47,41 +45,3 @@ def reference_results(db: duckdb.DuckDBPyConnection) -> Results:
         sql = f"SELECT {', '.join(fields)} FROM oracle" + (" GROUP BY " + ", ".join(groups) if groups else "")
         expected.append(db.execute(sql).fetchall())
     return expected
-
-
-def strong_baseline() -> list[str]:
-    choices = []
-    for i, query in enumerate(model.queries()):
-        weight = " * ".join(f"CAST({ident(f)} AS DOUBLE)" for f in query.factors) or "CAST(1 AS DOUBLE)"
-        choices.append(Choice(i, "SQL-baseline", tuple(map(ident, query.groups)), weight))
-    join = "SELECT * FROM " + " NATURAL JOIN ".join(map(ident, model.schema()[1]))
-    return execution_sql(join, choices, fuse=True, grouping_sets=True)
-
-
-def execute(
-    db: duckdb.DuckDBPyConnection, statements: list[str], expected: Results, queries: list[model.Query]
-) -> dict[str, Any]:
-    connection = db.cursor()
-    try:
-        start = time.perf_counter()
-        for sql in statements:
-            connection.execute(sql).fetchall()
-        seconds = time.perf_counter() - start
-        worst = 0.0
-        for i, want_rows in enumerate(expected):
-            got_rows = connection.execute(f"SELECT * FROM q{i}").fetchall()
-            got = {tuple(r[:-1]): r[-1] for r in got_rows}
-            want = {tuple(r[:-1]): r[-1] for r in want_rows}
-            if len(got) != len(got_rows) or got.keys() != want.keys():
-                raise AssertionError(f"query {i}: output grouping keys differ")
-            for key, value in want.items():
-                actual, value = float(got[key]), float(value)
-                equal = (
-                    math.isclose(actual, value, rel_tol=1e-9, abs_tol=1e-7) if queries[i].factors else actual == value
-                )
-                if not equal:
-                    raise AssertionError((i, key, actual, value))
-                worst = max(worst, abs(actual - value) / max(1.0, abs(value)))
-        return {"seconds": seconds, "queries_checked": len(expected), "max_scaled_error": worst}
-    finally:
-        connection.close()

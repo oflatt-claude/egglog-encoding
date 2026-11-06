@@ -1,4 +1,4 @@
-//! Live binder-sensitive batching rules on small frozen query programs.
+//! Live directional-view rules on frozen covariance query programs.
 use egglog_experimental::slotted::{Compiler, Options, export, new_egraph};
 use serde::Deserialize;
 use slotted_reference::{Substitution, run_spec};
@@ -7,24 +7,16 @@ use std::path::Path;
 #[derive(Deserialize)]
 struct Fixture {
     multi: String,
-    expected_goal: bool,
 }
 
 #[test]
-fn aggregate_batch_rules_preserve_native_goals_and_counts() {
+fn logical_views_have_the_same_native_and_encoded_counts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap();
-    for name in [
-        "independent",
-        "pack",
-        "fuse",
-        "grouping",
-        "nonlinear",
-        "different-sources",
-    ] {
+    for name in ["single-root", "roots", "shared"] {
         let path = root.join(format!("benchmarks/lmfao/correctness/{name}.egg"));
         let fixture: Fixture =
             serde_json::from_str(&std::fs::read_to_string(path.with_extension("ref")).unwrap())
@@ -41,11 +33,6 @@ fn aggregate_batch_rules_preserve_native_goals_and_counts() {
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         let exported = export::export(&graph).unwrap();
         let native = run_spec(&fixture.multi, Substitution::Snapshot).unwrap();
-        assert_eq!(
-            native.goals,
-            vec![fixture.expected_goal],
-            "{name}: rule goal"
-        );
         assert_eq!(
             (exported.counts.classes, exported.counts.nodes),
             (native.classes, native.nodes),

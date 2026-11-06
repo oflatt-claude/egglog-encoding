@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from benchmarking.lmfao.batch import BatchExtractor
 from benchmarking.lmfao.dag import solve
+from benchmarking.lmfao.logical import Extractor
 
 
 def problem(alternatives: dict[str, list[tuple[float, list[str]]]], roots: list[str]) -> Any:
@@ -24,7 +24,7 @@ def problem(alternatives: dict[str, list[tuple[float, list[str]]]], roots: list[
         dependencies=deps.__getitem__,
         outputs=[(i, c, ()) for i, c in enumerate(roots)],
     )
-    extractor: Any = BatchExtractor.__new__(BatchExtractor)
+    extractor: Any = Extractor.__new__(Extractor)
     extractor.g = graph
     extractor.costs = costs
     return extractor

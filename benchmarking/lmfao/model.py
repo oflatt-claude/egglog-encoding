@@ -65,3 +65,13 @@ def queries() -> list[Query]:
                 )
             )
     return out
+
+
+def function_specs() -> list[tuple[str, int]]:
+    names = {f.name for f in features() if not f.categorical}
+    numeric = [name for name, _ in schema()[0] if name in names]
+    return [(name, power) for power in (1, 2) for name in numeric]
+
+
+def ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'

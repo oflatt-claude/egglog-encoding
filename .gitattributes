@@ -15,5 +15,6 @@ benchmarks/lmfao/correctness/*.ref linguist-generated=true
 benchmarks/lmfao/*.conf -whitespace
 benchmarking/tests/fixtures/lmfao/*.json linguist-generated=true
 benchmarks/reproduction/patches/*.diff -whitespace
+benchmarks/reproduction/lmfao/*.patch -whitespace
 benchmarks/reproduction/fixtures/** -whitespace
 egglog-experimental/tests/slotted/snapshots/*.snap linguist-generated=true

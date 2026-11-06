@@ -1,12 +1,12 @@
-"""Run the fixed LMFAO batching case study through the shared optimizer collector."""
+"""Compare egraph logical optimization with the original LMFAO C++ pipeline."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Sequence
@@ -15,11 +15,13 @@ from typing import Any
 
 from benchmarking.config import DEFAULT_MEMORY_LIMIT_BYTES, DEFAULT_TIMEOUT_SEC
 from benchmarking.native_memory import add_memory_limit_options
+from benchmarking.targets import sha256_file
 
-from . import model
-from .batch import BatchExtractor, Graph
-from .data import execute, load_data, reference_results, strong_baseline
+from . import backend, model
+from .data import load_data, reference_results
+from .logical import Extractor, Graph
 from .optimizer import collect_optimizers, seconds_summary, write_json
+from .statistics import collect as collect_statistics
 
 
 def status(message: str) -> None:
@@ -32,158 +34,149 @@ def run(args: argparse.Namespace) -> None:
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
     documents, optimizer = collect_optimizers(out, args.samples, args.timeout, args.report, args.memory_limit_bytes)
-    if "grouping-slotted" not in documents or "independent-slotted" not in documents:
-        raise RuntimeError("the batching experiment requires original and rewritten egglog graphs")
+    if "shared-slotted" not in documents:
+        raise RuntimeError("the full logical experiment requires the rewritten egglog graph")
+    parsed = {name: Graph(doc) for name, doc in documents.items()}
     start = time.perf_counter()
     db, metadata = load_data(args.data)
     try:
+        status("Computing untimed cardinalities and independent decimal answers")
         expected = reference_results(db)
-        parsed = {name: Graph(doc, model.schema()[1]) for name, doc in documents.items()}
-        source_rows = {}
-        for g in parsed.values():
-            for source_sql, _ in g.sources.values():
-                if source_sql not in source_rows:
-                    source_rows[source_sql] = db.execute(f"SELECT COUNT(*) FROM ({source_sql})").fetchall()[0][0]
-        metadata.update(
-            {
-                "lmfao_commit": model.COMMIT,
-                "cpu_affinity": sorted(os.sched_getaffinity(0)),
-                "preparation_seconds": time.perf_counter() - start,
-                "binary_sha256": optimizer["binary_sha256"],
-                "optimizer_scope": "Fresh process, parsing and rewriting; "
-                "export, comparison, extraction and execution excluded.",
-                "timing_scope": "SQL planning, join, aggregation and output materialization; loading, statistics, "
-                "e-graph processing, Python SQL generation, result fetching/checking and cleanup excluded.",
-                "arithmetic": "DOUBLE timed weights; independent DECIMAL oracle; "
-                "exact keys/counts, moments rtol=1e-9/atol=1e-7.",
-                "dag_timeout_seconds": args.dag_timeout,
-                "lowering_control": "The zero-round program is additionally compiled with global batching enabled. "
-                "This is an explicitly labelled compiler control, not an e-graph result.",
-                "representation": "The original named SDQL Sum queries; "
-                "Batch, FusedBatch and GroupingBatch are introduced "
-                "only by rewrites.",
-            }
-        )
-        write_json(out / "metadata.json", metadata)
-        write_json(
-            out / "statistics.json",
-            {
-                "sources": [{"sql": sql, "rows": rows} for sql, rows in source_rows.items()],
-                "output_cardinalities": {i: len(rows) for i, rows in enumerate(expected)},
-            },
-        )
-        plans = {"sql-grouping-sets": strong_baseline()}
-        phase_plans: dict[str, Any] = {}
-        aliases = {}
-        controls = []
-        for name, g in parsed.items():
-            status(f"Extracting {name}")
-            start = time.perf_counter()
-            ex = BatchExtractor(
-                g,
-                {c: source_rows[sql] for c, (sql, _) in g.sources.items()},
-                {i: len(rows) for i, rows in enumerate(expected)},
-            )
-            selected, info = ex.extract(dag_timeout=args.dag_timeout)
-            info["extraction_seconds"] = time.perf_counter() - start
-            info["source_graph_sha256"] = hashlib.sha256((out / f"{name}-graph.json").read_bytes()).hexdigest()
-            for control in [False, True] if name == "independent-slotted" else [False]:
-                label = name + ("-lowering-control" if control else "")
-                start = time.perf_counter()
-                statements, operators = ex.sql(selected, lowering_control=control)
-                details = info | {
-                    "operators": operators,
-                    "lowering_control": control,
-                    "lowering_seconds": time.perf_counter() - start,
-                    "materialized_tables": sum(s.startswith("CREATE TEMP TABLE") for s in statements),
-                }
-                phase_plans[label] = {
-                    "optimizer_variant": name,
-                    "extraction_seconds": info["extraction_seconds"],
-                    "sql_generation_seconds": details["lowering_seconds"],
-                    "lowering_control": control,
-                }
-                write_json(out / f"{label}-plan.json", details)
-                (out / f"{label}.sql").write_text(";\n\n".join(statements) + ";\n")
-                if control:
-                    controls.append((label, statements))
-                    continue
-                same = next((other for other, sql in plans.items() if sql == statements), None)
-                if same is not None:
-                    aliases[label] = same
-                else:
-                    plans[label] = statements
-        # Prefer the extracted program's name when its SQL equals the compiler
-        # control. Preserve both plans and explicitly alias the shared timing.
-        for label, statements in controls:
-            same = next((other for other, sql in plans.items() if sql == statements), None)
-            if same is not None:
-                aliases[label] = same
-            else:
-                plans[label] = statements
-        write_json(out / "identical-sql.json", aliases)
-        for label, sql in plans.items():
-            (out / f"{label}.sql").write_text(";\n\n".join(sql) + ";\n")
-        validation = {}
-        for label, sql in plans.items():
-            validation[label] = execute(db, sql, expected, model.queries())
-            status(f"  {label}: all 140 outputs agree; {validation[label]['seconds']:.3f}s")
-        write_json(out / "validation.json", validation)
-        rows, labels = [], list(plans)
-        with (out / "execution.jsonl").open("w") as stream:
-            for repeat in range(args.samples):
-                order = labels[repeat % len(labels) :] + labels[: repeat % len(labels)]
-                if repeat % 2:
-                    order.reverse()
-                for label in order:
-                    row = {"label": label, "repeat": repeat, **execute(db, plans[label], expected, model.queries())}
-                    rows.append(row)
-                    stream.write(json.dumps(row) + "\n")
-                    stream.flush()
-                    status(f"  sample {repeat + 1}/{args.samples} {label}: {row['seconds']:.3f}s")
-        summary = {label: seconds_summary(r["seconds"] for r in rows if r["label"] == label) for label in labels}
-        write_json(out / "summary.json", summary)
-        for label, phases in phase_plans.items():
-            phases["execution_label"] = aliases.get(label, label)
-        report = {
-            **optimizer,
-            "preparation_seconds": metadata["preparation_seconds"],
-            "plans": phase_plans,
-            "execution": summary,
-            "execution_scope": metadata["timing_scope"],
-            "phase_scope": "Extraction and Python SQL generation are single observations per plan. "
-            "Optimizer and execution samples are separate; their medians are not a measured end-to-end time.",
+        largest = parsed["shared-slotted"]
+        statistics, records = collect_statistics(db, largest)
+        cardinalities = {
+            (largest.regions[r].origin, largest.regions[r].destination, keys): counts
+            for (r, keys), counts in statistics.items()
         }
-        write_json(out / "pipeline.json", report)
-        print(json.dumps(report, indent=2))
     finally:
         db.close()
+    metadata.update(
+        {
+            "preparation_seconds": time.perf_counter() - start,
+            "cpu_affinity": sorted(os.sched_getaffinity(0)),
+            "backend_sha256": sha256_file(args.backend),
+            "cxx_version": subprocess.check_output(["g++", "--version"], text=True).splitlines()[0],
+            "backend_corrections": ["dependent-output.patch"],
+            "dag_timeout_seconds": args.dag_timeout,
+            "statistics": "exact cardinalities measured outside optimization; not a production estimator",
+            "statistics_graph_sha256": sha256_file(out / "shared-slotted-graph.json"),
+            "timing_scope": (
+                "execution is whole C++ process wall time, including loading and sorting; "
+                "code generation, compilation and checking excluded. "
+                "Upstream computation time excludes loading and sorting"
+            ),
+            "lmfao_commit": model.COMMIT,
+        }
+    )
+    write_json(out / "metadata.json", metadata)
+    write_json(out / "statistics.json", records)
+    plans: dict[str, Any] = {}
+    canonical: dict[str, Path | None] = {"original": None}
+    aliases: dict[str, str] = {}
+    signatures: dict[str, str] = {}
+    for label, g in parsed.items():
+        status(f"Extracting {label}")
+        start = time.perf_counter()
+        stats = {
+            (r, keys): cardinalities[g.regions[r].origin, g.regions[r].destination, keys]
+            for r, keys in {(v.region, v.keys) for v in g.views.values()} | set(g.producers.values())
+        }
+        ex = Extractor(g, stats)
+        selected, info = ex.extract(args.dag_timeout)
+        info["extraction_seconds"] = time.perf_counter() - start
+        plan = ex.plan(selected)
+        path = out / f"{label}-plan.json"
+        write_json(path, plan)
+        info.update(
+            {
+                "source_graph_sha256": sha256_file(out / f"{label}-graph.json"),
+                "views": len(plan["views"]),
+                "aggregates": sum(len(v["aggregates"]) for v in plan["views"]),
+            }
+        )
+        write_json(out / f"{label}-extraction.json", info)
+        plans[label] = info
+        signature = json.dumps(plan, sort_keys=True)
+        if signature in signatures:
+            aliases[label] = signatures[signature]
+        else:
+            signatures[signature] = label
+            canonical[label] = path
+    write_json(out / "identical-plans.json", aliases)
+    builds, validation = {}, {}
+    for label, path in canonical.items():
+        status(f"Generating and compiling {label}")
+        directory = out / label
+        builds[label] = backend.prepare(
+            args.backend, args.data, directory, path, flags=args.cxxflags, jobs=args.jobs, timeout=args.build_timeout
+        )
+        status(f"Checking all 140 outputs for {label}")
+        validation[label] = backend.validate(directory, expected, flags=args.cxxflags, timeout=args.build_timeout)
+        builds[label]["executable_sha256"] = sha256_file(directory / "lmfao")
+        write_json(out / "builds.json", builds)
+        write_json(out / "validation.json", validation)
+    # Validation is the warmup. Timed programs omit output dumping and checking.
+    rows: list[dict[str, Any]] = []
+    labels = list(canonical)
+    with (out / "execution.jsonl").open("w") as stream:
+        for repeat in range(args.samples):
+            order = labels[repeat % len(labels) :] + labels[: repeat % len(labels)]
+            if repeat % 2:
+                order.reverse()
+            for label in order:
+                row = {"label": label, "repeat": repeat, **backend.execute(out / label, repeat, args.timeout)}
+                rows.append(row)
+                stream.write(json.dumps(row) + "\n")
+                stream.flush()
+                status(f"  {label}: {row['process_seconds']:.3f}s")
+    report = {
+        **optimizer,
+        "metadata": metadata,
+        "plans": plans,
+        "builds": builds,
+        "validation": validation,
+        "execution_aliases": aliases,
+        "execution": {
+            label: {
+                phase: seconds_summary(row[phase] for row in rows if row["label"] == label)
+                for phase in ("process_seconds", "computation_seconds")
+            }
+            for label in labels
+        },
+        "phase_scope": (
+            "Optimizer and execution samples are separate. Extraction, statistics, code generation "
+            "and compilation are reported separately; sums of medians are not measured end-to-end times."
+        ),
+    }
+    write_json(out / "pipeline.json", report)
+    print(json.dumps(report, indent=2))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data", type=Path, required=True, help="Pinned upstream data/favorita-small directory")
+    parser.add_argument("--data", type=Path, required=True)
+    parser.add_argument("--backend", type=Path, required=True, help="Pinned multifaq executable with import adapter")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--rounds", "--samples", dest="samples", type=int, default=5, help="Measured executions, not rewrite rounds"
     )
     parser.add_argument("--timeout-sec", "--timeout", dest="timeout", type=int, default=DEFAULT_TIMEOUT_SEC)
-    parser.add_argument(
-        "--report", type=Path, help="Shared append-only optimizer cache; default OUTPUT/optimizer.jsonl"
-    )
+    parser.add_argument("--report", type=Path, help="Append-only optimizer cache; default OUTPUT/optimizer.jsonl")
     add_memory_limit_options(parser, default=DEFAULT_MEMORY_LIMIT_BYTES)
-    parser.add_argument("--dag-timeout", type=float, default=30, help="DAG solver budget; 0 uses the heuristic")
+    parser.add_argument("--dag-timeout", type=float, default=30)
+    parser.add_argument("--build-timeout", type=int, default=900)
+    parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--cxxflags", default=backend.FLAGS)
     parser.add_argument("--cpu", type=int)
     args = parser.parse_args(argv)
     if args.report == Path("-"):
         parser.error("--report requires a filesystem path, not '-'")
-    if args.samples < 1 or args.timeout < 1:
-        parser.error("rounds and timeout must be positive")
-    if not math.isfinite(args.dag_timeout) or args.dag_timeout < 0:
-        parser.error("DAG timeout must be finite and nonnegative")
-    args.output_dir = args.output_dir.resolve()
-    args.data = args.data.resolve()
-    if args.report is not None:
-        args.report = args.report.resolve()
+    if min(args.samples, args.timeout, args.build_timeout, args.jobs) < 1:
+        parser.error("rounds, timeouts and jobs must be positive")
+    if not math.isfinite(args.dag_timeout) or args.dag_timeout <= 0:
+        parser.error("DAG timeout must be finite and positive")
+    for name in ("output_dir", "data", "backend", "report"):
+        if getattr(args, name) is not None:
+            setattr(args, name, getattr(args, name).resolve())
     run(args)
     return 0

@@ -125,7 +125,7 @@ def collect_optimizers(
         "graph construction and rewriting. "
         "Ruleset work is engine-reported exclusive work, not rewrite-loop wall time; "
         "the native reference has no such breakdown. "
-        "Graph collection is a separate rerun, including export; extraction and SQL execution are excluded.",
+        "Graph collection is a separate rerun, including export; extraction and C++ execution are excluded.",
     }
     graphs = {}
     checker = target.binary_path_for("slotted")
