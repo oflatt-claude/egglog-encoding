@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
+from benchmarking.native_memory import native_memory_command
 from benchmarking.targets import sha256_file
 from benchmarking.workloads import resolve_files
-from benchmarks.reproduction.slotted.lmfao import frozen
+from benchmarks.reproduction.slotted.lmfao import frozen, ordinary
 
 from . import model
-from .logical import Extractor, Graph
 from .optimizer import ROOT, export_graph, write_json
 
 
@@ -29,35 +31,46 @@ def run(config: dict[str, Any], source: Path, destination: Path) -> None:
         (out / name).write_text(contents)
     manifest = json.loads(files["manifest.json"])
     file = resolve_files([str(out / manifest["variants"][0]["file"])], ROOT)[0]
+    mode, input_path = "slotted", file.absolute_path
+    if config["treatment"] == "off":
+        mode, input_path = "off", out / "ordinary.egg"
+        input_path.write_text(
+            ordinary(file.absolute_path.read_text(), canonical=config["binding_control"] == "canonical")
+        )
     phases["translation"] = time.perf_counter() - start
     start = time.perf_counter()
-    document = export_graph(
-        Path(config["binary"]),
-        file,
-        config["treatment"],
-        out / "graph.json",
-        manifest["export_names"],
-        config["timeout"],
+    if config["treatment"] == "slotted-ref-multi":
+        mode, input_path = "graph", out / "graph.json"
+        export_graph(
+            Path(config["binary"]),
+            file,
+            config["treatment"],
+            input_path,
+            manifest["export_names"],
+            config["timeout"],
+            config["memory_limit_bytes"],
+        )
+        phases["native_rewriting_and_export"] = time.perf_counter() - start
+    command, env = native_memory_command(
+        [config["extractor"], mode, str(input_path), str(destination), str(config["dag_timeout"])],
+        os.environ,
         config["memory_limit_bytes"],
     )
-    phases["rewriting_and_export"] = time.perf_counter() - start
-    start = time.perf_counter()
-    graph = Graph(document, definition)
-    phases["graph_decoding"] = time.perf_counter() - start
-    start = time.perf_counter()
-    extractor = Extractor(graph)
-    selected, info = extractor.extract(config["dag_timeout"])
-    phases["extraction"] = time.perf_counter() - start
-    start = time.perf_counter()
-    plan = extractor.plan(selected)
-    write_json(destination, plan)
-    phases["plan_serialization"] = time.perf_counter() - start
+    # Inherit the LMFAO process group so its outer timeout also stops extraction.
+    # The Rust executable creates threads only; run() handles its own timeout.
+    with (out / "extract.log").open("wb") as log:
+        subprocess.run(
+            command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=config["timeout"]
+        )
+    info = json.loads((out / "extraction.json").read_text())
+    phases.update(info["phases_seconds"])
+    if mode == "graph":
+        phases.pop("rewriting")
     info.update(
         phases_seconds=phases,
         source_workload_sha256=sha256_file(source),
-        source_graph_sha256=sha256_file(out / "graph.json"),
-        views=len(plan["views"]),
-        aggregates=sum(len(v["aggregates"]) for v in plan["views"]),
+        source_input_sha256=sha256_file(input_path),
+        extractor_sha256=sha256_file(Path(config["extractor"])),
     )
     write_json(out / "extraction.json", info)
 

@@ -36,13 +36,22 @@ def comparison_markdown(report: dict[str, Any]) -> str:
         "roots": ("All six", "Disabled"),
         "shared": ("All six", "Enabled"),
     }
-    for label in ["original", *report["optimizer"]]:
+    controls = report.get("binding_controls", {})
+    quality = ["| Variant / engine | Views | Aggregate columns | Structural cost |", "|---|---:|---:|---:|"]
+    for label in ["original", *report["optimizer"], *controls]:
         if label == "original":
             name, roots, sharing = "Original LMFAO", "Original policy", "Original merging"
+        elif label in controls:
+            name, roots, sharing = f"shared / ordinary {controls[label]}", "All six", "Enabled"
         else:
             variant, _, engine = label.partition("-slotted")
             name = f"{variant} / {'native multipattern' if engine else 'egglog'}"
             roots, sharing = configurations[variant]
+        if summary := report.get("plan_summaries", {}).get(label):
+            quality.append(
+                f"| {name} | {summary['views']} | {summary['aggregate_columns']} | "
+                f"{summary.get('structural_cost', '—')} |"
+            )
         if label not in report["accounted_pipeline"]:
             lines.append(f"| {name} | {roots} | {sharing} | unavailable | — |")
             costs.append(f"| {name} | — | — |")
@@ -79,6 +88,13 @@ def comparison_markdown(report: dict[str, Any]) -> str:
             "For N executions of a reused plan, the estimated cost is optimization/generation + "
             "compilation + N × execution. This is an amortization model, not a measured end-to-end runtime; "
             "state whether execution includes loading and sorting.",
+            "",
+            *quality,
+            "",
+            "Ordinary binding controls use the same shared-view rules, cost function, joint extractor and backend. "
+            "Named retains each source binder as constructor data; canonical uses one name for these closed kernels. "
+            "Their preparation includes translation/canonicalization and extraction. All selected plans pass "
+            "the same output checks; plan.json and plan.txt retain the selected queries and roots.",
         ]
     )
     return "\n".join(lines) + "\n"

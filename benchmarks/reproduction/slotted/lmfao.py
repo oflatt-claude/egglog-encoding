@@ -104,11 +104,12 @@ def input_terms(qs=None, roots=None, definition=model.WORKLOAD):
     return ["Program", balanced("Pair", outputs)], orientations
 
 
-def workload(mode="shared", *, rounds=64, qs=None, definition=model.WORKLOAD):
+def workload(mode="shared", *, rounds=64, qs=None, roots=None, definition=model.WORKLOAD):
     if mode not in ("single-root", "roots", "shared"):
         raise ValueError(mode)
     src = source()
-    roots = [definition.root] if mode == "single-root" else None
+    if roots is None and mode == "single-root":
+        roots = [definition.root]
     inp, facts = input_terms(qs, roots, definition)
     rules = [
         f
@@ -119,7 +120,12 @@ def workload(mode="shared", *, rounds=64, qs=None, definition=model.WORKLOAD):
     forms = [["sort", "U"], *src._ctors, *rules, ["let", "input", inp]]
     forms += [["let", f"schema{i}", fact] for i, fact in enumerate(facts)]
     forms.append(["run", str(rounds)])
-    program = "\n".join(reference.render(f) for f in forms) + "\n"
+    program = (
+        ";;; Generated from benchmarks/lmfao/logical.egg; edit rules there.\n"
+        ";;; Regenerate: uv run --locked python -m benchmarks.reproduction.slotted.lmfao\n"
+        + "\n".join(reference.render(f) for f in forms)
+        + "\n"
+    )
     spec = [f"rounds {rounds}", *ctor_lines(src.lang)]
     spec += ["term " + src.lang.sexpr(src.term(term, ground=True)) for term in [inp, *facts]]
     spec += [line for rule in rules for line in reference.rule_lines(src, src.lang, rule)]
@@ -155,16 +161,36 @@ def frozen(qs=None, modes=("single-root", "roots", "shared"), *, definition=mode
     return files
 
 
+def ordinary(program, *, canonical):
+    """Represent closed kernel binders as ordinary symbols, optionally alpha-normalized."""
+
+    def term(value):
+        if isinstance(value, list):
+            return [term(v) for v in value]
+        if value.startswith("$q"):
+            return symbol("$row" if canonical else value)
+        return value
+
+    forms = reference.parse(program)
+    for form in forms:
+        if form[0] == "constructor" and ":binder" in form:
+            del form[form.index(":binder") :]
+    return (
+        ";;; Generated ordinary representation of closed LMFAO kernels.\n"
+        + "\n".join(reference.render(term(form)) for form in forms)
+        + "\n"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "benchmarks/lmfao/inputs")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--queries", type=int)
     parser.add_argument("--fixtures", action="store_true")
-    parser.add_argument("--graphs", action="store_true")
     args = parser.parse_args()
     qs = model.WORKLOAD.queries[: args.queries] if args.queries else None
-    if args.fixtures or args.graphs:
+    if args.fixtures:
         qs = [
             model.Query(),
             model.Query((), ("unit_sales",)),
@@ -182,25 +208,6 @@ def main():
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(contents)
-
-    if args.graphs:
-        from benchmarking.lmfao.optimizer import export_graph, write_json
-        from benchmarking.targets import sha256_file
-        from benchmarking.workloads import resolve_files
-
-        destination = ROOT / "benchmarking/tests/fixtures/lmfao"
-        manifest = json.loads((args.output / "manifest.json").read_text())
-        records = {}
-        for variant in manifest["variants"]:
-            name = variant["name"]
-            file = resolve_files([str(args.output / variant["file"])], ROOT)[0]
-            path = destination / f"{name}.json"
-            export_graph(
-                ROOT / "target/release/egglog-experimental", file, "slotted", path, manifest["export_names"], 120
-            )
-            path.with_suffix(".egg").unlink()
-            records[name] = {"input_sha256": file.sha256, "graph_sha256": sha256_file(path)}
-        write_json(destination / "manifest.json", records)
 
 
 if __name__ == "__main__":

@@ -32,11 +32,21 @@ fn logical_views_have_the_same_native_and_encoded_counts() {
             .parse_and_run_program(None, &lowered)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         let exported = export::export(&graph).unwrap();
-        let native = run_spec(&fixture.multi, Substitution::Snapshot).unwrap();
+        let native = run_spec(&(fixture.multi + "\ndump\n"), Substitution::Snapshot).unwrap();
         assert_eq!(
             (exported.counts.classes, exported.counts.nodes),
             (native.classes, native.nodes),
             "{name}: validated counts"
+        );
+        let encoded_plan = lmfao_extract::extract_live(&graph, 5.0).unwrap();
+        let native_plan = lmfao_extract::extract_export(
+            &serde_json::to_string(&native.graph.unwrap()).unwrap(),
+            5.0,
+        )
+        .unwrap();
+        assert_eq!(
+            encoded_plan.report["estimated_cost"], native_plan.report["estimated_cost"],
+            "{name}: joint DAG cost"
         );
     }
 }

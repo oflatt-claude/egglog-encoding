@@ -20,12 +20,10 @@ from typing import Any
 import pytest
 
 from benchmarking.lmfao import cli, model
-from benchmarking.lmfao.logical import Extractor, Graph
-from benchmarking.lmfao.optimizer import seconds_summary
-from benchmarking.targets import sha256_file
+from benchmarking.lmfao.optimizer import extractor_path, seconds_summary
+from benchmarking.native_memory import native_memory_command
 
 ROOT = Path(__file__).resolve().parents[2]
-FIXTURES = Path(__file__).with_name("fixtures") / "lmfao"
 QUERIES = [
     model.Query(),
     model.Query((), ("unit_sales",)),
@@ -85,30 +83,45 @@ def evaluate(plan: dict[str, Any], data: dict[str, list[dict[str, Any]]]) -> lis
     return [view(o["view"])[o["aggregate"]] for o in plan["outputs"]]
 
 
-@pytest.mark.parametrize("mode", ["single-root", "roots", "shared"])
-def test_extracted_dag_preserves_original_queries(mode: str) -> None:
-    manifest = json.loads((FIXTURES / "manifest.json").read_text())
-    path = FIXTURES / f"{mode}.json"
-    assert sha256_file(path) == manifest[mode]["graph_sha256"]
-    assert sha256_file(ROOT / f"benchmarks/lmfao/correctness/{mode}.egg") == manifest[mode]["input_sha256"]
-    g = Graph(json.loads(path.read_text()))
-    assert len(g.outputs) == len(QUERIES)
-    for _, root, _ in g.outputs:
-        roots = {g.regions[g.views[n].region].origin for n in g.options[root]}
-        assert roots == ({"Sales"} if mode == "single-root" else set(model.WORKLOAD.relations))
-    assert bool(g.producers) == (mode != "roots")
-    ex = Extractor(g)
-    selected, info = ex.extract(5)
-    assert info["solver"]["optimal"]
-    with pytest.raises(ValueError, match="exported alternative"):
-        ex.score(selected | {g.outputs[0][1]: "invented-node"})
-    choices = [selected]
-    # Exercise every orientation, including roots the cost model did not choose.
-    for root in ["Sales"] if mode == "single-root" else model.WORKLOAD.relations:
-        forced = {c: ns[0] for c, ns in g.options.items()}
-        for _, c, _ in g.outputs:
-            forced[c] = next(n for n in g.options[c] if g.regions[g.views[n].region].origin == root)
-        choices.append(forced)
+@pytest.fixture(scope="module")
+def extractor_binary() -> Path:
+    subprocess.run(["cargo", "build", "--locked", "-p", "lmfao-extract"], cwd=ROOT, check=True)
+    return extractor_path("debug")
+
+
+@pytest.mark.parametrize(
+    ("mode", "binding"),
+    [
+        ("single-root", "slotted"),
+        ("roots", "slotted"),
+        ("shared", "slotted"),
+        ("shared", "named"),
+        ("shared", "canonical"),
+    ],
+)
+def test_extracted_dag_preserves_original_queries(
+    mode: str, binding: str, extractor_binary: Path, tmp_path: Path
+) -> None:
+    from benchmarks.reproduction.slotted.lmfao import ordinary, workload
+
+    plans = []
+    roots = ["Sales"] if mode == "single-root" else list(model.WORKLOAD.relations)
+    for root in [None, *roots]:
+        source = tmp_path / "input.egg"
+        program = workload(mode, qs=QUERIES, roots=None if root is None else [root]).program
+        source.write_text(program if binding == "slotted" else ordinary(program, canonical=binding == "canonical"))
+        destination = tmp_path / "plan.json"
+        command, env = native_memory_command(
+            [str(extractor_binary), "slotted" if binding == "slotted" else "off", str(source), str(destination), "5"],
+            os.environ,
+        )
+        subprocess.run(command, env=env, check=True, timeout=30)
+        plan = json.loads(destination.read_text())
+        assert len(plan["outputs"]) == len(QUERIES)
+        if root is not None:
+            assert {o["root"] for o in plan["outputs"]} == {list(model.WORKLOAD.relations).index(root)}
+        assert json.loads((tmp_path / "extraction.json").read_text())["solver"]["optimal"]
+        plans.append(plan)
     rng = random.Random(804)
     for trial in range(8):
         data = {}
@@ -132,8 +145,17 @@ def test_extracted_dag_preserves_original_queries(mode: str) -> None:
                     weight *= row[f]
                 answer[tuple(row[k] for k in q.groups)] += weight
             expected.append(answer)
-        for selection in choices:
-            assert evaluate(ex.plan(selection), data) == expected
+        for plan in plans:
+            assert evaluate(plan, data) == expected
+
+
+@pytest.mark.parametrize("target", [None, "custom-target", "/tmp/lmfao-custom-target"])
+def test_extractor_path_honors_cargo_target_dir(target: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
+    if target is None:
+        monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
+    else:
+        monkeypatch.setenv("CARGO_TARGET_DIR", target)
+    assert extractor_path("release") == ROOT / (target or "target") / "release/lmfao-extract"
 
 
 def test_fixed_workload_is_original_covariance_configuration() -> None:
@@ -145,8 +167,9 @@ def test_fixed_workload_is_original_covariance_configuration() -> None:
 def test_frozen_inputs_match_upstream_frontend_export() -> None:
     from benchmarks.reproduction.slotted.lmfao import frozen
 
-    for name, contents in frozen().items():
-        assert (model.FIXTURES / "inputs" / name).read_text() == contents
+    for folder, queries in [("inputs", None), ("correctness", QUERIES)]:
+        for name, contents in frozen(qs=queries).items():
+            assert (model.FIXTURES / folder / name).read_text() == contents
 
 
 def test_cli_limits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -158,7 +181,7 @@ def test_cli_limits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     for value in ["0", "-1", "nan", "inf"]:
         with pytest.raises(SystemExit):
             cli.main([*argv, "--dag-timeout", value])
-    for name, value in [("treatment", "slotted"), ("variant", "shared")]:
+    for name, value in [("treatment", "slotted"), ("variant", "shared"), ("binding-control", "named")]:
         with pytest.raises(SystemExit):
             cli.main([*argv, f"--{name}", value, f"--{name}", value])
     assert seconds_summary([]) is None
@@ -201,7 +224,8 @@ def test_cpp_timing_retains_whole_process_and_upstream_scope(tmp_path: Path) -> 
     assert (tmp_path / "run-0.log").read_text().endswith("Data process: 37ms.\n")
 
 
-def test_backend_timeout_stops_optimizer_and_compiler_children(tmp_path: Path) -> None:
+@pytest.mark.parametrize("nested_optimizer", [False, True])
+def test_backend_timeout_stops_optimizer_and_compiler_children(tmp_path: Path, nested_optimizer: bool) -> None:
     from benchmarking.lmfao import backend
 
     script = (
@@ -209,11 +233,42 @@ def test_backend_timeout_stops_optimizer_and_compiler_children(tmp_path: Path) -
         "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
         "Path('child.pid').write_text(str(child.pid)); print('started', flush=True); time.sleep(60)"
     )
+    args = [sys.executable, "-c", script]
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    if nested_optimizer:
+        extractor = tmp_path / "extractor"
+        extractor.write_text(
+            f"#!{sys.executable}\nimport os, time\nfrom pathlib import Path\n"
+            f"Path({str(tmp_path / 'child.pid')!r}).write_text(str(os.getpid()))\ntime.sleep(60)\n"
+        )
+        extractor.chmod(0o755)
+        config = tmp_path / "optimizer.json"
+        config.write_text(
+            json.dumps(
+                dict(
+                    variant="shared",
+                    treatment="slotted",
+                    extractor=str(extractor),
+                    timeout=60,
+                    dag_timeout=5,
+                    memory_limit_bytes=None,
+                )
+            )
+        )
+        args = [
+            sys.executable,
+            "-m",
+            "benchmarking.lmfao.optimize",
+            str(config),
+            str(model.FIXTURES / "workload.json"),
+            str(tmp_path / "plan.json"),
+        ]
     try:
         with pytest.raises(RuntimeError, match="failed; see") as error:
-            backend.command([sys.executable, "-c", script], tmp_path, "command.log", timeout=1)
+            backend.command(args, tmp_path, "command.log", env=env, timeout=2)
         assert isinstance(error.value.__cause__, subprocess.TimeoutExpired)
-        assert (tmp_path / "command.log").read_text() == "started\n"
+        if not nested_optimizer:
+            assert (tmp_path / "command.log").read_text() == "started\n"
         pid = int((tmp_path / "child.pid").read_text())
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
@@ -249,6 +304,7 @@ def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
             "optimizer": {label: {"process_seconds": 999} for label in documents},
             "graph_collection": {label: {"seconds": 999} for label in documents},
             "binary_paths": {"slotted": "/encoded", "slotted-ref-multi": "/native"},
+            "extractor_path": "/lmfao-extract",
         }
 
     class Database:
@@ -272,7 +328,9 @@ def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
         }
         cli.write_json(directory / "plan.json", plan)
         elapsed = 2 if optimizer is None else (27 if optimizer["treatment"] == "slotted" else 29)
-        cli.write_json(directory / "extraction.json", {"phases_seconds": {"rewriting_and_export": elapsed - 2}})
+        cli.write_json(
+            directory / "extraction.json", {"estimated_cost": 3, "phases_seconds": {"rewriting": elapsed - 2}}
+        )
         spend(elapsed)
         return {"generation_seconds": elapsed}
 
@@ -291,6 +349,7 @@ def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
         return {"process_seconds": elapsed, "computation_seconds": elapsed / 2}
 
     monkeypatch.setattr(cli, "collect_optimizers", collect)
+    monkeypatch.setattr(cli, "verify_backend", lambda _: {"lmfao_commit": model.COMMIT})
     monkeypatch.setattr(cli, "load_data", load)
     monkeypatch.setattr(cli, "reference_results", oracle)
     monkeypatch.setattr(cli.backend, "generate", generate)
@@ -301,7 +360,22 @@ def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
     compiler.touch()
     output = tmp_path / "out"
     assert (
-        cli.main(["--data", str(tmp_path), "--backend", str(compiler), "--output-dir", str(output), "--rounds", "2"])
+        cli.main(
+            [
+                "--data",
+                str(tmp_path),
+                "--backend",
+                str(compiler),
+                "--output-dir",
+                str(output),
+                "--rounds",
+                "2",
+                "--binding-control",
+                "named",
+                "--binding-control",
+                "canonical",
+            ]
+        )
         == 0
     )
     report = json.loads(capsys.readouterr().out)
@@ -315,7 +389,12 @@ def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
     assert costs["shared-slotted"]["optimization_and_generation_seconds"] == 27
     assert costs["shared-slotted"]["compilation_seconds"] == 40
     assert report["metadata"]["validation_preparation_seconds"] == 2011
-    assert len(report["builds"]) == 3 and len(report["validation"]) == 2
+    assert len(report["builds"]) == 5 and len(report["validation"]) == 2
+    for binding in ["named", "canonical"]:
+        label = f"shared-ordinary-{binding}"
+        assert costs[label]["execution_label"] == "shared-slotted"
+        assert costs[label]["one_time_phase_sum_seconds"] == 69
+        assert report["binding_controls"][label] == binding
     assert "compilation_seconds" not in report["builds"]["shared-slotted-ref-multi"]
     assert "not a measured end-to-end" in report["phase_scope"]
     comparison = (output / "comparison.md").read_text()

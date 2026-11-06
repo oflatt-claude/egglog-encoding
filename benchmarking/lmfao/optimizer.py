@@ -27,6 +27,12 @@ INPUTS = ROOT / "benchmarks/lmfao/inputs"
 TREATMENTS: tuple[Treatment, ...] = ("slotted", "slotted-ref-multi")
 
 
+def extractor_path(profile: str) -> Path:
+    target = Path(os.environ.get("CARGO_TARGET_DIR", "target"))
+    executable = "lmfao-extract.exe" if os.name == "nt" else "lmfao-extract"
+    return ROOT / target / profile / executable
+
+
 def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n")
 
@@ -117,9 +123,18 @@ def collect_optimizers(
     targets = resolve_requests(requests, store, samples, timeout, False, ROOT, ROOT, console)
     plans = plan_collection(store, requests, targets, samples, timeout, False)
     collect(store, plans, requests, targets, timeout, console)
+    subprocess.run(
+        ["cargo", "build", "--locked", "--release", "-p", "lmfao-extract"],
+        cwd=ROOT,
+        check=True,
+        stdout=sys.stderr,
+    )
+    extractor = extractor_path("release")
     target = targets[request]
     report: dict[str, Any] = {
         "optimizer": {},
+        "extractor_path": str(extractor),
+        "extractor_sha256": sha256_file(extractor),
         "graph_collection": {},
         "graph_comparisons": {},
         "binary_sha256": {mode: target.binary_sha256_for(mode) for mode in treatments},

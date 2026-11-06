@@ -1,3 +1,5 @@
+;;; Generated from benchmarks/lmfao/logical.egg; edit rules there.
+;;; Regenerate: uv run --locked python -m benchmarks.reproduction.slotted.lmfao
 (sort U)
 (constructor Lambda (U U) U :binder 0)
 (constructor Sing (U U) U)

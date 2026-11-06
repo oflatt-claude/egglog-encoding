@@ -16,6 +16,7 @@ from typing import Any
 from benchmarking.config import DEFAULT_MEMORY_LIMIT_BYTES, DEFAULT_TIMEOUT_SEC
 from benchmarking.native_memory import add_memory_limit_options
 from benchmarking.targets import sha256_file
+from benchmarks.reproduction.lmfao.prepare import verify_backend
 
 from . import backend, model
 from .data import load_data, reference_results
@@ -28,6 +29,7 @@ def status(message: str) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
+    provenance = verify_backend(args.backend)
     if args.cpu is not None:
         os.sched_setaffinity(0, {args.cpu})
     out = args.output_dir
@@ -46,6 +48,7 @@ def run(args: argparse.Namespace) -> None:
     metadata: dict[str, Any] = {
         "cpu_affinity": sorted(os.sched_getaffinity(0)),
         "backend_sha256": sha256_file(args.backend),
+        "backend_provenance": provenance,
         "cxx_version": subprocess.check_output(["g++", "--version"], text=True).splitlines()[0],
         "backend_corrections": ["dependent-output.patch"],
         "dag_timeout_seconds": args.dag_timeout,
@@ -57,19 +60,26 @@ def run(args: argparse.Namespace) -> None:
         "lmfao_commit": model.COMMIT,
     }
     plans: dict[str, Any] = {}
+    plan_summaries: dict[str, Any] = {}
     aliases: dict[str, str] = {}
     signatures: dict[str, str] = {}
     builds: dict[str, Any] = {}
     canonical = ["original"]
-    for label in ["original", *documents]:
+    controls = {f"shared-ordinary-{name}": name for name in args.binding_control or []}
+    for label in ["original", *documents, *controls]:
         settings = None
         if label != "original":
-            variant, treatment = label.split("-slotted", 1)
-            treatment = "slotted" + treatment
+            if label in controls:
+                variant, treatment = "shared", "off"
+            else:
+                variant, treatment = label.split("-slotted", 1)
+                treatment = "slotted" + treatment
             settings = {
                 "variant": variant,
                 "treatment": treatment,
-                "binary": optimizer["binary_paths"][treatment],
+                "binary": optimizer["binary_paths"].get(treatment),
+                "extractor": optimizer["extractor_path"],
+                "binding_control": controls.get(label),
                 "timeout": args.timeout,
                 "memory_limit_bytes": args.memory_limit_bytes,
                 "dag_timeout": args.dag_timeout,
@@ -78,10 +88,16 @@ def run(args: argparse.Namespace) -> None:
         directory = out / label
         builds[label] = backend.generate(args.backend, args.data, directory, settings, timeout=args.build_timeout)
         plan = model.read_plan(directory / "plan.json")
+        plan_summaries[label] = {
+            "views": len(plan["views"]),
+            "aggregate_columns": sum(len(v["aggregates"]) for v in plan["views"]),
+            "query_roots": [o["root"] for o in plan["outputs"]],
+        }
         (directory / "plan.txt").write_text(plan_text(plan))
         if label == "original":
             continue
         plans[label] = json.loads((directory / "extraction.json").read_text())
+        plan_summaries[label]["structural_cost"] = plans[label]["estimated_cost"]
         signature = json.dumps(plan, sort_keys=True)
         if signature in signatures:
             aliases[label] = signatures[signature]
@@ -127,8 +143,10 @@ def run(args: argparse.Namespace) -> None:
                 status(f"  {label}: {row['process_seconds']:.3f}s")
     report = {
         **optimizer,
+        "binding_controls": controls,
         "metadata": metadata,
         "plans": plans,
+        "plan_summaries": plan_summaries,
         "builds": builds,
         "validation": validation,
         "execution_aliases": aliases,
@@ -171,6 +189,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Repeat to select variants; default all",
     )
     parser.add_argument(
+        "--binding-control",
+        choices=("named", "canonical"),
+        action="append",
+        help="Also extract and execute ordinary-egglog shared plans with literal or canonical binder names",
+    )
+    parser.add_argument(
         "--rounds", "--samples", dest="samples", type=int, default=5, help="Measured executions, not rewrite rounds"
     )
     parser.add_argument("--timeout-sec", "--timeout", dest="timeout", type=int, default=DEFAULT_TIMEOUT_SEC)
@@ -182,10 +206,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cxxflags", default=backend.FLAGS)
     parser.add_argument("--cpu", type=int)
     args = parser.parse_args(argv)
-    for name in ("treatment", "variant"):
+    for name in ("treatment", "variant", "binding_control"):
         values = getattr(args, name)
         if values and len(values) != len(set(values)):
-            parser.error(f"duplicate --{name} selection")
+            parser.error(f"duplicate --{name.replace('_', '-')} selection")
     if args.report == Path("-"):
         parser.error("--report requires a filesystem path, not '-'")
     if min(args.samples, args.timeout, args.build_timeout, args.jobs) < 1:
