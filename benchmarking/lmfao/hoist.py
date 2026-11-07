@@ -1,10 +1,11 @@
-"""Compare scope-aware hoisting on a kernel from the original Favorita query q20."""
+"""Compare scope-aware hoisting and fusion on original Favorita query kernels."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import statistics
 import struct
 import subprocess
 import sys
@@ -20,12 +21,13 @@ from benchmarking.collection import BenchmarkRequest, collect, plan_collection, 
 from benchmarking.engines import Treatment
 from benchmarking.models import BenchmarkEndpoint, EndpointRequest
 from benchmarking.native_memory import native_memory_command
+from benchmarking.processes import terminate_process_group
 from benchmarking.reports.store import ReportStore, select_observations
 from benchmarking.targets import parse_target, sha256_file
 from benchmarking.workloads import resolve_files
 from benchmarks.reproduction.slotted import reference
 
-from . import backend, model
+from . import backend, fusion, model
 from .data import load_data
 from .optimizer import ROOT, seconds_summary, write_json
 
@@ -85,8 +87,8 @@ def canonical(term: Any, scope: tuple[str, ...] = ()) -> Any:
         return f"$v{len(scope) - 1 - scope[::-1].index(term)}" if term in scope else term
     if term[0] == "Var":
         return canonical(json.loads(term[1]), scope)
-    if term[0] in ("Sum", "ScaleSum"):
-        index = 2 if term[0] == "Sum" else 3
+    if term[0] in fusion.BINDERS:
+        index = fusion.BINDERS[term[0]]
         binder = term[index] if isinstance(term[index], str) else json.loads(term[index][1])
         children = [canonical(t, scope) for t in term[1:index]]
         # Give lexical roles distinct names, including shadowed source binders.
@@ -97,49 +99,45 @@ def canonical(term: Any, scope: tuple[str, ...] = ()) -> Any:
 
 
 def kernel(term: Any) -> str:
-    """Lower the selected sum expression; code generation performs no hoisting."""
-    lines = ["__attribute__((noinline)) double kernel(const Data& data) {"]
-    serial = 0
-
-    def emit(t: Any, scope: dict[str, tuple[str, str]]) -> str:
-        nonlocal serial
-        op = t[0]
-        if op == "Field":
-            var, kind = scope[t[1]]
-            name = json.loads(t[2])
-            if (kind, name) == ("block", "oilprize"):
-                return f"data.blocks[{var}].oil"
-            if (kind, name) == ("sale", "unit_sales"):
-                return f"data.sales[{var}]"
-            raise ValueError("field does not belong to this binding")
-        if op == "Mul":
-            return f"({emit(t[1], scope)} * {emit(t[2], scope)})"
-        if op not in ("Sum", "ScaleSum"):
-            raise ValueError(f"unsupported selected operator: {op}")
-        serial += 1
-        result, index = f"sum{serial}", f"i{serial}"
-        domain, binder, body = t[1], t[-2], t[-1]
-        factor = emit(t[2], scope) if op == "ScaleSum" else None
-        if domain[0] == "Blocks":
-            low, high, kind = "0", "data.blocks.size()", "block"
-        elif domain[0] == "Rows":
-            parent, parent_kind = scope[domain[1]]
-            if parent_kind != "block":
-                raise ValueError("Rows requires an oil binding")
-            low, high, kind = f"data.blocks[{parent}].begin", f"data.blocks[{parent}].end", "sale"
-        else:
-            raise ValueError("unsupported sum domain")
-        lines.append(f"double {result} = 0;")
-        lines.append(f"for (size_t {index} = {low}; {index} < {high}; ++{index}) {{")
-        value = emit(body, {**scope, binder: (index, kind)})
-        lines.extend([f"{result} += {value};", "}"])
-        return f"({factor} * {result})" if factor is not None else result
-
-    answer = emit(term, {})
-    return "\n".join([*lines, f"return {answer};", "}"])
+    return fusion.kernel(term)
 
 
-def prepare_data(directory: Path, destination: Path) -> dict[str, Any]:
+def graph_size(binary: Path, path: Path, *, slotted: bool, timeout: int) -> dict[str, Any]:
+    """Separate source-language nodes from implementation and substitution machinery."""
+    diagnostic = path.with_name(path.stem + "-graph.egg")
+    logical = path.with_name(path.stem + "-logical.json")
+    diagnostic.write_text(path.read_text() + (f"\n(slotted-export {json.dumps(str(logical))})\n" if slotted else ""))
+    command, env = native_memory_command(
+        [
+            str(binary),
+            *(["--slotted"] if slotted else []),
+            "--to-json",
+            "--max-functions",
+            "1000000",
+            "--max-calls-per-function",
+            "1000000",
+            str(diagnostic),
+        ],
+        os.environ,
+    )
+    result = subprocess.run(command, env=env, capture_output=True, text=True, check=True, timeout=timeout)
+    if "Omitted:" in result.stderr or "Truncated:" in result.stderr:
+        raise RuntimeError("graph-size diagnostic was truncated")
+    physical = json.loads(diagnostic.with_suffix(".json").read_text())
+    source = json.loads(logical.read_text()) if slotted else physical
+    operators = {"Sum", "ScaleSum", "Mul", "Field", "Rows", "Blocks", "Lambda", "App", "Pair", "One", "Var"}
+    nodes = list(source["nodes"].values()) if slotted else [n for n in source["nodes"].values() if n["op"] in operators]
+    helpers = [n for n in physical["nodes"].values() if n["op"] in ("Shift", "Subst")]
+    return {
+        "source_nodes": len(nodes),
+        "source_classes": len({n["eclass"] for n in nodes}),
+        "explicit_scope_helper_nodes": len(helpers),
+        "serialized_nodes": len(physical["nodes"]),
+        "serialized_classes": len(physical["class_data"]),
+    }
+
+
+def prepare_data(directory: Path, destination: Path, *, case: str = "hoist") -> dict[str, Any]:
     if sys.byteorder != "little":
         raise ValueError("kernel probe requires a little-endian host")
     start = time.perf_counter()
@@ -147,22 +145,32 @@ def prepare_data(directory: Path, destination: Path) -> dict[str, Any]:
     try:
         # Materialize bags, not aggregate answers: duplicate rows remain duplicate.
         tables = [t for t in model.WORKLOAD.relations if t != "Oil"]
+        fields = ["unit_sales", "transactions"] if case == "fusion" else ["unit_sales"]
+        indices = fusion.query_indices() if case == "fusion" else [20]
         db.execute(
-            "CREATE TEMP TABLE sales_bag AS SELECT date, unit_sales FROM "
+            "CREATE TEMP TABLE sales_bag AS SELECT date, "
+            + ", ".join(fields)
+            + " FROM "
             + " NATURAL JOIN ".join(map(model.ident, tables))
         )
-        expected = db.execute(
-            "SELECT COALESCE(SUM(CAST(unit_sales AS DECIMAL(38,6)) * "
-            "CAST(oilprize AS DECIMAL(38,6))), 0) FROM sales_bag NATURAL JOIN Oil"
-        ).fetchone()
-        assert expected is not None
+        expected = []
+        for i in indices:
+            weight = (
+                " * ".join(f"CAST({model.ident(f)} AS DECIMAL(38,6))" for f in model.WORKLOAD.queries[i].factors) or "1"
+            )
+            answer = db.execute(f"SELECT COALESCE(SUM({weight}), 0) FROM sales_bag NATURAL JOIN Oil").fetchone()
+            assert answer is not None
+            expected.append(str(answer[0]))
         rows = array("d")
         ranges: dict[int, list[int]] = {}
-        db.execute("SELECT date, CAST(unit_sales AS DOUBLE) FROM sales_bag ORDER BY date")
+        db.execute(
+            "SELECT date, " + ", ".join(f"CAST({f} AS DOUBLE)" for f in fields) + " FROM sales_bag ORDER BY date"
+        )
         while batch := db.fetchmany(65536):
-            for date, value in batch:
-                ranges.setdefault(date, [len(rows), len(rows)])[1] = len(rows) + 1
-                rows.append(value)
+            for date, *values in batch:
+                index = len(rows) // len(fields)
+                ranges.setdefault(date, [index, index])[1] = index + 1
+                rows.extend(values)
         blocks = [
             (ranges.get(date, [0, 0]), value)
             for date, value in db.execute(
@@ -170,17 +178,17 @@ def prepare_data(directory: Path, destination: Path) -> dict[str, Any]:
             ).fetchall()
         ]
         with destination.open("wb") as output:
-            output.write(struct.pack("<Q", len(rows)))
+            output.write(struct.pack("<Q", len(rows) // len(fields)))
             rows.tofile(output)
             output.write(struct.pack("<Q", len(blocks)))
             for (low, high), value in blocks:
                 output.write(struct.pack("<QQd", low, high, value))
-        q = model.Query((), ("unit_sales", "oilprize"))
         return {
             **metadata,
-            "query_index": model.WORKLOAD.queries.index(q),
-            "expected": str(expected[0]),
-            "prepared_sales_rows": len(rows),
+            "query_indices": indices,
+            "expected": expected,
+            "sales_width": len(fields),
+            "prepared_sales_rows": len(rows) // len(fields),
             "oil_rows": len(blocks),
             "visited_sales_rows": sum(high - low for (low, high), _ in blocks),
             "preparation_seconds": time.perf_counter() - start,
@@ -197,11 +205,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     console = Console(stderr=True)
     request = parse_target(args.target)
+    modes: dict[str, Treatment] = (
+        {"slotted": "slotted", "debruijn": "off", "slotted-no-fusion": "slotted", "debruijn-no-fusion": "off"}
+        if args.case == "fusion"
+        else MODES
+    )
     requests = []
     files = {}
-    for mode, treatment in MODES.items():
+    for mode, treatment in modes.items():
         path = out / f"{mode}.egg"
-        path.write_text(program(mode))
+        path.write_text(
+            fusion.program(mode.split("-", 1)[0], fuse=not mode.endswith("-no-fusion"))
+            if args.case == "fusion"
+            else program(mode)
+        )
         files[mode] = resolve_files([str(path)], ROOT)[0]
         requests.append(BenchmarkRequest(EndpointRequest(request, treatment), (files[mode],)))
     store = ReportStore(args.report or out / "optimizer.jsonl")
@@ -209,8 +226,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     plans = plan_collection(store, tuple(requests), targets, args.rounds, args.timeout_sec, False)
     collect(store, plans, tuple(requests), targets, args.timeout_sec, console)
     target = targets[request]
-    optimizer, selected = {}, {"unhoisted": canonical(query())}
-    for mode, treatment in MODES.items():
+    optimizer, selected = {}, {"input": canonical(fusion.query() if args.case == "fusion" else query())}
+    for mode, treatment in modes.items():
         endpoint = BenchmarkEndpoint(target.row, target.binary_sha256_for(treatment), treatment)
         observations = select_observations(store, endpoint, files[mode], args.rounds, args.timeout_sec)
         if observations.issue or any(row.record["status"] != "success" for row in observations.rows):
@@ -218,24 +235,53 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         binary = target.binary_path_for(treatment)
         assert binary is not None
         command, env = native_memory_command(
-            [str(binary), *(["--slotted"] if mode == "slotted" else []), str(files[mode].absolute_path)], os.environ
+            [str(binary), *(["--slotted"] if treatment == "slotted" else []), str(files[mode].absolute_path)],
+            os.environ,
         )
-        result = subprocess.run(command, env=env, capture_output=True, text=True, check=True, timeout=args.timeout_sec)
-        selected[mode] = canonical(reference.parse(result.stdout)[0])
+        memory_path = out / f"{mode}-native-rss.txt"
+        # Exec GNU time before forking the engine, so Python's footprint does not set its RSS floor.
+        command = ["/usr/bin/time", "-f", "%M", "-o", str(memory_path), *command]
+        process = subprocess.Popen(
+            command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=args.timeout_sec)
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, command, stdout, stderr)
+        finally:
+            terminate_process_group(process)
+        extracted = reference.parse(stdout)[0]
+        selected[mode] = canonical(fusion.from_debruijn(extracted) if mode.startswith("debruijn") else extracted)
+        rss = [row.record["max_rss_bytes"] for row in observations.rows]
+        assert all(value is not None for value in rss)
+        memory = [value for value in rss if value is not None]
         optimizer[mode] = {
             "process_seconds": seconds_summary(
                 row.record["wall_sec"] for row in observations.rows if row.record["wall_sec"] is not None
             ),
+            "max_rss_bytes": {"median": statistics.median(memory), "min": min(memory), "max": max(memory)},
+            "fresh_exec_max_rss_bytes": int(memory_path.read_text().strip()) * 1024,
+            "graph": graph_size(
+                binary, files[mode].absolute_path, slotted=treatment == "slotted", timeout=args.timeout_sec
+            ),
+            "rewrite_round_budget": 64 if args.case == "fusion" else 16,
             "binary_sha256": sha256_file(binary),
             "input_sha256": files[mode].sha256,
         }
-    console.print("Preparing q20 bags and decimal answer outside kernel timing")
-    data = prepare_data(args.data, out / "bags.bin")
+    console.print("Preparing query bags and decimal answers outside kernel timing")
+    data = prepare_data(args.data, out / "bags.bin", case=args.case)
+    (out / "expected.txt").write_text("\n".join(data["expected"]) + "\n")
     sources: dict[str, str] = {}
     aliases: dict[str, str] = {}
     builds: dict[str, Any] = {}
     for label, term in selected.items():
-        source = (FIXTURES / "kernel.cpp").read_text().replace("// KERNEL", kernel(term))
+        source = (
+            (FIXTURES / "kernel.cpp")
+            .read_text()
+            .replace("// KERNEL", kernel(term))
+            .replace("SALES_WIDTH", str(data["sales_width"]))
+            .replace("OUTPUTS", str(len(data["expected"])))
+        )
         if source in sources:
             aliases[label] = sources[source]
             continue
@@ -248,7 +294,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout_sec,
         )
         builds[label] = {"compilation_seconds": seconds, "binary_sha256": sha256_file(out / label)}
-    execution: dict[str, list[dict[str, float]]] = {label: [] for label in sources.values()}
+    execution: dict[str, list[dict[str, Any]]] = {label: [] for label in sources.values()}
     labels = list(execution)
     for repeat in range(args.rounds):
         order = labels[repeat % len(labels) :] + labels[: repeat % len(labels)]
@@ -256,7 +302,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             order.reverse()
         for label in order:
             result = subprocess.run(
-                [str(out / label), str(out / "bags.bin"), data["expected"], str(args.inner_repeats)],
+                [str(out / label), str(out / "bags.bin"), str(out / "expected.txt"), str(args.inner_repeats)],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -264,6 +310,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
             execution[label].append(json.loads(result.stdout))
     report = {
+        "case": args.case,
         "data": data,
         "optimizer": optimizer,
         "selected": selected,
@@ -273,11 +320,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "inner_repeats": args.inner_repeats,
         "cpu_affinity": sorted(os.sched_getaffinity(0)),
         "execution": {
-            label: seconds_summary(row["seconds_per_query"] for row in samples) for label, samples in execution.items()
+            label: seconds_summary(row["seconds_per_execution"] for row in samples)
+            for label, samples in execution.items()
         },
-        "scope": "q20 kernel over prepared bags, not full LMFAO execution. Bag construction, data loading, "
+        "scope": "Original scalar covariance query kernels over prepared bags, not full LMFAO execution. "
+        "Bag construction, data loading, "
         "independent checking and compilation are excluded from kernel timings. Identical C++ "
-        "shares execution samples. Original LMFAO already implements partial-product hoisting.",
+        "shares execution samples. Original LMFAO already implements hoisting and multi-output fusion.",
     }
     write_json(out / "result.json", report)
     return report
@@ -285,6 +334,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--case", choices=["hoist", "fusion"], default="hoist")
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--target", default=str(ROOT))

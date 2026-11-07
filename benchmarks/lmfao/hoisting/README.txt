@@ -1,55 +1,80 @@
-Scope-aware hoisting probe
-=========================
+Scope-aware covariance kernels
+==============================
 
-This follow-up isolates partial-product hoisting from LMFAO section 3.5 using
-q20 of the pinned Favorita covariance workload: SUM(unit_sales * oilprize).
-It is a kernel experiment, not a replacement for LMFAO's multi-output optimizer
-or an end-to-end LMFAO performance comparison. Upstream already performs this
-kind of hoisting.
+These follow-up probes use the pinned LMFAO Favorita covariance workload.
+They isolate hoisting and multi-output fusion over prepared join bags. They are
+not end-to-end comparisons with LMFAO, which already performs these optimizations.
+
+  ./bench.py lmfao-hoist --case fusion \
+    --data /tmp/LMFAO/data/favorita-small --output-dir /tmp/lmfao-fusion \
+    --rounds 10 --inner-repeats 100 --cpu 16
+
+--case hoist (the default) runs q20: SUM(unit_sales * oilprize). Its source is:
 
   Sum(oil rows, oil,
     Sum(other five relations joined on oil.date, sale,
       oil.oilprize * sale.unit_sales))
 
-The multipattern rule in rules.egg recognizes the sum and its product, requires
-that the factor is independent of the inner binder, and constructs ScaleSum:
-factor * Sum(rows, binder, body). The binder scopes only over body; factor and
-rows remain outside it. This explicit operator fuses scale and reduction. The
-existing minimum-AST-size extractor favors it over separate Sum and Mul nodes;
-we do not claim that AST size predicts general loop runtime.
+rules.egg moves an independent factor outside the inner sum, using ScaleSum
+for factor * Sum(rows, binder, body). Ordinary egglog uses stable names and the
+free-variable analysis in free-vars.egg; this rule does not introduce binders.
 
-Both treatments use that rule. Ordinary egglog represents binder names as data
-and computes free-variable sets inside the egraph using free-vars.egg. Stable
-input names suffice here because hoisting neither introduces binders nor changes
-which binder a surviving variable refers to. Slotted supplies its built-in scope
-machinery. Post-extraction alpha-normalization only compares outputs and names
-C++ locals; it does not affect either search. No optimized target seeds search.
+--case fusion runs all ten ungrouped queries from the pinned frontend export:
+count; sums and squares of unit_sales, oilprize and transactions; and their three
+pairwise products. Each query starts with its own oil and sale binders. Scalar
+frontend functions become lambda applications. fusion.egg adds these rules:
 
-Run from the repository root:
+  App(Lambda(x, body), value) = body[x := value]
+  Pair(Sum(rows, x, a), Sum(rows, y, b))
+    = Sum(rows, z, Pair(a[x := z], b[y := z]))
 
-  ./bench.py lmfao-hoist --data /tmp/LMFAO/data/favorita-small \
-    --output-dir /tmp/lmfao-hoist --rounds 10 --inner-repeats 100 --cpu 16
+The fusion rule matches both sums and their parent Pair in a common slot frame,
+then binds that slot in one sum. Slotted matching aligns their bodies directly;
+beta reduction performs substitution when inlining scalar functions. Hoisting
+remains available. The ordinary control uses de Bruijn indices with explicit
+Shift and Subst rewrites (debruijn.egg), including binder-depth changes during
+hoisting.
+Resolved scope helpers are subsumed to avoid redundant rewriting. Fusion aligns
+its two bodies directly because both use index zero. Both encodings also run
+with fusion disabled to isolate the effect of that rule.
 
---target selects a checkout to build through the shared benchmark runner.
-Optimizer process timings include parsing, graph construction, 16 rewrite rounds
-and extraction. --report selects its append-only JSONL cache; by default it is
-OUTPUT/optimizer.jsonl. Status goes to stderr and result JSON to stdout.
+Both use the existing minimum-AST-size extractor. This favors fewer Sum nodes;
+it is not a general runtime model. No optimized target seeds search. Conversion
+to de Bruijn indices happens before optimization; post-extraction renaming only
+compares outputs and names C++ locals. Unresolved Shift/Subst terms are rejected.
 
-Preparation reads the six original relations with the existing pinned-data
-loader, materializes the five-relation sales bag, and indexes it by date. It
-retains duplicate rows and separate oil rows, including dates with empty bags.
-A decimal aggregate over the joined bags is the independent expected answer.
-This preparation is outside the kernel measurements and is reported separately.
+Preparation loads the six original relations, materializes the five-relation
+sales bag and indexes it by date. Duplicate rows and separate oil rows are
+retained, including oil rows with empty bags. Decimal SQL aggregates independently
+check every output. Code generation emits the selected loops and scalar calls;
+it does not fuse or hoist them. The C++ harness checks answers (rtol=1e-9,
+atol=1e-7), warms up and times repeated executions. Identical C++ shares build
+and execution samples; process order rotates/reverses across samples. Preparation,
+data loading, checking and compilation are outside kernel timing.
 
-Code generation translates the extracted expression directly, without moving
-arithmetic. The C++ harness validates the answer, warms up, and measures repeated
-query executions over those prepared bags. It uses the same compiler flags for
-the unhoisted input and both extracted programs. Identical C++ shares compilation
-and execution samples. Process order rotates/reverses across samples; loading,
-checking, compilation and bag preparation are excluded from kernel timings.
-Floating answers use the existing rtol=1e-9 and atol=1e-7 bounds.
+--target selects the optimizer checkout through the shared benchmark runner.
+--report selects its append-only JSONL cache (default OUTPUT/optimizer.jsonl).
+Optimizer process time includes parsing, graph construction, rewriting and
+extraction, with budgets of 16 rounds for hoist and 64 for fusion. Peak RSS is
+measured on those processes. Cached wait4 RSS can include the launcher's footprint
+at fork. A separate extraction run through GNU /usr/bin/time records
+fresh_exec_max_rss_bytes, with that launcher overhead removed. This is a single
+memory observation, outside the timing samples. Graph export is also untimed:
 
-result.json records selected expressions, optimizer observations, execution
-samples, compilation time, data/binary hashes and timing scope. Its comparison
-can establish whether these two encodings choose different kernels. It cannot
-establish an execution improvement over the original LMFAO backend.
+- source_nodes/classes count source-language constructors and variables, omitting
+  ordinary Shift/Subst helpers and slotted implementation machinery;
+- explicit_scope_helper_nodes counts ordinary Shift/Subst nodes separately,
+  including retained subsumed rows;
+- serialized_nodes/classes include all serialized implementation functions,
+  relations and primitive values, including subsumed rows. Truncated exports
+  fail the diagnostic.
+
+These are encoding comparisons, not graph-isomorphism results. Slotted's built-in
+substitution uses an extracted representative; ordinary Subst rewrites explore
+alternatives explicitly. Their closures can differ. Logical graph compactness
+alone does not establish lower memory use: consult whole-process peak RSS and
+the implementation counts too.
+
+result.json records selected expressions, timings, memory, graph counts, data
+and binary hashes, and execution samples. Status goes to stderr; JSON goes to
+stdout. Results remain generated artifacts, outside the source tree.

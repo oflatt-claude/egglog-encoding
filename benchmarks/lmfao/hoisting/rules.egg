@@ -12,3 +12,9 @@
   :when ((= total (Sum rows $row body))
          (= body (Mul factor rest))
          (not-free $row factor)))
+
+(rewrite total (ScaleSum rows factor $row rest)
+  :name "hoist-independent-right-factor"
+  :when ((= total (Sum rows $row body))
+         (= body (Mul rest factor))
+         (not-free $row factor)))

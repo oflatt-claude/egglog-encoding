@@ -1,0 +1,16 @@
+;;; Extensions to rules.egg: inline frontend scalar functions and fuse outputs.
+(constructor Lambda (E E) E :binder 0)
+(constructor App (E E) E)
+(constructor Pair (E E) E)
+(constructor One () E)
+
+(rewrite (App (Lambda $arg body) value) (subst body $arg value)
+  :name "inline-scalar-function")
+
+;;; Match both bodies in the same slot frame, then bind that slot in one sum.
+(rewrite pair
+  (Sum rows $row (Pair a b))
+  :name "fuse-sums"
+  :when ((= pair (Pair left right))
+         (= left (Sum rows $row a))
+         (= right (Sum rows $row b))))
