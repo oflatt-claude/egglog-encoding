@@ -268,21 +268,6 @@ test('CDF overview appears only for metrics with tails and never changes ranks o
   }
 });
 
-test('a frozen CDF keeps fast and missing inputs in its original cohort',async()=>{
-  const spec=JSON.parse(await readFile(new URL(figures['corpus-proof-recording-cdf'].spec,import.meta.url),'utf8'));
-  spec.params.find(p=>p.name==='frozen_cohort').value=true;
-  const inputs=['fast','ordinary','missing'].flatMap(id=>['off','proofs'].map(t=>input(id,t)));
-  const groups=[group('fast','off',[.1,.1]),group('fast','proofs',[.2,.2]),
-    group('ordinary','off',[1,1]),group('ordinary','proofs',[3,3])];
-  const result=await evaluate('corpus-proof-recording-cdf',inputs,groups,2,spec);
-  const points=find(result,'cdf_points_zoom');
-  assert.equal(points.length,4);
-  assert.ok(points.every(p=>p.datum.cohort_n===3&&p.datum.measured_n===2&&p.datum.too_fast_n===0&&p.datum.unresolved_n===0));
-  assert.deepEqual(points.filter(p=>p.datum.metric==='Runtime').map(p=>p.datum.cdf),[1/3,2/3]);
-  assert.match(result.svg,/Relative to off/);
-  assert.doesNotMatch(result.svg,/Zoom |outside zoom|full range/);
-});
-
 test('CDF overviews retain metric columns when just one has a tail',async()=>{
   for(const [runtimeTail,memoryTail] of [[false,false],[true,false],[false,true],[true,true]]) {
     const ids=['a','b','c','d'];

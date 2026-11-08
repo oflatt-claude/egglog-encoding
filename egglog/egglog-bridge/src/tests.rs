@@ -68,7 +68,7 @@ fn fresh_view_interning_reuses_pending_and_committed_rows() {
     for lowered in [false, true] {
         let mut egraph = EGraph::default();
         let int = egraph.base_values_mut().register_type::<i64>();
-        let intern = egraph.register_fresh_set_if_empty("view".into(), 1, 2);
+        let intern = egraph.register_view_intern("view".into(), 1, 2);
         let view = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Base(int), ColumnTy::Id, ColumnTy::Base(int)],
             n_vals: 2,

@@ -2,7 +2,7 @@ use std::hash::Hasher;
 
 use crate::Context;
 use crate::proofs::proof_container_rebuild::register_container_rebuild_from_spec;
-use crate::proofs::proof_fresh::{ExtractFunctionRoot, register_mint, register_set_if_empty};
+use crate::proofs::proof_fresh::{ExtractFunctionRoot, register_mint, register_view_primitives};
 use crate::{
     core::{CoreActionContext, GenericActionsExt, ResolvedCall},
     *,
@@ -770,7 +770,7 @@ impl EGraph {
                             None,
                         );
                     }
-                    register_set_if_empty(self, &name, input, outputs);
+                    register_view_primitives(self, &name, input, outputs);
                 }
                 // Term-node mint primitives must also be available during replay.
                 if resolved.role.is_term_node()

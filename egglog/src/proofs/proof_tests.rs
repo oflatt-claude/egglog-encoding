@@ -386,12 +386,15 @@ mod tests {
             (run 1)
             (check (Holder (vec-of (Num 0))))
         "#;
-        for mut egraph in [
-            EGraph::default(),
-            EGraph::new_with_term_encoding(),
-            EGraph::new_with_proofs().with_proof_testing(),
-        ] {
-            egraph.parse_and_run_program(None, source).unwrap();
+        for threads in [1, 4] {
+            for mut egraph in [
+                EGraph::default(),
+                EGraph::new_with_term_encoding(),
+                EGraph::new_with_proofs().with_proof_testing(),
+            ] {
+                egraph.set_num_threads(threads);
+                egraph.parse_and_run_program(None, source).unwrap();
+            }
         }
     }
 

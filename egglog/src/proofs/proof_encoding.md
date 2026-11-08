@@ -601,7 +601,7 @@ application is its own action and every operand is a variable:
 Now walk it bottom-up, carrying at each level a proof from the id the head built
 to the canonical id the view interned. That proof is what lets the *next* level
 up use canonical children while still concluding something about the term as
-written. `set-if-empty` below is the primitive that returns a view's existing
+written. The schematic `set-if-empty` operation below returns a view's existing
 representative, or installs the given id and proof when the shape is new.
 
 **`(let d (Add b c))`.** Both children are body variables, already canonical, so
@@ -752,10 +752,10 @@ the walk numbers `(Num 1)` at columns 0–2, `(Num 2)` at 3–5, and the guest
 
 ```text
 (let num1_pf1   (mint-@Rule_1! rule_name prems 1))       ;; (Num 1) over canonical children
-(let num1_e     (set-if-empty-Num! 1 …))
+(let num1_e     (intern-Num! 1 …))
 (let num1_bridge (view-proof-Num 1 …))
 (let num2_pf1   (mint-@RuleLink! num1_pf1 num1_bridge 4))
-(let num2_e     (set-if-empty-Num! 2 …))
+(let num2_e     (intern-Num! 2 …))
 (let num2_bridge (view-proof-Num 2 …))
 (let add_view   (mint-@RuleLink! num2_pf1 num2_bridge 8))
 (set (Add num1_e num2_e) (values r add_view))

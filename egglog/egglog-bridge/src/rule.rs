@@ -427,16 +427,13 @@ impl RuleBuilder<'_> {
             }));
             return res;
         }
-        // `set-if-empty` is exactly a lookup-or-insert on the view.
-        if let Some(plan) = self.egraph.set_if_empty_plan(func, args.len()) {
+        // Interning is exactly a lookup-or-insert on the view.
+        if let Some(plan) = self.egraph.intern_plan(func, args.len()) {
             self.query.add_rule.push(Box::new(move |inner, rb| {
                 let all = inner.convert_all(&args);
                 let (keys, vals) = all.split_at(plan.n_keys);
-                let mut default: Vec<WriteVal> =
-                    vals.iter().copied().map(WriteVal::QueryEntry).collect();
-                if let Some(counter) = plan.fresh_counter {
-                    default.insert(0, WriteVal::IncCounter(counter));
-                }
+                let mut default = vec![WriteVal::IncCounter(plan.counter)];
+                default.extend(vals.iter().copied().map(WriteVal::QueryEntry));
                 default.push(WriteVal::QueryEntry(inner.next_ts()));
                 if plan.subsume {
                     default.push(WriteVal::QueryEntry(DstVar::Const(NOT_SUBSUMED)));

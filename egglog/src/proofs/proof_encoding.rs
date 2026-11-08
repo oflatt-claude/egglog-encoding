@@ -1795,14 +1795,10 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Read a global's value in an action or merge body. Primitive globals use
-    /// the function emitted by `remove_globals`. For an eq-sort global, `set-if-empty` on
-    /// its FD view `(key) -> (val, proof)` returns the
-    /// stored e-class (a global is `set` before it is used, so the fresh fallback is
-    /// dead code that only fires on a malformed program). The value read is already
-    /// the view's canonical e-class, so no natural/deduped connector is recorded.
-    ///
-    /// The signature requires the fallback pair, so both are bare fresh ids: no
-    /// row says anything about either, since nothing ever reads them.
+    /// the function emitted by `remove_globals`. Eq-sort globals use the same
+    /// view interner as constructors, retaining prediction-aware reads in merge
+    /// bodies. A bound global returns its stored e-class without inserting.
+    /// The fallback proof is a bare id: no row says anything about it.
     fn lookup_global(&mut self, func: &FuncType, keys: &[String], res: &mut Vec<String>) -> String {
         let name = &func.name;
         let keys = ListDisplay(keys, " ");
@@ -1812,9 +1808,7 @@ impl<'a> ProofInstrumentor<'a> {
             return value;
         }
         let view = name.to_string();
-        let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
-        let view_sort = self.term_sort(name);
-        let fresh_e = self.fresh_id(res, &view_sort);
+        let intern = format!("intern-{view}!");
         let fallback_proof = if self.proofs_enabled() {
             let proof_sort = self.proof_sort();
             self.fresh_id(res, &proof_sort)
@@ -1822,9 +1816,7 @@ impl<'a> ProofInstrumentor<'a> {
             "()".to_string()
         };
         let vx = self.fresh_var();
-        res.push(format!(
-            "(let {vx} ({set_if_empty} {keys} {fresh_e} {fallback_proof}))"
-        ));
+        res.push(format!("(let {vx} ({intern} {keys} {fallback_proof}))"));
         vx
     }
 
@@ -2821,7 +2813,7 @@ impl<'a> ProofInstrumentor<'a> {
 /// Declarations (sorts, functions, rules) and `fail` run no persistent actions.
 /// A `set` (including a
 /// global-let's `(set (g) e)`), a `let`, or a top-level expression over
-/// non-container sorts builds and dedups terms via `set-if-empty` without
+/// non-container sorts builds and dedups terms via `intern` without
 /// merging e-classes or deferring work, so no maintenance rebuild is needed
 /// after it — this is what stops N global-let `set`s from each triggering a
 /// rebuild (quadratic). A block skips when all of its actions do.
