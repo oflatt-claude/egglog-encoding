@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile, readdir} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import {existsSync, realpathSync} from 'node:fs';
 import {delimiter, join} from 'node:path';
@@ -231,7 +231,12 @@ test('complete SDQL ratios pair the native multipattern fork with Egglog',async(
 
 test('complete multipattern figure retains the selected original SDQL rows',async()=>{
   const name='slotted-multipattern-runtime';
-  const paths=figures[name].files.map(path=>path.replace(/^\.\.\//,''));
+  const directory='../benchmarks/slotted/inputs/sdql/';
+  assert.equal(figures[name].files[0],directory+'*.egg');
+  const excluded=new Set(figures[name].files.slice(1).map(pattern=>pattern.slice(1)));
+  const paths=(await readdir(new URL(directory,import.meta.url)))
+    .filter(file=>file.endsWith('.egg')&&!excluded.has(directory+file)).sort()
+    .map(file=>directory.slice(3)+file);
   assert.equal(paths.length,8);
   assert.ok(paths.every(path=>path.includes('/inputs/sdql/')&&!['batax_2nd-44rules.egg','mttkrp_2nd-44rules.egg'].includes(path.split('/').at(-1))));
   const inputs=paths.flatMap(path=>figures[name].treatments.map(t=>input(path+'-'+t,t,{logical_id:path,label:path})));

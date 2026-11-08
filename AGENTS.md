@@ -163,6 +163,9 @@ or modify the JSONL.
 - `./bench.py figures` collects and renders the seven paper PDFs through the shared
   benchmark phases. `--config` selects a flat JSON catalog with global `rounds`
   and optional `timeout_sec` override, and direct per-figure `spec`, `files`, `treatments`, and optional correctness-only `checks`.
+  File selectors are ordered catalog-relative globs: `!pattern` removes current
+  matches, and later positives can re-add them. Both forms must match files;
+  final selections must be nonempty. Count resolved workloads, not selector tokens.
 - Resource defaults for all entrypoints come from `benchmarking/config.py`.
   The Rust paper parent reads them once through stdlib-only `python3`; execution
   and worker scheduling stay in Rust. The catalog requests ten observations.

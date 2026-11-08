@@ -52,8 +52,9 @@ The two Slotted figures share the authored `eval/slotted-runtime.vl.json`
 specification. `slotted-runtime` keeps its ten original SDQL inputs, restricted
 matcher and syntactic native substitution baseline. The complete comparison uses
 `slotted` and `slotted-ref-multi`, with snapshot substitution in both systems.
-Its catalog lists retained original SDQL files explicitly, in their original
-order. If either endpoint times out or exceeds the memory limit, the entire pair
+Its catalog uses the same SDQL glob as the baseline, followed by explicit
+`!` selectors for BATAX's and MTTKRP's second phases. If either endpoint times out
+or exceeds the memory limit, the entire pair
 is omitted from this graph and the failing side and bound are reported in the text.
 BATAX's second phase is omitted: its encoded run hit the 16 GiB allocation guard
 and its native reference run timed out at 600 seconds. MTTKRP's second phase is also omitted
@@ -90,8 +91,14 @@ No names selects every figure; names select a subset. An alternate catalog is
 selected with `--config`, not a positional path. Help lists that catalog without
 expanding files, reading the observation cache or building engines. Spec and
 workload paths resolve relative to the catalog. Globs expand in sorted order;
-recursive `**` is supported. Overlapping patterns retain each path once.
-Different paths with identical bytes remain a duplicate-workload error.
+recursive `**` is supported. Process `files` selectors in order: a positive glob
+adds its matches once, while `!pattern` removes matching paths currently selected.
+A later positive glob can re-add a removed path at the end. Every positive or
+negative glob must match filesystem files; matching only unselected files is a
+valid removal with no effect. Directories, unmatched patterns and an empty final
+selection are errors. This is ordered glob selection, not gitignore syntax.
+Workload counts use the resolved files, not the number of selector tokens.
+Different retained paths with identical bytes remain a duplicate-workload error.
 
 Each figure requests the product of its own files and treatments. Collection
 merges identical requests across figures into one plan and one progress display.

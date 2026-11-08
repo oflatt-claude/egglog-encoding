@@ -70,7 +70,11 @@ def test_complete_multipattern_catalog_selects_original_sdql_pairs_without_resou
     assert len(nested.files) == 10
     assert complete.figure.treatments == ("slotted-ref-multi", "slotted")
     assert complete.figure.spec == nested.figure.spec and complete.spec is nested.spec
-    assert all("*" not in pattern for pattern in complete.figure.patterns)
+    assert complete.figure.patterns == (
+        nested.figure.patterns[0],
+        "!../benchmarks/slotted/inputs/sdql/batax_2nd-44rules.egg",
+        "!../benchmarks/slotted/inputs/sdql/mttkrp_2nd-44rules.egg",
+    )
     assert len(complete.files) == 8
     assert complete.files == tuple(
         file
@@ -237,6 +241,67 @@ def test_globs_are_relative_sorted_and_overlaps_do_not_duplicate(tmp_path: Path)
     assert all(f.display_path.startswith(tmp_path.name + "/") for f in result[0].files)
     (tmp_path / "copy.egg").write_bytes((tmp_path / "a.egg").read_bytes())
     with pytest.raises(ValueError, match="identical"):
+        figures.resolve_figures(figures.load_config(path), ["runtime"], tmp_path)
+
+
+@pytest.mark.parametrize(
+    "patterns, expected",
+    [
+        (["*.egg", "!b.egg"], ["a.egg", "z.egg"]),
+        (["!b.egg", "*.egg"], ["a.egg", "b.egg", "z.egg"]),
+        (["*.egg", "!b.egg", "b.egg"], ["a.egg", "z.egg", "b.egg"]),
+        (["*.egg", "!*.egg", "z.egg"], ["z.egg"]),
+    ],
+)
+def test_negative_globs_remove_current_matches_and_allow_ordered_readdition(
+    tmp_path: Path, patterns: list[str], expected: list[str]
+) -> None:
+    path = catalog_fixture(tmp_path)
+    for number, name in enumerate(("z.egg", "a.egg", "b.egg")):
+        (tmp_path / name).write_text(f"(check (= {number} {number}))")
+    data = json.loads(path.read_text())
+    data["figures"]["runtime"]["files"] = patterns
+    path.write_text(json.dumps(data))
+    (resolved,) = figures.resolve_figures(figures.load_config(path), ["runtime"], tmp_path.parent)
+    assert [file.absolute_path.name for file in resolved.files] == expected
+    assert all(file.display_path.startswith(tmp_path.name + "/") for file in resolved.files)
+
+
+def test_negative_globs_skip_validation_of_removed_inputs_until_readded(tmp_path: Path) -> None:
+    path = catalog_fixture(tmp_path)
+    (tmp_path / "valid.egg").write_text("(check (= 1 1))")
+    (tmp_path / "invalid.egg").write_text('(include "missing.egg")')
+    data = json.loads(path.read_text())
+    patterns = ["*.egg", "!invalid.egg"]
+    data["figures"]["runtime"]["files"] = patterns
+    path.write_text(json.dumps(data))
+    (resolved,) = figures.resolve_figures(figures.load_config(path), ["runtime"], tmp_path)
+    assert [file.absolute_path.name for file in resolved.files] == ["valid.egg"]
+    patterns.append("invalid.egg")
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="self-contained"):
+        figures.resolve_figures(figures.load_config(path), ["runtime"], tmp_path)
+
+
+@pytest.mark.parametrize(
+    "patterns, message",
+    [
+        (["a.egg", "!missing.egg"], "matched nothing"),
+        (["a.egg", "!directory"], "not a workload file"),
+        (["a.egg", "!a.egg"], "selected no workloads"),
+        (["!a.egg"], "selected no workloads"),
+    ],
+)
+def test_negative_globs_reject_invalid_matches_and_empty_selections(
+    tmp_path: Path, patterns: list[str], message: str
+) -> None:
+    path = catalog_fixture(tmp_path)
+    (tmp_path / "a.egg").write_text("(check (= 1 1))")
+    (tmp_path / "directory").mkdir()
+    data = json.loads(path.read_text())
+    data["figures"]["runtime"]["files"] = patterns
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match=message):
         figures.resolve_figures(figures.load_config(path), ["runtime"], tmp_path)
 
 
