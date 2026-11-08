@@ -1,0 +1,45 @@
+{
+  "decision": {
+    "source": "User instruction in this conversation, after the facts review",
+    "status": "deferred and outside this performance goal",
+    "reason": "The earlier conversion was too large a semantic change, and an acceptable strongly typed Egglog authoring API in Rust was not ready.",
+    "allowed": "Profile and optimize the accepted source-generation, parser/typechecker, proof encoding and runtime contracts with small changes.",
+    "excluded": "Do not revive the encoder-wide typed emission conversion, replace generated source with a new typed IR/binder, or develop/adopt a strongly typed Rust authoring API in this goal."
+  },
+  "pull_request": {
+    "number": 69,
+    "url": "https://github.com/saulshanabrook/egglog-encoding/pull/69",
+    "title": "Emit proof encodings directly as typed commands",
+    "state": "closed",
+    "merged": false,
+    "head_sha": "0caddc3723199fcdb905fc1d8d41449308a6db89",
+    "changed_files": 26,
+    "additions": 15876,
+    "deletions": 3435,
+    "scope": "Generated declarations/actions/rules/rebuilds/schedules/checks/extraction/I/O/push/pop/nested Fail plus shared registration, call generations and global handling."
+  },
+  "local_evidence": [
+    {
+      "path": "/Users/saul/p/wt/egglog-encoding/typed-emission-revival/PR69-PERFORMANCE-EVIDENCE.md",
+      "role": "Historical performance/evidence disposition; its old workloads and timing caveats are not current acceptance measurements."
+    },
+    {
+      "path": "/Users/saul/p/wt/egglog-encoding/typed-emission-timer-control",
+      "role": "Historical observer-free control."
+    },
+    {
+      "path": "/Users/saul/p/wt/egglog-encoding/typed-emission-timer-split",
+      "role": "Historical timer-instrumented experiment; instrumentation evidence is separate from speedup evidence."
+    },
+    {
+      "repository": "/Users/saul/p/egglog-encoding",
+      "commit": "a54c798f",
+      "file": "typed-emission-evidence.md",
+      "role": "Earlier NO-GO binder spike removed its migration machinery; its performance-gate outcome is distinct from the user's semantic/API deferral."
+    },
+    {
+      "path": "/Users/saul/p/wt/egglog-experimental/typed-rust-api/docs/typed-rust-api-rfc.md",
+      "role": "Separate local authoring-API draft marked implemented/under review; not a basis to reopen this workstream."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "selected_replays": 127,
+  "metric_points_compared": 254,
+  "statistics_unchanged": true,
+  "old_overview_x": 0,
+  "old_metric_detail_x": 292,
+  "new_overview_x": 284,
+  "new_metric_detail_x": 284,
+  "figure_tests": "23 passed",
+  "pdf_visually_inspected": true,
+  "pdf_fonts_embedded": true,
+  "new_benchmark_observations": 0
+}

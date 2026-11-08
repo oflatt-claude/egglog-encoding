@@ -1,0 +1,26 @@
+{
+  "stage": "interview",
+  "title": "Proof recording below 5×",
+  "goalSlug": "proof-recording-under-5x",
+  "questions": [
+    {
+      "id": "benchmark-scope",
+      "prompt": "Which examples must have both recording/off runtime and peak-RSS ratios below 5×?",
+      "description": "The figure plots 127 of the 486 saved replays: only those with an off mean runtime of at least 0.2 seconds. Two of the seven Luminal captures are plotted. This choice sets the final acceptance scope; iteration will focus on the outliers either way.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "The 127 plotted replays, keeping the figure's existing baseline-only selection and using other saved replays for focused regression checks.",
+      "recommendedOptionIds": ["figure-cohort"],
+      "options": [
+        {
+          "id": "figure-cohort",
+          "label": "The 127 plotted replays"
+        },
+        {
+          "id": "saved-corpus",
+          "label": "All 486 saved replays, including the short ones"
+        }
+      ],
+      "required": true
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+- In the recording figure, each overview appears beneath the metric it describes; a memory-only overview stays beneath Peak RSS.
+- The performance target covers the 127 replays selected in the current paper figure. Their input identities and semantic work remain unchanged, and no replay is dropped to meet the target.
+- For every in-scope replay, both recording/off whole-process runtime and peak-RSS ratios of arithmetic means are below 5×. Each candidate uses its own off and proofs measurements; proofs includes congruence and recording, excluding extraction and checking.
+- Before custom performance changes, retain measured phase/profile evidence for Luminal gemma and gemma4_moe runtime and DialEgg timer-nmm-80 memory.
+- Evaluate Eli’s sequence-backed container stack (PRs 974–985, pinned tip) in an isolated comparison before trying custom optimizations. Record its effect or a concrete integration blocker; distinguish already merged packed-join work.
+- Retain only small, evidence-backed proof-encoding or egglog-engine changes that improve the target costs without deliberately slowing off, reducing the workload, or hiding unfavorable results.
+- Use short timing runs and focused correctness checks during iteration. Do not run the full validation suite after every experiment.
+- Accepted changes preserve relevant program behavior and pass focused regression/proof checks for the affected encoding or engine path.
+- Final acceptance uses ten fresh successful off and proofs observations per in-scope replay, with per-replay runtime/RSS means, 95% ratio intervals, and recorded source/binary/input identities.
+- Once the 5× target is met, the recording figure shows one full-range panel per metric without zoom/overview panels. Any remaining out-of-range or missing result stays explicit and the performance goal remains incomplete.
+- Keep reproducible commands, profiles, raw timings, and a short record of accepted and rejected experiments; profiler samples are diagnostic evidence, separate from benchmark timings.
+- The earlier encoder-wide typed generation rewrite and a strongly typed Rust authoring API remain deferred. This goal optimizes the accepted source-generation/typechecking and runtime pipeline without introducing a new typed IR/binder or reviving PR #69.
