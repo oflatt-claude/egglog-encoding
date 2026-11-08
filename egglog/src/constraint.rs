@@ -2,13 +2,10 @@ use crate::{
     core::{Atom, CoreAction, GenericCoreActions, GenericCoreRule, HeadOrEq, Query, StringOrEq},
     *,
 };
-use std::{cmp, rc::Rc};
-// Use immutable hashmap for performance
-// cloning assignments is common and O(1) with immutable hashmap
 use egglog_ast::generic_ast::{GenericAction, GenericActions, GenericExpr, GenericFact};
 use egglog_ast::span::Span;
-use im_rc::HashMap;
-use std::{fmt::Debug, iter::once, mem::swap};
+use hashbrown::HashMap;
+use std::{cmp, fmt::Debug, iter::once, mem::swap, rc::Rc};
 
 /// Represents constraints that are logically impossible to satisfy.
 /// These are used to signal type errors during constraint solving.
@@ -482,7 +479,7 @@ impl<Var, Value> Default for Problem<Var, Value> {
 
 /// A mapping from variables to their assigned values.
 /// This is the result of constraint solving.
-/// Uses an immutable HashMap for efficient cloning during constraint solving.
+/// Overload branches clone this map to isolate their tentative assignments.
 #[derive(Clone)]
 pub struct Assignment<Var, Value>(pub HashMap<Var, Value, crate::util::BuildHasher>);
 
