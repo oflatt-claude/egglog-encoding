@@ -1735,6 +1735,8 @@ impl<'a> ProofInstrumentor<'a> {
     fn fresh_id(&mut self, stmts: &mut Vec<String>, sort: &str) -> String {
         let v = self.fresh_var();
         self.generated_fresh_ids.insert(v.clone());
+        // The generic `get-fresh!` takes the target sort as a string literal so it
+        // types its output without per-sort primitives (its runtime ignores the arg).
         let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
         stmts.push(format!("(let {v} ({get_fresh} \"{sort}\"))"));
         v
@@ -1960,8 +1962,10 @@ impl<'a> ProofInstrumentor<'a> {
         let view = func_type.name.to_string();
         let intern = format!("intern-{view}!");
 
-        // `fv_nat` stays unseeded: interning writes a separate canonical id to
-        // the view, so its congruence merge cannot move the natural node.
+        // `fv_nat` stays *unseeded* — only the interned id is written to the view — so the
+        // view's congruence `:merge` can never move it, and the proof of the shape the
+        // head wrote stays stated over the ids the head built. The interned id is a separate
+        // node even when no child changed.
         let Natural {
             dedup_args,
             fv_nat,

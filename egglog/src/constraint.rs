@@ -2,9 +2,13 @@ use crate::{
     core::{Atom, CoreAction, GenericCoreActions, GenericCoreRule, HeadOrEq, Query, StringOrEq},
     *,
 };
+use std::{cell::OnceCell, cmp, rc::Rc};
+// Use immutable hashmap for performance
+// cloning assignments is common and O(1) with immutable hashmap
 use egglog_ast::generic_ast::{GenericAction, GenericActions, GenericExpr, GenericFact};
 use egglog_ast::span::Span;
-use std::{cell::OnceCell, cmp, fmt::Debug, iter::once, mem::swap, rc::Rc};
+use im_rc::HashMap;
+use std::{fmt::Debug, iter::once, mem::swap};
 
 /// Represents constraints that are logically impossible to satisfy.
 /// These are used to signal type errors during constraint solving.
@@ -485,7 +489,7 @@ pub struct Assignment<Var, Value>(pub AssignmentMap<Var, Value>);
 /// branch clones the assignment. Promotion changes storage, not bindings.
 pub struct AssignmentMap<Var, Value> {
     flat: hashbrown::HashMap<Var, Value, crate::util::BuildHasher>,
-    snapshot: OnceCell<im_rc::HashMap<Var, Value, crate::util::BuildHasher>>,
+    snapshot: OnceCell<HashMap<Var, Value, crate::util::BuildHasher>>,
 }
 
 impl<Var, Value> Default for AssignmentMap<Var, Value> {

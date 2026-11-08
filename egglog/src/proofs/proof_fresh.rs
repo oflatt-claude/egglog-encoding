@@ -236,8 +236,9 @@ impl Primitive for ViewProof {
 /// (rather than a per-sort `@`-name a name-sanitizer would mangle on re-parse).
 pub(crate) const GET_FRESH_PRIM_NAME: &str = "get-fresh!";
 
-/// Register the generic mint from the shared id counter. It remains available
-/// when an already-desugared program is replayed in a plain e-graph.
+/// Register the generic `get-fresh!` primitive, minting from the e-graph's id
+/// counter. It is available both during encoding and when the desugared program
+/// is re-parsed.
 pub(crate) fn register_get_fresh(eg: &mut EGraph) {
     eg.add_internal_primitive(GetFresh, WriteState::valid_contexts(), |egraph, _| {
         egraph.register_fresh_id()

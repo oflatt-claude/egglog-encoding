@@ -137,8 +137,8 @@ def figure_results(
                     "candidate_n": by_treatment[candidate]["sample_n"],
                 }
             if name.startswith("corpus-"):
-                # A frozen cohort keeps all explicitly selected inputs. Otherwise
-                # membership uses baseline wall time, independently of RSS.
+                # Unless frozen, cohort membership uses baseline wall time for both metrics,
+                # independently of missing RSS. Exclusions remain in coverage.
                 baseline_row = by_treatment[baseline]
                 wall = [
                     r["wall_sec"]
