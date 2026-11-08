@@ -325,18 +325,22 @@ def subst (abbrevs : List Expr) (order : List Var) (σ : Env) : String :=
     ++ "]"
 
 /-- What an elided rendering leaves out. `shared`: the definitions of the shared subproofs,
-whose names remain. `existence`: premises that prove an initial term exists (a rule node
-without premises and with a reflexive claim), shown as `…`. `relations`: proofs that a
-non-arithmetic fact holds, shown as `rule_i(c, …)`. -/
+whose names remain. `existence`: premises that only prove a term exists (a rule node with a
+reflexive arithmetic claim), shown as `…`. `relations`: proofs that a non-arithmetic fact
+holds, shown as `rule_i(c, …)`. `localNames`: name only terms that recur in what is shown,
+rather than in the full proof. -/
 structure Elision where
   shared : Bool := false
   existence : Bool := false
   relations : Bool := false
+  localNames : Bool := false
 
-def elideAll : Elision := { shared := true, existence := true, relations := true }
+def elideAll : Elision :=
+  { shared := true, existence := true, relations := true, localNames := true }
 
+/-- A premise that only proves a term exists. -/
 def existenceLeaf : Proof → Bool
-  | .rule c _ _ [] => c.lhs == c.rhs
+  | .rule c _ _ _ => c.lhs == c.rhs && arithmetic c.lhs.toExpr
   | _ => false
 
 def relationProof : Proof → Bool
@@ -433,7 +437,9 @@ def names (P : Program) (e : Elision) (pf : Proof) : Names :=
   let occurrences (ts : List Term) (x : Expr) : Nat :=
     (ts.filter fun t => t.subtermList.any fun s => same s.toExpr x).length
   let candidates := dedup (full.flatMap fun t => proofSubs t.toExpr)
-  let terms := candidates.filter fun x => occurrences full x ≥ 2 && occurrences positions x ≥ 1
+  let terms := candidates.filter fun x =>
+    if e.localNames then occurrences positions x ≥ 2
+    else occurrences full x ≥ 2 && occurrences positions x ≥ 1
   let distinct := ((parts.flatMap (·.1)).map fun p => (inlineProof P p, p)).foldl
     (fun acc kp => if acc.any (·.1 == kp.1) then acc else acc ++ [kp]) []
   let substs := recurring (distinct.filterMap fun kp => match kp.2 with
@@ -483,12 +489,19 @@ partial def proofLines (P : Program) (names : Names) (depth : Nat) (top : Bool)
       line depth (lead ++ "\\kw{cong}_{" ++ toString (k + 1) ++ "}(") (some comment)
         ++ argLines P names (depth + 1) (")" ++ suffix) [q, r]
 
-/-- Arguments on their own lines, comma-separated, the last closing with `close`. -/
-partial def argLines (P : Program) (names : Names) (depth : Nat) (close : String) :
-    List Proof → String
-  | [] => ""
-  | [p] => proofLines P names depth false "" close p
-  | p :: ps => proofLines P names depth false "" "," p ++ argLines P names depth close ps
+/-- Arguments on their own lines, comma-separated, the last closing with `close`. An elided
+existence premise, which prints as `…`, shares the line of the argument after it. -/
+partial def argLines (P : Program) (names : Names) (depth : Nat) (close : String)
+    (ps : List Proof) : String :=
+  let e := names.elision
+  let elided (p : Proof) : Bool := e.existence && existenceLeaf p
+  let rec go (lead : String) : List Proof → String
+    | [] => if lead.isEmpty then "" else line depth (lead.dropRight 3 ++ close)
+    | [p] => proofLines P names depth false lead close p
+    | p :: ps =>
+      if elided p then go (lead ++ "\\ldots,\\ ") ps
+      else proofLines P names depth false lead "," p ++ go "" ps
+  go "" ps
 
 /-- A proof on one line, with the names in use and the elision applied. -/
 partial def inlineNamed (P : Program) (names : Names) (top : Bool) (p : Proof) : String :=
