@@ -140,11 +140,19 @@ def test_corpus_exports_keep_shared_denominators_and_unestablished_coverage_thre
         assert coverage["q50"] == 2 and coverage["q95"] is None
     macros, _ = latex_results(result)
     assert r"egglogfigure@corpus-proof-recording-cdf/coverage/runtime/q95\endcsname{\textnormal{unavailable}}" in macros
+    frozen = figure_results("corpus-proof-recording-cdf", inputs, grouped, 3, 4.302652729749462, frozen_cohort=True)
+    for metric in ("runtime", "memory"):
+        coverage = frozen["coverage"][metric]
+        assert coverage["cohort_n"] == 3 and coverage["measured_n"] == 2
+        assert coverage["too_fast_n"] == 0 and coverage["failed_n"] == 1
+        assert coverage["q50"] == 2 and coverage["q95"] is None
 
 
+@pytest.mark.parametrize("frozen_cohort", [False, True])
 def test_shared_corpus_fixture_matches_export_counts_and_bound_view_layout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    frozen_cohort: bool,
 ) -> None:
     fixture = json.loads(Path(__file__).with_name("figure_statistics.json").read_text())["corpus"]
     grouped = GroupedReport(
@@ -194,8 +202,12 @@ def test_shared_corpus_fixture_matches_export_counts_and_bound_view_layout(
         Path(command[command.index("--base") - 1]).write_bytes(b"rendered")
 
     monkeypatch.setattr(figures.subprocess, "run", render)
+    spec = json.loads(figure.spec.read_text())
+    for parameter in spec["params"]:
+        if parameter["name"] == "frozen_cohort":
+            parameter["value"] = frozen_cohort
     figures.render_figures(
-        [figures.ResolvedFigure(figure, files, json.loads(figure.spec.read_text()))],
+        [figures.ResolvedFigure(figure, files, spec)],
         config,
         ReportStore(report).grouped_report(),
         report,
@@ -210,6 +222,8 @@ def test_shared_corpus_fixture_matches_export_counts_and_bound_view_layout(
     assert next(p["value"] for p in bound["params"] if p["name"] == "view_domains") == fixture["view_domains"]
     output = json.loads((tmp_path / "out/corpus-proof-recording-cdf.results.json").read_text())
     assert output["provenance"]["view_domains"] == fixture["view_domains"]
+    assert output["provenance"]["frozen_cohort"] is frozen_cohort
+    assert output["coverage"]["runtime"]["cohort_n"] == (4 if frozen_cohort else 3)
     output["conditions"][0]["sample_n"] = 1000
     assert "/n\\endcsname{1000}" in latex_results(output)[0]
 

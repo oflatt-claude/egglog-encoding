@@ -12,6 +12,7 @@
     {"name": "rounds", "value": 10},
     {"name": "t_critical", "value": 2.2621571628540993},
     {"name": "selected_inputs", "value": []},
+    {"name": "frozen_cohort", "value": false},
     {"name": "treatments", "value": ["off", "term"]},
     {"name": "source_blockers", "value": []},
     {"name": "view_domains", "expr": "{'Runtime': {min: runtime_min_extent[1], zoom: runtime_zoom_extent[1], full: runtime_full_extent[1]}, 'Peak RSS': {min: memory_min_extent[1], zoom: memory_zoom_extent[1], full: memory_full_extent[1]}}"}
@@ -73,9 +74,9 @@
     {"aggregate": [{"op": "values", "as": "conditions"}], "groupby": ["workload_id", "family", "workload", "metric"]},
     {"calculate": "datum.conditions[indexof(pluck(datum.conditions,'mode'),'Off')]", "as": "baseline"},
     {"calculate": "isValid(datum.baseline) && datum.baseline.sample_n === rounds && datum.baseline.wall_n === rounds", "as": "baseline_complete"},
-    {"calculate": "datum.baseline_complete && datum.baseline.wall_mean >= 0.2 ? 1 : 0", "as": "selected"},
-    {"calculate": "datum.baseline_complete && datum.baseline.wall_mean < 0.2 ? 1 : 0", "as": "too_fast"},
-    {"calculate": "datum.baseline_complete ? 0 : 1", "as": "unresolved"},
+    {"calculate": "frozen_cohort || datum.baseline_complete && datum.baseline.wall_mean >= 0.2 ? 1 : 0", "as": "selected"},
+    {"calculate": "!frozen_cohort && datum.baseline_complete && datum.baseline.wall_mean < 0.2 ? 1 : 0", "as": "too_fast"},
+    {"calculate": "frozen_cohort || datum.baseline_complete ? 0 : 1", "as": "unresolved"},
     {"calculate": "indexof(treatments, 'term') >= 0 ? 'Congruence' : indexof(treatments, 'proof-testing') >= 0 ? 'Full proofs' : indexof(treatments, 'proof-extraction') >= 0 ? 'Proof extraction' : 'Proof recording'", "as": "mode"},
     {"calculate": "datum.conditions[indexof(pluck(datum.conditions,'mode'),datum.mode)]", "as": "candidate"},
     {"calculate": "datum.selected && datum.baseline.complete && isValid(datum.candidate) && datum.candidate.complete && datum.baseline.mean > 0 ? datum.candidate.mean / datum.baseline.mean : null", "as": "ratio"},
@@ -127,7 +128,7 @@
             "type": "quantitative",
             "title": null,
             "scale": {"domain": {"expr": "[view_domains[parent.metric].min, view_domains[parent.metric].zoom]"}, "nice": false, "padding": 4},
-            "axis": {"title": {"expr": "'Zoom ' + format(view_domains[parent.metric].min,'.3~g') + '–' + format(view_domains[parent.metric].zoom,'.3~g') + '× baseline'"}, "labelExpr": "format(datum.value,'~f') + '×'", "tickCount": 5, "grid": false}
+            "axis": {"title": {"expr": "view_domains[parent.metric].zoom < view_domains[parent.metric].full ? 'Zoom ' + format(view_domains[parent.metric].min,'.3~g') + '–' + format(view_domains[parent.metric].zoom,'.3~g') + '× baseline' : 'Relative to off'"}, "labelExpr": "format(datum.value,'~f') + '×'", "tickCount": 5, "grid": false}
           },
           "y": {
             "field": "cdf",

@@ -25,6 +25,7 @@ def figure_results(
     grouped: GroupedReport,
     rounds: int,
     t_critical: float | None,
+    frozen_cohort: bool = False,
 ) -> dict[str, Any]:
     """Estimate selected conditions and the figure's explicitly defined pairs.
 
@@ -136,8 +137,8 @@ def figure_results(
                     "candidate_n": by_treatment[candidate]["sample_n"],
                 }
             if name.startswith("corpus-"):
-                # Cohort membership uses baseline wall time for both metrics,
-                # independently of missing RSS. Exclusions remain in coverage.
+                # A frozen cohort keeps all explicitly selected inputs. Otherwise
+                # membership uses baseline wall time, independently of RSS.
                 baseline_row = by_treatment[baseline]
                 wall = [
                     r["wall_sec"]
@@ -149,7 +150,11 @@ def figure_results(
                 ]
                 resolved = len(wall) == rounds and baseline_row["sample_n"] == rounds
                 comparison["cohort"] = (
-                    "selected" if resolved and sum(wall) / rounds >= 0.2 else "too-fast" if resolved else "unresolved"
+                    "selected"
+                    if frozen_cohort or resolved and sum(wall) / rounds >= 0.2
+                    else "too-fast"
+                    if resolved
+                    else "unresolved"
                 )
                 comparison["excluded"] = bool(baseline_row["exclusion"] or by_treatment[candidate]["exclusion"])
                 comparison["failed"] = bool(

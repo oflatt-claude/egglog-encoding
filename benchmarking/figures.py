@@ -401,12 +401,15 @@ def render_figures(
                 "source_blockers": inventory["unavailable_cases"],
             }
             spec = deepcopy(resolved.spec)
+            frozen_cohort = any(
+                p.get("name") == "frozen_cohort" and p.get("value") is True for p in spec.get("params", [])
+            )
             for parameter in spec.get("params", []):
                 if parameter.get("name") in bindings:
                     parameter["value"] = bindings[parameter["name"]]
             spec["data"]["url"] = grouped_report_path(report_path).as_uri()
             outputs = [destination / f"{figure.name}.{extension}" for extension in ("pdf", "svg", "png")]
-            results = figure_results(figure.name, selected_inputs, grouped, config.rounds, t_critical)
+            results = figure_results(figure.name, selected_inputs, grouped, config.rounds, t_critical, frozen_cohort)
             for condition in results["conditions"]:
                 issue = (
                     f"excluded ({condition['exclusion']['kind']}): {condition['exclusion']['reason']}"
@@ -452,6 +455,7 @@ def render_figures(
                 "memory_limit_bytes": config.memory_limit_bytes,
                 "source_blockers": inventory["unavailable_cases"],
                 "view_domains": results.get("view_domains"),
+                "frozen_cohort": frozen_cohort,
             }
             numbers, table = latex_results(results)
             console.print(f"Rendering {figure.name}", markup=False)
