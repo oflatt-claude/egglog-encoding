@@ -1,0 +1,44 @@
+{
+  "passed": true,
+  "source_head": "ede9f94368994e403893e55edf6e35ec66c826b2",
+  "binary_sha256": "sha256:b9b6cd18c23a141db285c0f5f91864d589023e1abfece0d56a0fe67a9a97c517",
+  "raw_report_sha256": "sha256:db4a56ab030fc819568b09da8fce44f6cd208927b68d0b9d9c7fd902d31fdf09",
+  "figure_pdf_sha256": "sha256:fce114aea4395084e7579105af11083f567b0420326827d90766e356681c86be",
+  "paper": {
+    "path": "/Users/saul/p/wt/extended-egglog-paper/fix-recording-overview",
+    "branch": "codex/fix-recording-overview",
+    "commit": "3045d9e9cee4ef37181dfea74859337eac95320e",
+    "build_command": "make main.pdf",
+    "build_exit_code": 0,
+    "build_log_sha256": "sha256:5ae379e54ce0c2cbdd5f52d338b9d42f763d6dbbe52e7619ea12b7e3678b3fc4",
+    "pdf_sha256": "sha256:96438e92da29c7265cf17d49dd5a2e90dc910187de1d5488e4c19d353e5724f5",
+    "recording_page": 26,
+    "copied_files": {
+      "corpus-proof-recording-cdf.pdf": "sha256:fce114aea4395084e7579105af11083f567b0420326827d90766e356681c86be",
+      "corpus-proof-recording-cdf.numbers.tex": "sha256:bf143ca7a3498b8eed134711cfdbc82424c292544ab00a1642186097d3a47252",
+      "corpus-proof-recording-cdf.table.tex": "sha256:06d0a587b9e5e17c9d22e3351e5c3bcea510713cfb0662e8e780bcea2f05d54a"
+    },
+    "other_figure_bundles_unchanged": true
+  },
+  "visual_verification": {
+    "figure_pdf_raster": "benchmarks/local/proof-recording-under-5x/final-figure/final-preview.png",
+    "paper_page_raster": "benchmarks/local/proof-recording-under-5x/paper-final-page.png",
+    "inspected_manuscript_width": true,
+    "legible_labels_and_legend": true,
+    "full_ranges_without_overviews": true,
+    "all_11_figure_fonts_embedded": true,
+    "font_log_sha256": "sha256:5c6b9c98647cf7ec12bb5e54dcb3da578a54262cfcb4a18dd609081a8f334458"
+  },
+  "numeric_export_audit": {
+    "passed": true,
+    "conditions": 254,
+    "comparisons": 127,
+    "per_replay_macros_checked": 3556,
+    "all_means_and_ci_endpoints_agree": true,
+    "raw_report_sha256": "sha256:db4a56ab030fc819568b09da8fce44f6cd208927b68d0b9d9c7fd902d31fdf09",
+    "results_json_sha256": "sha256:475910d19aec84b80c7189df977006863761c40c8556ca32db1c767ba1c9641c"
+  },
+  "figure_audit_sha256": "sha256:052c1bc9e68d755387c9eeae51b2404fe1858795a181fd4f8177d137d168c75e",
+  "validation_sha256": "sha256:a2bada77538fbd72b8a27ee5f26b0f416af9a3c82c54fb87f47dc4d306096c72",
+  "limitation": "Gemma runtime mean ratio is 4.978895; its individual 95% Fieller interval is [4.914324, 5.044428]. Acceptance requires means below 5, not upper confidence endpoints. The failed original default make check remains explicitly recorded; CI-profile checks and the repaired Math rerun pass."
+}

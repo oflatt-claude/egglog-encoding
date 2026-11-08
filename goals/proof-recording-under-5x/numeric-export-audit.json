@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "conditions": 254,
+  "comparisons": 127,
+  "per_replay_macros_checked": 3556,
+  "all_means_and_ci_endpoints_agree": true,
+  "raw_report_sha256": "sha256:db4a56ab030fc819568b09da8fce44f6cd208927b68d0b9d9c7fd902d31fdf09",
+  "results_json_sha256": "sha256:475910d19aec84b80c7189df977006863761c40c8556ca32db1c767ba1c9641c"
+}

@@ -4,6 +4,12 @@ The target and fixed input population remain [facts.md](facts.md) and
 [cohort.json](cohort.json). The typed generation / Rust authoring API conversion
 remains deferred.
 
+**Final retained result:** [E031 below](#e031--final-stabilized-collection-and-handoff)
+and [results.md](results.md) supersede the earlier provisional collections.
+All 127 mean runtime/RSS ratios pass on `ede9f943`; Gemma's runtime confidence
+interval still crosses 5×. The earlier slow observations and rejected variants
+remain in this historical ledger.
+
 ## E000 — fresh baseline
 
 - Status: complete; 18/18 successful runs, three observations per input/treatment.
@@ -207,7 +213,7 @@ remains deferred.
 - Gemma4 MoE is 4.602x (3.052 s / 0.663 s); the MISAAL matmul control is 3.704x (0.870 s / 0.235 s). DialEgg memory stays 4.295x. Retain this tiny implementation change. `Assignment`'s concrete public map type now uses `hashbrown`; branch clones are O(n) instead of persistent snapshots, so final workspace/overload checks and the full-cohort audit remain required.
 - Source commit: `915fec1c`.
 
-## Final collection
+## First full collection — superseded (`915fec1c`)
 
 - Stabilized candidate collection requests exactly ten new off/proofs observations on each frozen identity, one executable and the unchanged 500-second / 16 GiB resource profile. The new report path prevents reuse of exploratory rows.
 - The final goal is still pending until the complete 127-case acceptance audit, the complete `make check`, and the final full-range figure/PDF audit pass.
@@ -302,3 +308,41 @@ remains deferred.
 - Run one short ten-round Gemma-only public comparison with host-load capture, on the unchanged reserve-only candidate, leaving the other task untouched. This distinguishes the earlier loaded multi-case result from the current lighter host state. It is not final127-input acceptance and will not justify dropping slow observations.
 - E030 current lighter-load diagnostic completes20/20successful observations: Gemma off0.320651s, recording1.593112s, ratio4.968363×. The ten recording observations cluster1.5867–1.5990s, unlike the earlier multi-second outliers. The remaining bulk collector is left untouched. This is a promising focused result, not final127-input acceptance.
 - Stabilize the smallest candidate: retain the one-line assignment capacity reservation with the previously verified snapshot policy. Existing CI-profile checks cover this exact source patch, and the separate broad paper coverage plus repaired Math rerun are retained. Begin a new complete frozen-cohort ten-round collection; do not reuse incompletev2 or rejected915data.
+
+## E031 — final stabilized collection and handoff
+
+- Source `ede9f94368994e403893e55edf6e35ec66c826b2`, executable
+  `b9b6cd18c23a141db285c0f5f91864d589023e1abfece0d56a0fe67a9a97c517`.
+  The final collector runs from 2026-11-08T10:03:36Z to 10:28:51Z, with
+  identical start/end source pins and an empty tracked-source patch. An
+  untracked task checkpoint explains the raw rows' dirty-checkout flag.
+- `final-cohort-v3.jsonl` contains exactly 2,540 new successful observations,
+  ten per off/proofs endpoint on all 127 frozen input hashes. Timeout remains
+  500 seconds and the allocator cap 16 GiB. No exploratory or failed observation
+  is substituted into this dataset. The collector and finalizer both exit 0.
+- Acceptance passes every runtime and peak-RSS mean ratio. Gemma has the largest
+  runtime ratio, 4.978895× [4.914324, 5.044428], from off 0.321648 s and recording
+  1.601452 s. Its interval crosses 5×; only the mean criterion is satisfied.
+  Gemma4 MoE is 4.598648× [4.528812, 4.669719]. DialEgg has the largest memory
+  ratio, 4.294365× [4.294170, 4.294560], from 132.881 MiB to 570.641 MiB.
+- Public figure rendering reuses all 2,540 cached rows and leaves the raw JSONL
+  byte-identical. The executed Vega audit passes all 254 plotted points,
+  127 identities per metric, full ranks, in-bounds geometry and the absence of
+  overview panels. Numeric-export auditing matches all 254 condition means and
+  intervals, all 127 comparisons, and 3,556 per-replay TeX macros.
+- Local CI-profile checks pass on byte-identical final non-goal source. The
+  earlier full paper trial remains 510 passed / one native Math guard failure;
+  the actual uncapped-native/capped-source Math rerun passes both tests after
+  commit `c0f9c91f`. No exclusion is added. The failed default invocation and
+  interrupted lower-cap attempt retain their original nonzero status.
+- The paper update is committed at `3045d9e` on `codex/fix-recording-overview`.
+  `make main.pdf` succeeds; the recording figure is inspected at manuscript
+  width on page 26, every figure font is embedded, and its PDF/macros/table
+  match the accepted exports byte-for-byte. Other figure bundles are unchanged.
+- Canonical final evidence is now [results.md](results.md),
+  [final-acceptance.json](final-acceptance.json),
+  [final-validation.json](final-validation.json), and
+  [final-handoff.json](final-handoff.json). Earlier `final-cohort`/`final-cohort-v2`
+  evidence remains explicitly superseded. Signature-cache and borrowed-key
+  experiments are discarded; the strongly typed generation/API rewrite stays
+  deferred, and Eli's incompatible stack remains unmeasured.

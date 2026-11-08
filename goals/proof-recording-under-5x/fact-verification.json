@@ -1,0 +1,78 @@
+{
+  "passed": true,
+  "source_head": "ede9f94368994e403893e55edf6e35ec66c826b2",
+  "facts": [
+    {
+      "id": "figure-placement",
+      "passed": true,
+      "verification": "automated",
+      "evidence": "figure-validation.json; final-figure/eval shared Vega tests, plus figure-audit.json with no remaining overviews"
+    },
+    {
+      "id": "scope",
+      "passed": true,
+      "verification": "automated",
+      "evidence": "final-acceptance.json verifies all 127 unique frozen file hashes; corpus/ignore diff from baseline is empty"
+    },
+    {
+      "id": "performance-target",
+      "passed": true,
+      "verification": "automated",
+      "evidence": "final-acceptance.json: all 254 per-file mean ratios below 5, only off/proofs, one binary"
+    },
+    {
+      "id": "profile-first",
+      "passed": true,
+      "verification": "manual",
+      "evidence": "E000\u2013E002 baseline phases/profiles and DialEgg row/capacity diagnostics precede retained custom changes"
+    },
+    {
+      "id": "eli-stack",
+      "passed": true,
+      "verification": "manual",
+      "evidence": "E001 saved13-file / 22-region conflict evidence for pinned 974\u2013985 stack; packed-join ancestry distinguished"
+    },
+    {
+      "id": "minimal-changes",
+      "passed": true,
+      "verification": "manual",
+      "evidence": "Retained storage/generated-work/assignment changes; rejected snapshot regression, caches and borrowed keys removed; API caveat recorded in results.md"
+    },
+    {
+      "id": "fast-iteration",
+      "passed": true,
+      "verification": "manual",
+      "evidence": "E003\u2013E030 use short canaries and affected checks; broad validation only at stabilization"
+    },
+    {
+      "id": "correctness",
+      "passed": true,
+      "verification": "automated",
+      "evidence": "final-validation.json pins passing exact-source CI-profile checks, focused regression suites, earlier 510 passing paper cases and repaired two-test Math rerun"
+    },
+    {
+      "id": "final-evidence",
+      "passed": true,
+      "verification": "automated",
+      "evidence": "final-acceptance.json and final-cohort-provenance.json: 2,540 fresh successes, n=10 per endpoint, means / 95% independent Fieller intervals and revision/binary/input pins"
+    },
+    {
+      "id": "final-figure",
+      "passed": true,
+      "verification": "automated",
+      "evidence": "figure-audit.json: 254 points / 127 per metric, exact ratio agreement, full ranks, bounds, no overview; numeric-export-audit.json and final-handoff.json verify exports and paper"
+    },
+    {
+      "id": "experiment-record",
+      "passed": true,
+      "verification": "manual",
+      "evidence": "experiments.md and ignored task evidence retain profiles, raw timings, patches, source/binary pins and reproducible commands; samples kept separate"
+    },
+    {
+      "id": "deferred-typed-generation",
+      "passed": true,
+      "verification": "manual",
+      "evidence": "No typed IR/binder or encoder-wide typed generation conversion introduced; existing generated text/parser/typechecker path preserved"
+    }
+  ]
+}
