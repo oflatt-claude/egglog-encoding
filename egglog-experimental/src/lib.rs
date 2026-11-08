@@ -35,20 +35,20 @@
 //!   portion of the constructor sub-e-graph reachable from `root` with each key
 //!   e-class replaced by its mapped value.
 //!
-//! Mark a constructor or datatype variant with `:injective` to infer equality
-//! of its arguments from equality of its results. Run the shared `injectivity`
-//! ruleset explicitly with `(run-schedule (saturate injectivity))`. Equality-sort
-//! arguments are unioned; unequal primitive arguments panic. Container arguments
-//! are rejected. These rules also support term encoding and proof testing.
+//! `(disequal a b)` asserts positive disequality evidence. Root query patterns
+//! `(known-disequal a b)` and `(contradiction)` read inferred evidence and detect
+//! inconsistent constraints. Operands must have the same unionable equality sort.
+//! `(separately-injective F)` marks an existing ordinary constructor: equality
+//! cancellation and upward disequality propagation each require all other inputs
+//! to agree. Native primitive differences can establish evidence or contradiction;
+//! containers and nonunionable equality sorts cannot be marked. No output
+//! disequality propagates downward, and different constructors imply no disjointness.
 //!
-//! `(known-disequal? left right)` queries materialized disequality in checks
-//! and rule bodies. Run `injectivity` to propagate disequalities: marked
-//! constructors infer unequal existing outputs from unequal fields, and every
-//! ordinary constructor infers an unequal unionable equality-sort field from
-//! unequal outputs when all other fields agree. This propagation is incomplete.
-//! Both operands must have the same unionable equality sort. Queries expose
-//! ordinary relation dependencies, support seminaive rules and term/proof
-//! encoding, and never run propagation. Action expression uses are rejected.
+//! The pass saturates private supporting rules after each user run and before
+//! observations of pending top-level actions. User run budgets and pre-step until
+//! checks are preserved. Queries are whole facts, rather than nested expressions
+//! or actions. Ordinary execution, term encoding, and proof testing are supported;
+//! the separate slotted source frontend does not yet accept these constructs.
 //!
 //! ## Generic containers and callbacks
 //!
@@ -205,7 +205,6 @@ fn add_experimental_extensions(egraph: &mut EGraph, extended_run_schedule: bool)
 
     // Support for set cost
     add_set_cost(egraph);
-    injectivity::add_injectivity_support(egraph);
     egraph.add_read_primitive(GetSizePrimitive, None);
     maybe::add_maybe(egraph);
     egraph.add_read_primitive(GetNodeSizePrimitive, None);

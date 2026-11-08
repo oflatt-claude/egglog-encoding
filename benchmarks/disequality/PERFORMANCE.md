@@ -13,7 +13,7 @@ explains what those comparisons tell us.
 
 The [committed program](parameter-analysis.egg) asserts 100,000 equalities,
 10,000 disequality pairs, and six fixed numeral disequalities.
-It finishes with `(check-contradiction)`. A consistent input could measure the
+It finishes with `(check (contradiction))`. A consistent input could measure the
 cost of recording proof information, but would provide no contradiction proof
 to extract or check.
 
@@ -30,11 +30,12 @@ Egglog proof validity; strict proof checking remains a separate validation.
 The [compiler pass](../../egglog-experimental/src/disequality.rs) lowers
 disequality to ordinary egglog before term or proof encoding, without changing
 union-find. NEE stores an ordered pair in a private relation per equality sort
-and detects a self-edge after congruence rebuilding. Scheduled rules propagate
-unequal outputs downward through constructor rows; upward propagation requires
-marked injective constructors. Queries read the resulting relations. This
-workload does not schedule `injectivity`, so its timings do not measure structural
-propagation or the cost of materializing its derived pairs.
+and detects a self-edge after congruence rebuilding. Separate-injectivity
+statements add guarded cancellation and upward propagation; this workload has
+none. The pass closes its private supporting rules after user runs and before
+observations, including the final contradiction pattern. Queries read the
+resulting relations. Its timings do not measure structural propagation through
+marked constructors.
 
 A proof-overhead comparison holds this encoding fixed and changes the proof
 treatment. Native comparisons also change the engine and representation, so

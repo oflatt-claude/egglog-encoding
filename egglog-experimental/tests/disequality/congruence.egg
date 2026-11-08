@@ -5,4 +5,4 @@
 (disequal (f (A)) (f (B)))
 ; The constraints become contradictory only after the following union.
 (union (A) (B))
-(check-contradiction)
+(check (contradiction))

@@ -721,13 +721,11 @@ impl Parser {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;
                         let mut unextractable = false;
-                        let mut injective = false;
                         let mut hidden = false;
                         let mut role = FunctionRole::Ordinary;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
                                 (":unextractable", []) => unextractable = true,
-                                (":injective", []) => injective = true,
                                 (":internal-hidden", []) => hidden = true,
                                 (":internal-role", [value])
                                     if value.expect_atom("constructor role")? == "global" =>
@@ -745,7 +743,6 @@ impl Parser {
                             schema: self.parse_schema(inputs, output)?,
                             cost,
                             unextractable,
-                            injective,
                             hidden,
                             role,
                         }]
@@ -1402,12 +1399,10 @@ impl Parser {
         let (types, options) = tail.split_at(option_start);
         let mut cost = None;
         let mut unextractable = false;
-        let mut injective = false;
         for (key, values) in self.parse_options(options)? {
             match (key, values) {
                 (":cost", [value]) => cost = Some(value.expect_uint("cost")?),
                 (":unextractable", []) => unextractable = true,
-                (":injective", []) => injective = true,
                 _ => return error!(span, "could not parse datatype variant options"),
             }
         }
@@ -1420,7 +1415,6 @@ impl Parser {
             })?,
             cost,
             unextractable,
-            injective,
         })
     }
 

@@ -3,27 +3,39 @@ source: egglog-experimental/tests/files.rs
 expression: snapshot
 ---
 (
-(let t (Wrap (Wrap (Leaf "b"))))
-(let t_1 (Wrap (Wrap (Leaf "a"))))
+(let t (Wrap (Wrap (Leaf "a"))))
+(let t_1 (Wrap (Wrap (Leaf "b"))))
+(let t_2 (Wrap t))
 (Sym
   (= (Leaf "a") (Leaf "b"))
   (Rule
     (= (Leaf "b") (Leaf "a"))
     (name "@injectivity-Wrap")
     (premises
-      (Rule
-        (= (Wrap (Leaf "b")) (Wrap (Leaf "a")))
-        (name "@injectivity-Wrap")
-        (premises
-          (Rule
-            (= t t_1)
-            (name "@injectivity-Wrap")
-            (premises (Fiat (= (Wrap t_1) (Wrap t))))
-            (substitution (@injectivity-left t_1) (@injectivity-right t))))
-        (substitution
-          (@injectivity-left (Wrap (Leaf "b")))
-          (@injectivity-right (Wrap (Leaf "a"))))))
+      (Sym
+        (= (Wrap (Leaf "a")) (Wrap (Leaf "b")))
+        (Rule
+          (= (Wrap (Leaf "b")) (Wrap (Leaf "a")))
+          (name "@injectivity-Wrap")
+          (premises
+            (Sym
+              (= t t_1)
+              (Rule
+                (= t_1 t)
+                (name "@injectivity-Wrap")
+                (premises (Fiat (= t_2 t_2)) (Fiat (= t_2 (Wrap t_1))))
+                (substitution
+                  (@injectivity-left t_2)
+                  (@injectivity-input t)
+                  (@injectivity-other t_1))))
+            (Fiat (= t t)))
+          (substitution
+            (@injectivity-left t)
+            (@injectivity-input (Wrap (Leaf "b")))
+            (@injectivity-other (Wrap (Leaf "a"))))))
+      (Fiat (= (Wrap (Leaf "a")) (Wrap (Leaf "a")))))
     (substitution
-      (@injectivity-left (Leaf "b"))
-      (@injectivity-right (Leaf "a")))))
+      (@injectivity-left (Wrap (Leaf "a")))
+      (@injectivity-input (Leaf "b"))
+      (@injectivity-other (Leaf "a")))))
 )

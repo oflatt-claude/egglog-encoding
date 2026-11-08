@@ -2,7 +2,5 @@
 source: egglog-experimental/tests/files.rs
 expression: snapshot
 ---
-((@disequality-contradiction 0)
- (@disequality-ne-Math 0)
- (Add 2)
+((Add 2)
  (Num 3))

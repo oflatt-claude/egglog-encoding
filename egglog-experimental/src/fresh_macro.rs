@@ -96,7 +96,6 @@ fn desugar_fresh_rule(
         },
         cost: first_opts.cost,
         unextractable: first_opts.unextractable,
-        injective: false,
         hidden: false,
         role: FunctionRole::Ordinary,
     };

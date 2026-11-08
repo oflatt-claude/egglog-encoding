@@ -39,7 +39,7 @@ def test_native_command_uses_the_physical_input(treatment: Treatment, tmp_path: 
 def test_registered_workload_binds_native_file_with_its_own_hash(tmp_path: Path) -> None:
     egglog = tmp_path / "parameter-analysis.egg"
     native = egglog.with_suffix(".in")
-    egglog.write_text("(check-contradiction)\n")
+    egglog.write_text("(check (contradiction))\n")
     native.write_text("1\n2\n")
     (logical,) = workloads.resolve_files([egglog.name], tmp_path)
     assert logical.sha256 == targets.sha256_file(egglog)

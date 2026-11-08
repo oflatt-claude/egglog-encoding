@@ -56,7 +56,7 @@ This deterministic conversion writes [parameter-analysis.egg](../parameter-analy
 from the checked-in native input. Numerals `1` through `5` become constructors
 `N1` through `N5`; `f`, `g`, and `h` retain arities one, two, and three.
 It mirrors the six fixed constraints and equality-first pair order, then adds
-`(check-contradiction)`. It performs no random generation, pair filtering,
+`(check (contradiction))`. It performs no random generation, pair filtering,
 seed selection, engine execution, or proof checking.
 
 The supplied corpus and four-method drivers differ from the public Zenodo

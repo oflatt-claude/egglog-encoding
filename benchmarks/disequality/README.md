@@ -15,18 +15,16 @@ derives a contradiction. The paper's NEE uses a private `ne` term; the relation
 preserves contradiction detection without making its result a unionable equality
 class.
 
-The `injectivity` ruleset materializes symmetry and propagates unequal outputs
-down through existing constructor rows when every other field agrees. This
-works for unmarked constructors too; upward propagation still requires
-`:injective`. Run the ruleset explicitly before querying derived pairs with
-`known-disequal?`; queries only read the per-sort relation. The parameter-analysis
-workload below does not schedule this ruleset, so it does not exercise structural
-propagation.
+`(separately-injective F)` adds fixed-coordinate cancellation and upward
+propagation through existing applications of an already declared constructor.
+There is no downward propagation. `(known-disequal a b)` reads positive evidence,
+and `(contradiction)` matches an inconsistent constraint. The pass closes its
+private supporting rules after user runs and before observations of pending
+top-level actions. This parameter-analysis workload declares no separate
+injectivity promises, so it exercises assertions and contradiction detection.
 
-`(disequal ...)` also works in rule heads. `(check-contradiction)` saturates the
-private encoding ruleset, then checks its zero-argument contradiction relation.
-Ordinary `(run ...)` does not run that private ruleset. The encoding lowers to
-ordinary egglog before term/proof encoding, without changing union-find.
+`(disequal ...)` also works in rule heads. The encoding lowers to ordinary
+egglog before term/proof encoding, without changing union-find.
 Existing core restrictions still apply: `begin` blocks are normal-mode only;
 the benchmark uses individual top-level actions and needs no batching support.
 
@@ -47,7 +45,7 @@ upper bound, which constrains distinct pairs among `1` through `4`, excluding `5
 
 [parameter-analysis.egg](parameter-analysis.egg) mirrors these assertions and
 their order. Numerals become `N1` through `N5`; functions `f`, `g`, and `h` retain
-arities one, two, and three. Its final command is `(check-contradiction)`.
+arities one, two, and three. Its final command is `(check (contradiction))`.
 Regenerate it without running any engine or generating new random expressions:
 
 ```sh

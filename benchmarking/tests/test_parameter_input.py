@@ -36,7 +36,7 @@ def test_conversion_preserves_original_constraints_pairs_and_order() -> None:
         "(disequal (N3) (N4))",
         "(union (N1) (f (N2)))",
         "(disequal (g (N3) (N4)) (h (N5) (N1) (N2)))",
-        "(check-contradiction)",
+        "(check (contradiction))",
     ]
     assert hashlib.sha256(source.encode()).hexdigest() in program
     assert "unused native tail" not in program

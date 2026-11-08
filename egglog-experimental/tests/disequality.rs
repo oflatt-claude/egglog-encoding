@@ -8,9 +8,9 @@ fn source_constructor_actions_match_ast_with_disequality_macros() {
                   (disequal (f (N1) (N2)) (h (N3) (N4) (N5)))
                   (union (N1) (g (N3)))
                   (union (N3) (N4))
-                  (fail (check-contradiction))
+                  (fail (check (contradiction)))
                   (union (f (g (N4)) (N2)) (h (N3) (N4) (N5)))
-                  (check-contradiction)";
+                  (check (contradiction))";
     let mut streamed = new_experimental_egraph_for_proofs();
     streamed.parse_and_run_program(None, setup).unwrap();
     let mut ordinary = streamed.clone();
@@ -33,24 +33,6 @@ fn source_constructor_actions_match_ast_with_disequality_macros() {
 }
 
 #[test]
-fn source_actions_keep_disequality_placeholder_lowering() {
-    let mut graph = new_experimental_egraph_for_proofs();
-    // Rust clients/internal syntax can declare the placeholder spelling as
-    // an ordinary constructor. Root expression actions still invoke lowering.
-    graph.ensure_no_reserved_symbols(false);
-    let mut parser = egglog::ast::Parser::default();
-    parser.ensure_no_reserved_symbols = false;
-    let declarations = parser
-        .get_program_from_string(None, "(datatype T (A) (@disequal T T))")
-        .unwrap();
-    graph.run_program(declarations).unwrap();
-    graph
-        .parse_and_run_program(None, "(@disequal (A) (A)) (check-contradiction)")
-        .unwrap();
-    assert_eq!(graph.get_size("@disequal"), 0);
-}
-
-#[test]
 fn relation_disequality_composes_with_proofs() {
     for mode in 0..4 {
         let graph = new_experimental_egraph_for_proofs();
@@ -66,9 +48,9 @@ fn relation_disequality_composes_with_proofs() {
                 "
             (datatype Term (A) (B) (F Term))
             (disequal (F (A)) (F (B)))
-            (fail (check-contradiction))
+            (fail (check (contradiction)))
             (union (A) (B))
-            (check-contradiction)
+            (check (contradiction))
         ",
             )
             .unwrap_or_else(|e| panic!("mode {mode}: {e}"));
@@ -100,10 +82,10 @@ fn block_inference() {
     let programs = [
         "(sort VI (Vec i64)) (sort VS (Vec String)) (datatype T (A VI) (B))
          (begin (let xs (vec-empty)) (disequal (A xs) (B)))
-         (union (A (vec-empty)) (B)) (check-contradiction)",
+         (union (A (vec-empty)) (B)) (check (contradiction))",
         "(sort VI (Vec i64)) (sort VS (Vec String)) (datatype T (A VI) (B))
          (let value (begin (let xs (vec-empty)) (disequal (A xs) (B)) (B)))
-         (union (A (vec-empty)) value) (check-contradiction)",
+         (union (A (vec-empty)) value) (check (contradiction))",
     ];
     for program in programs {
         new_experimental_egraph_for_proofs()
@@ -117,15 +99,15 @@ fn rule_inference_and_lazy_declarations() {
     let programs = [
         "(datatype T (A)) (A)
          (rule ((= x (A))) ((let y (unstable-fresh! T)) (disequal x y) (union x y)))
-         (run 1) (check-contradiction)",
-        "(datatype T (A)) (push) (disequal (A) (A)) (pop) (disequal (A) (A)) (check-contradiction)",
-        "(datatype !Term (A) (B)) (disequal (A) (B)) (union (A) (B)) (check-contradiction)",
+         (run 1) (check (contradiction))",
+        "(datatype T (A)) (push) (disequal (A) (A)) (pop) (disequal (A) (A)) (check (contradiction))",
+        "(datatype !Term (A) (B)) (disequal (A) (B)) (union (A) (B)) (check (contradiction))",
         "(sort VI (Vec i64)) (sort VS (Vec String)) (datatype T (A VI) (B))
          (rule () ((let xs (vec-empty)) (disequal (A xs) (B))))
-         (run 1) (union (A (vec-empty)) (B)) (check-contradiction)",
+         (run 1) (union (A (vec-empty)) (B)) (check (contradiction))",
         "(sort VI (Vec i64)) (sort VS (Vec String)) (datatype T (A VI) (B))
          (rule ((= xs (vec-empty))) ((disequal (A xs) (B))))
-         (run 1) (union (A (vec-empty)) (B)) (check-contradiction)",
+         (run 1) (union (A (vec-empty)) (B)) (check (contradiction))",
     ];
     for program in programs {
         let mut graph = new_experimental_egraph_for_proofs()
@@ -147,7 +129,7 @@ fn rejects_invalid_disequalities() {
         "(sort T :no-union) (constructor A () T) (disequal (A) (A))",
         "(sort T :no-union) (constructor A () T) (rule () ((disequal (A) (A))))",
         "(datatype T (A)) (disequal (A))",
-        "(check-contradiction 1)",
+        "(check (contradiction 1))",
     ] {
         assert!(
             new_experimental_egraph_for_proofs()
@@ -161,9 +143,9 @@ fn rejects_invalid_disequalities() {
         .with_proof_testing()
         .parse_and_run_program(
             None,
-            "(fail (check-contradiction))
+            "(fail (check (contradiction)))
             (datatype T (A)) (disequal (A) (A)) (run 1)
-            (check-contradiction)",
+            (check (contradiction))",
         )
         .unwrap();
 }
