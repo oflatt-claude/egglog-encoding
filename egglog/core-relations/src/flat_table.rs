@@ -3,7 +3,8 @@
 //! Unlike [`crate::SortedWritesTable`], this table has no keyed lookup,
 //! conflict resolution, deletion, or rebuilding. Mutation buffers accumulate
 //! private [`RowBuffer`] batches and submit them to a shared queue when dropped;
-//! [`Table::merge`] appends those batches to the table's row buffer in parallel.
+//! [`Table::merge`] stores immutable column chunks, keeping a batch's constant
+//! columns once and avoiding copies of previously committed rows.
 
 use std::{any::Any, sync::Arc};
 
@@ -15,7 +16,6 @@ use crate::{
     common::Value,
     numeric_id::NumericId,
     offsets::{OffsetRange, Offsets, RowId, Subset, SubsetRef},
-    parallel,
     row_buffer::RowBuffer,
     table_spec::{
         Constraint, Generation, MutationBuffer, Offset, Row, Table, TableSchema, TableSpec,
@@ -77,11 +77,19 @@ impl Drop for FlatBuffer {
     }
 }
 
+#[derive(Clone)]
+enum FlatColumn {
+    Constant(Value),
+    Values(Box<[Value]>),
+}
+
 /// A fixed-width table that supports raw appends and scans, but no keyed
 /// operations.
 pub struct FlatTable {
     generation: Generation,
-    rows: RowBuffer,
+    n_columns: usize,
+    n_rows: usize,
+    chunks: Vec<(RowId, Box<[FlatColumn]>)>,
     pending: Arc<SegQueue<RowBuffer>>,
 }
 
@@ -89,7 +97,9 @@ impl Clone for FlatTable {
     fn clone(&self) -> Self {
         Self {
             generation: self.generation,
-            rows: self.rows.clone(),
+            n_columns: self.n_columns,
+            n_rows: self.n_rows,
+            chunks: self.chunks.clone(),
             pending: Arc::new(SegQueue::new()),
         }
     }
@@ -98,9 +108,15 @@ impl Clone for FlatTable {
 impl FlatTable {
     /// Create an empty flat table with `n_columns` physical columns.
     pub fn new(n_columns: usize) -> Self {
+        assert_ne!(
+            n_columns, 0,
+            "attempting to create a row batch with no columns"
+        );
         Self {
             generation: Generation::new(0),
-            rows: RowBuffer::new(n_columns),
+            n_columns,
+            n_rows: 0,
+            chunks: Vec::new(),
             pending: Arc::new(SegQueue::new()),
         }
     }
@@ -117,7 +133,19 @@ impl FlatTable {
     }
 
     fn next_row(&self) -> RowId {
-        RowId::from_usize(self.rows.len())
+        RowId::from_usize(self.n_rows)
+    }
+
+    fn row(&self, id: RowId, out: &mut [Value]) {
+        let chunk = self.chunks.partition_point(|(start, _)| *start <= id) - 1;
+        let (start, columns) = &self.chunks[chunk];
+        let offset = id.index() - start.index();
+        for (out, column) in out.iter_mut().zip(columns.iter()) {
+            *out = match column {
+                FlatColumn::Constant(value) => *value,
+                FlatColumn::Values(values) => values[offset],
+            };
+        }
     }
 }
 
@@ -133,7 +161,7 @@ impl Table for FlatTable {
     fn spec(&self) -> TableSpec {
         TableSpec {
             schema: TableSchema::Flat {
-                n_cols: self.rows.arity(),
+                n_cols: self.n_columns,
             },
             uncacheable_columns: Default::default(),
         }
@@ -142,8 +170,9 @@ impl Table for FlatTable {
     fn clear(&mut self) {
         // Isolate live buffers so a late drop cannot repopulate a cleared table.
         self.pending = Arc::new(SegQueue::new());
-        if self.rows.len() > 0 {
-            self.rows.clear();
+        if self.n_rows > 0 {
+            self.chunks.clear();
+            self.n_rows = 0;
             self.generation = self.generation.inc();
         }
     }
@@ -153,19 +182,19 @@ impl Table for FlatTable {
     }
 
     fn len(&self) -> usize {
-        self.rows.len()
+        self.n_rows
     }
 
     fn version(&self) -> TableVersion {
         TableVersion {
             major: self.generation,
-            minor: Offset::from_usize(self.rows.len()),
+            minor: Offset::from_usize(self.n_rows),
         }
     }
 
     fn updates_since(&self, offset: Offset) -> Subset {
         assert!(
-            offset.index() <= self.rows.len(),
+            offset.index() <= self.n_rows,
             "update offset is newer than the FlatTable"
         );
         Subset::Dense(OffsetRange::new(
@@ -191,24 +220,29 @@ impl Table for FlatTable {
     {
         let (_low, high) = subset.bounds()?;
         assert!(
-            high.index() <= self.rows.len(),
+            high.index() <= self.n_rows,
             "subset extends past the end of the FlatTable"
         );
+        let mut row = vec![Value::new(0); self.n_columns];
         subset
             .iter_bounded(start.index(), start.index().saturating_add(n), |row_id| {
-                let row = self.rows.get_row(row_id);
+                self.row(row_id, &mut row);
                 if constraints
                     .iter()
-                    .all(|constraint| Self::matches(row, constraint))
+                    .all(|constraint| Self::matches(&row, constraint))
                 {
-                    emit(row_id, row);
+                    emit(row_id, &row);
                 }
             })
             .map(Offset::from_usize)
     }
 
     fn refine_one(&self, mut subset: Subset, constraint: &Constraint) -> Subset {
-        subset.retain(|row_id| Self::matches(self.rows.get_row(row_id), constraint));
+        let mut row = vec![Value::new(0); self.n_columns];
+        subset.retain(|row_id| {
+            self.row(row_id, &mut row);
+            Self::matches(&row, constraint)
+        });
         subset
     }
 
@@ -230,26 +264,34 @@ impl Table for FlatTable {
             .try_fold(0usize, |count, rows| count.checked_add(rows.len()))
             .expect("FlatTable pending row count overflow");
         let final_len = self
-            .rows
-            .len()
+            .n_rows
             .checked_add(added)
             .expect("FlatTable row count overflow");
         // Validate that the dense subset endpoint remains representable.
         RowId::from_usize(final_len);
 
-        self.rows.reserve(added);
-        let writer = self.rows.parallel_writer();
-        parallel::for_each_mut(&mut submitted, |_, rows| {
-            writer.append_contents(rows);
-        });
-        self.rows = writer.finish();
+        for rows in submitted {
+            let start = self.next_row();
+            self.n_rows += rows.len();
+            let first = rows.get_row(RowId::new(0));
+            let columns = (0..self.n_columns)
+                .map(|col| {
+                    if rows.iter().all(|row| row[col] == first[col]) {
+                        FlatColumn::Constant(first[col])
+                    } else {
+                        FlatColumn::Values(rows.iter().map(|row| row[col]).collect())
+                    }
+                })
+                .collect();
+            self.chunks.push((start, columns));
+        }
 
         TableChange { added: added > 0 }
     }
 
     fn new_buffer(&self) -> Box<dyn MutationBuffer> {
         Box::new(FlatBuffer {
-            rows: Some(RowBuffer::new(self.rows.arity())),
+            rows: Some(RowBuffer::new(self.n_columns)),
             pending: Arc::downgrade(&self.pending),
         })
     }

@@ -33,7 +33,7 @@ use indexmap::IndexSet;
 use log::info;
 use once_cell::sync::Lazy;
 use smallvec::SmallVec;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use web_time::{Duration, Instant};
 
 const FRESH_ID_RESERVATION_SIZE: usize = 256;
@@ -170,8 +170,9 @@ pub struct EGraph {
     /// path re-resolves it per call, so the two agree only because a table
     /// name is bound at most once (the typechecker rejects a redefinition).
     mint_specs: BTreeMap<ExternalFunctionId, MintSpec>,
-    set_if_empty_specs: BTreeMap<ExternalFunctionId, SetIfEmptySpec>,
+    intern_specs: BTreeMap<ExternalFunctionId, InternSpec>,
     view_col_specs: BTreeMap<ExternalFunctionId, ViewColSpec>,
+    fresh_id_funcs: BTreeSet<ExternalFunctionId>,
     threads: usize,
     thread_pool: Option<Arc<ThreadPool>>,
 }
@@ -303,8 +304,9 @@ impl EGraph {
             action_registry,
             external_write_deps: Default::default(),
             mint_specs: Default::default(),
-            set_if_empty_specs: Default::default(),
+            intern_specs: Default::default(),
             view_col_specs: Default::default(),
+            fresh_id_funcs: Default::default(),
             threads,
             thread_pool,
         }
@@ -425,48 +427,49 @@ impl EGraph {
         self.db.add_external_function(func)
     }
 
-    /// Register the term encoder's `set-if-empty` canonicalize op for the FD
-    /// view table named `view_name` (`n_keys` key columns), returning the
-    /// [`ExternalFunctionId`] its mint sites resolve to.
-    ///
-    /// Invoked as `(keys…, vals…)`, it returns the view's first output column
-    /// (the e-class) for `keys`: the existing row's when the key is present, and
-    /// otherwise the first of `vals` after staging `(keys, vals)`. A second
-    /// invocation with the same key inside one action batch sees the first one's
-    /// staged row, so the two agree — see
-    /// [`TableAction::lookup_or_insert_vals`].
-    pub fn register_set_if_empty(
+    /// Intern a view row with a fresh first output only when its key is absent.
+    /// Arguments supply the keys and every output after the fresh id.
+    pub fn register_view_intern(
         &mut self,
         view_name: String,
         n_keys: usize,
         out_arity: usize,
     ) -> ExternalFunctionId {
+        assert!(out_arity > 0, "fresh view insertion needs an output column");
         let registry = self.action_registry.clone();
         let spec_name = view_name.clone();
+        let counter = self.id_counter;
         let id = self.register_external_func(Box::new(make_external_func(
             move |state: &mut ExecutionState, args: &[Value]| {
                 let registry = registry.read();
-                let action = registry.lookup_table(&view_name)?;
-                // Too few vals and the row is staged short of its value columns;
-                // too many and the surplus lands on the timestamp.
-                debug_assert_eq!(
-                    args.len(),
-                    n_keys + out_arity,
-                    "set-if-empty on view `{view_name}` takes {n_keys} keys and \
-                     {out_arity} values"
-                );
-                let keys = &args[..n_keys];
-                Some(action.lookup_or_insert_vals(state, keys, &args[n_keys..]))
+                let mut action = registry.lookup_table(&view_name)?.clone();
+                debug_assert_eq!(args.len(), n_keys + out_arity - 1);
+                action.default = Some(MergeVal::Counter(counter));
+                action.lookup_or_insert_multi(state, &args[..n_keys], &args[n_keys..])
             },
         )));
-        self.set_if_empty_specs.insert(
+        self.intern_specs.insert(
             id,
-            SetIfEmptySpec {
+            InternSpec {
                 view_name: spec_name,
                 n_keys,
                 out_arity,
+                counter,
             },
         );
+        id
+    }
+
+    /// Register a non-failing mint from the shared id counter. Its rule calls
+    /// need no panic fallback because this entrypoint always returns a value.
+    pub fn register_fresh_id(&mut self) -> ExternalFunctionId {
+        let counter = self.id_counter;
+        let id = self.register_external_func(Box::new(make_external_func(
+            move |state: &mut ExecutionState, _args: &[Value]| {
+                Some(Value::from_usize(state.inc_counter(counter)))
+            },
+        )));
+        self.fresh_id_funcs.insert(id);
         id
     }
 
@@ -636,30 +639,31 @@ impl EGraph {
         })
     }
 
-    /// The instruction lowering of a `set-if-empty-<View>!` primitive called
+    /// The instruction lowering of an `intern-<View>!` primitive called
     /// with `n_args` arguments, or `None` if `func` is not one, its table is not
     /// installed yet, or the call does not supply exactly one value per value
     /// column. A short row would push the timestamp into a value column.
-    pub(crate) fn set_if_empty_plan(
+    pub(crate) fn intern_plan(
         &self,
         func: ExternalFunctionId,
         n_args: usize,
-    ) -> Option<SetIfEmptyPlan> {
-        let spec = self.set_if_empty_specs.get(&func)?;
+    ) -> Option<InternPlan> {
+        let spec = self.intern_specs.get(&func)?;
         let registry = self.action_registry.read();
         let action = registry.lookup_table(&spec.view_name)?;
         let math = action.table_math;
         if math.num_keys() != spec.n_keys
             || math.n_vals() != spec.out_arity
-            || n_args != spec.n_keys + spec.out_arity
+            || n_args != spec.n_keys + spec.out_arity - 1
         {
             return None;
         }
-        Some(SetIfEmptyPlan {
+        Some(InternPlan {
             table: action.table,
             n_keys: spec.n_keys,
             ret_val_col: ColumnId::from_usize(math.ret_val_col()),
             subsume: math.subsume,
+            counter: spec.counter,
         })
     }
 
@@ -697,9 +701,10 @@ impl EGraph {
     }
 
     pub fn free_external_func(&mut self, func: ExternalFunctionId) {
+        self.fresh_id_funcs.remove(&func);
         self.external_write_deps.remove(&func);
         self.mint_specs.remove(&func);
-        self.set_if_empty_specs.remove(&func);
+        self.intern_specs.remove(&func);
         self.view_col_specs.remove(&func);
         self.db.free_external_function(func);
     }
@@ -1882,7 +1887,7 @@ impl MergeFn {
                 // Canonicalizing a constructor in a merge reads its view before
                 // inserting on a miss. Keep that view available and merge its
                 // pending rows before this callback, just like a Function lookup.
-                if let Some(plan) = egraph.set_if_empty_plan(*id, args.len()) {
+                if let Some(plan) = egraph.intern_plan(*id, args.len()) {
                     read_deps.insert(plan.table);
                     write_deps.insert(plan.table);
                 }
@@ -3035,22 +3040,24 @@ struct MintSpec {
     counter: CounterId,
 }
 
-/// What a `set-if-empty-<View>!` primitive would do, kept so the rule builder
+/// What an `intern-<View>!` primitive would do, kept so the rule builder
 /// can lower a call site to the existing `LookupOrInsertDefault` instruction.
 #[derive(Clone)]
-struct SetIfEmptySpec {
+struct InternSpec {
     view_name: String,
     n_keys: usize,
     out_arity: usize,
+    counter: CounterId,
 }
 
-/// A lowered `set-if-empty`: the view table plus the layout its default row needs.
+/// A lowered `intern`: the view table plus the layout its default row needs.
 #[derive(Clone)]
-pub(crate) struct SetIfEmptyPlan {
+pub(crate) struct InternPlan {
     pub(crate) table: TableId,
     pub(crate) n_keys: usize,
     pub(crate) ret_val_col: ColumnId,
     pub(crate) subsume: bool,
+    pub(crate) counter: CounterId,
 }
 
 /// What a view-column read (`view-proof-<View>`, `@UF_<S>_canon`,

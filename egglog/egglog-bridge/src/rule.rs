@@ -392,6 +392,15 @@ impl RuleBuilder<'_> {
     ) -> Variable {
         let args = args.to_vec();
         let res = self.new_var(ret_ty);
+        if self.egraph.fresh_id_funcs.contains(&func) {
+            self.query.add_rule.push(Box::new(move |inner, rb| {
+                let args = inner.convert_all(&args);
+                let var = rb.call_external(func, &args)?;
+                inner.mapping.insert(res.id, var.into());
+                Ok(())
+            }));
+            return res;
+        }
         // A mint cannot fail, so it needs no panic fallback: lower it to a
         // batched insert whose minted column comes from the id counter.
         if let Some(mint) = self.egraph.mint_insert_plan(func, args.len()) {
@@ -418,13 +427,13 @@ impl RuleBuilder<'_> {
             }));
             return res;
         }
-        // `set-if-empty` is exactly a lookup-or-insert on the view.
-        if let Some(plan) = self.egraph.set_if_empty_plan(func, args.len()) {
+        // Interning is exactly a lookup-or-insert on the view.
+        if let Some(plan) = self.egraph.intern_plan(func, args.len()) {
             self.query.add_rule.push(Box::new(move |inner, rb| {
                 let all = inner.convert_all(&args);
                 let (keys, vals) = all.split_at(plan.n_keys);
-                let mut default: Vec<WriteVal> =
-                    vals.iter().copied().map(WriteVal::QueryEntry).collect();
+                let mut default = vec![WriteVal::IncCounter(plan.counter)];
+                default.extend(vals.iter().copied().map(WriteVal::QueryEntry));
                 default.push(WriteVal::QueryEntry(inner.next_ts()));
                 if plan.subsume {
                     default.push(WriteVal::QueryEntry(DstVar::Const(NOT_SUBSUMED)));

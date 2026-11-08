@@ -58,6 +58,32 @@ fn appends_preserve_rows_duplicates_and_deltas() {
 }
 
 #[test]
+fn constant_columns_are_reconstructed_across_batches() {
+    empty_execution_state!(exec_state);
+    let mut table = WrappedTable::new(FlatTable::new(3));
+    let expected = [
+        [v(1), v(10), v(20)],
+        [v(2), v(10), v(21)],
+        [v(3), v(10), v(22)],
+        [v(4), v(11), v(23)],
+        [v(4), v(11), v(23)],
+    ];
+    stage(&table, &expected[..3]);
+    table.merge(&mut exec_state);
+    stage(&table, &expected[3..]);
+    table.merge(&mut exec_state);
+    assert_eq!(scan(&table, table.all().as_ref()), expected);
+    let matching = table.refine(
+        table.all(),
+        &[Constraint::EqConst {
+            col: ColumnId::new(1),
+            val: v(11),
+        }],
+    );
+    assert_eq!(scan(&table, matching.as_ref()), expected[3..]);
+}
+
+#[test]
 fn scans_apply_constraints_without_keyed_lookup() {
     empty_execution_state!(exec_state);
     let mut table = WrappedTable::new(FlatTable::new(3));
@@ -149,11 +175,10 @@ fn fresh_handles_submit_to_the_same_table() {
 fn bounded_scans_validate_offsets_and_handle_empty_sparse_subsets() {
     empty_execution_state!(exec_state);
     let mut table = FlatTable::new(2);
-    let mut buffer = table.new_buffer();
     for row in [[v(1), v(1)], [v(1), v(2)], [v(2), v(2)], [v(3), v(4)]] {
+        let mut buffer = table.new_buffer();
         buffer.stage_insert(&row);
     }
-    drop(buffer);
     table.merge(&mut exec_state);
 
     let equality = Constraint::Eq {

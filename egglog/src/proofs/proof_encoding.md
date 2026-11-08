@@ -101,22 +101,26 @@ are absent from the resulting proof.
 
 ## Building a term
 
-Evaluating a constructor application takes a fresh e-class and interns the
-application into its view. Top level `(Add (Num 1) (Num 2))` lowers to:
+Evaluating a constructor application interns it into its view, minting an
+e-class only when the key is absent. Top level `(Add (Num 1) (Num 2))` lowers to:
 
 ```text
-(let n1 (get-fresh! "Math"))
-(let n1_can (set-if-empty-Num! 1 n1 ()))
+(let n1_can (intern-Num! 1 ()))
 …                                                       ;; the same for (Num 2)
-(let ab (get-fresh! "Math"))
-(let ab_can (set-if-empty-Add! n1_can n2_can ab ()))
+(let ab_can (intern-Add! n1_can n2_can ()))
 ```
 
-`set-if-empty-<F>!` interns the application and returns the view's *existing*
+`intern-<F>!` interns the application and returns the view's *existing*
 e-class if the term was already there, so `ab_can` is always canonical. A parent
 is built over its children's canonical ids, which is what keeps views canonical.
 A freshly minted term needs no `@UF_<Sort>` row — identity-on-miss makes it its
 own representative.
+
+The proof walkthroughs below spell out a fresh canonical node and
+`set-if-empty` separately to show their propositions. Execution fuses them into
+`intern`, while a separate view-column read supplies the proof. Bare fresh ids
+that no expression reads are omitted from generated local scopes; proof-node
+rows remain append-only.
 
 ## Union in a rule
 
@@ -597,7 +601,7 @@ application is its own action and every operand is a variable:
 Now walk it bottom-up, carrying at each level a proof from the id the head built
 to the canonical id the view interned. That proof is what lets the *next* level
 up use canonical children while still concluding something about the term as
-written. `set-if-empty` below is the primitive that returns a view's existing
+written. The schematic `set-if-empty` operation below returns a view's existing
 representative, or installs the given id and proof when the shape is new.
 
 **`(let d (Add b c))`.** Both children are body variables, already canonical, so
@@ -748,10 +752,10 @@ the walk numbers `(Num 1)` at columns 0–2, `(Num 2)` at 3–5, and the guest
 
 ```text
 (let num1_pf1   (mint-@Rule_1! rule_name prems 1))       ;; (Num 1) over canonical children
-(let num1_e     (set-if-empty-Num! 1 …))
+(let num1_e     (intern-Num! 1 …))
 (let num1_bridge (view-proof-Num 1 …))
 (let num2_pf1   (mint-@RuleLink! num1_pf1 num1_bridge 4))
-(let num2_e     (set-if-empty-Num! 2 …))
+(let num2_e     (intern-Num! 2 …))
 (let num2_bridge (view-proof-Num 2 …))
 (let add_view   (mint-@RuleLink! num2_pf1 num2_bridge 8))
 (set (Add num1_e num2_e) (values r add_view))

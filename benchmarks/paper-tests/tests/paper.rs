@@ -1,5 +1,6 @@
 //! Paper coverage is driven by the figure catalog and the shared ignore file.
-//! Each trial runs in an isolated process with the existing local allocator cap.
+//! Trials run in isolated processes. Native Math references run uncapped;
+//! source executions retain the configured local allocator cap.
 use egglog::{CommandOutput, Read};
 use egglog_experimental::{DisequalityEncoding, EGraph, new_experimental_egraph_with_options};
 use libtest_mimic::Trial;
@@ -739,6 +740,7 @@ fn main() {
     let deadline = Duration::from_secs(timeout_sec).saturating_mul(CORRECTNESS_TIMEOUT_FACTOR);
     for (file, mut modes) in cells {
         let name = format!("paper/{}", file.strip_prefix(&root).unwrap().display());
+        let native_math = file == root.join("benchmarks/corpus/math/math-iteration-12.egg");
         assert!(
             modes.iter().all(|mode| supported.contains(&mode.as_str())),
             "unknown paper treatment"
@@ -753,9 +755,11 @@ fn main() {
                         .disequality_encoding
                         .as_ref()
                         .is_none_or(|value| value == "nee")
-                    && rule
-                        .memory_limit_bytes
-                        .is_none_or(|bound| memory_limit_bytes.is_some_and(|limit| limit <= bound))
+                    && rule.memory_limit_bytes.is_none_or(|bound| {
+                        // These modes run in a separate uncapped child below.
+                        !(native_math && mode.starts_with("egg"))
+                            && memory_limit_bytes.is_some_and(|limit| limit <= bound)
+                    })
             });
             let matched = matching.next();
             assert!(
@@ -780,6 +784,40 @@ fn main() {
             }
         });
         enabled += modes.len();
+        if native_math {
+            let mut native_modes = BTreeSet::new();
+            modes.retain(|mode| {
+                if mode.starts_with("egg") {
+                    native_modes.insert(mode.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            if !native_modes.is_empty() {
+                assert!(
+                    modes.contains("off"),
+                    "native Math requires an enabled off oracle"
+                );
+                // A capped child cannot raise its inherited hard VM limit.
+                // Start this comparison from the uncapped parent instead,
+                // repeating off as the native constructor/class-count oracle.
+                native_modes.insert("off".to_owned());
+                let file = file.clone();
+                let kind = native_modes.iter().cloned().collect::<Vec<_>>().join(",");
+                trials.push(
+                    Trial::test(format!("{name}/native-egg"), move || {
+                        run_child(
+                            &file,
+                            &native_modes,
+                            deadline.saturating_mul(native_modes.len() as u32),
+                            None,
+                        )
+                    })
+                    .with_kind(format!("{kind}; no memory guard")),
+                );
+            }
+        }
         let skipped = modes.is_empty();
         let mut kind = if skipped {
             "excluded".to_owned()
