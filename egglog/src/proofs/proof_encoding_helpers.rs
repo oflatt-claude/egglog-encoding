@@ -488,34 +488,9 @@ impl ProofInstrumentor<'_> {
 
         // This program is generated internally by term encoding, so a parse
         // failure is an egglog bug rather than a user error.
-        res.expect("internally generated term-encoding program must parse")
-    }
-
-    /// Like [`Self::parse_program`], but groups each maximal run of consecutive
-    /// top-level actions into one [`Command::Actions`] block. Non-action commands
-    /// pass through in place, preserving order.
-    pub(crate) fn parse_program_as_local_actions(&mut self, input: &str) -> Vec<Command> {
-        use crate::ast::GenericActions;
-        let mut out: Vec<Command> = vec![];
-        let mut pending: Vec<crate::ast::Action> = vec![];
-        let flush = |pending: &mut Vec<crate::ast::Action>, out: &mut Vec<Command>| {
-            if !pending.is_empty() {
-                out.push(Command::Actions(GenericActions::new(std::mem::take(
-                    pending,
-                ))));
-            }
-        };
-        for command in self.parse_program(input) {
-            match command {
-                Command::Action(action) => pending.push(action),
-                other => {
-                    flush(&mut pending, &mut out);
-                    out.push(other);
-                }
-            }
-        }
-        flush(&mut pending, &mut out);
-        out
+        let mut program = res.expect("internally generated term-encoding program must parse");
+        self.prune_unused_fresh_ids(&mut program);
+        program
     }
 
     /// Declarations for the fused rule constructors `program`'s rules need but

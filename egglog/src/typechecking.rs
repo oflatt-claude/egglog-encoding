@@ -256,6 +256,10 @@ impl PrimitiveWithId {
     /// Takes the full signature of a primitive (both input and output types).
     /// Returns whether the primitive is compatible with this signature.
     pub fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
+        let type_constraint = self.primitive.get_type_constraints(&Span::Panic);
+        if let Some(accepted) = type_constraint.check_signature(tys, typeinfo) {
+            return accepted;
+        }
         let mut constraints = vec![];
         let lits: Vec<_> = (0..tys.len())
             .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
@@ -263,11 +267,7 @@ impl PrimitiveWithId {
         for (lit, ty) in lits.iter().zip(tys.iter()) {
             constraints.push(constraint::assign(lit.clone(), ty.clone()))
         }
-        constraints.extend(
-            self.primitive
-                .get_type_constraints(&Span::Panic)
-                .get(&lits, typeinfo),
-        );
+        constraints.extend(type_constraint.get(&lits, typeinfo));
         let problem = Problem {
             constraints,
             range: HashSet::default(),
@@ -755,7 +755,9 @@ impl EGraph {
                 {
                     let (name, input, outputs) =
                         (resolved.name.clone(), ft.input.clone(), ft.outputs.clone());
-                    if resolved.role == FunctionRole::FunctionView && input.is_empty() {
+                    if resolved.role == FunctionRole::FunctionView && input.is_empty()
+                        || resolved.role == FunctionRole::GlobalView
+                    {
                         self.add_read_primitive(
                             ExtractFunctionRoot {
                                 name: format!("view-root-{name}"),

@@ -33,7 +33,7 @@ use indexmap::IndexSet;
 use log::info;
 use once_cell::sync::Lazy;
 use smallvec::SmallVec;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use web_time::{Duration, Instant};
 
 const FRESH_ID_RESERVATION_SIZE: usize = 256;
@@ -172,6 +172,7 @@ pub struct EGraph {
     mint_specs: BTreeMap<ExternalFunctionId, MintSpec>,
     set_if_empty_specs: BTreeMap<ExternalFunctionId, SetIfEmptySpec>,
     view_col_specs: BTreeMap<ExternalFunctionId, ViewColSpec>,
+    fresh_id_funcs: BTreeSet<ExternalFunctionId>,
     threads: usize,
     thread_pool: Option<Arc<ThreadPool>>,
 }
@@ -305,6 +306,7 @@ impl EGraph {
             mint_specs: Default::default(),
             set_if_empty_specs: Default::default(),
             view_col_specs: Default::default(),
+            fresh_id_funcs: Default::default(),
             threads,
             thread_pool,
         }
@@ -465,8 +467,55 @@ impl EGraph {
                 view_name: spec_name,
                 n_keys,
                 out_arity,
+                fresh_counter: None,
             },
         );
+        id
+    }
+
+    /// Intern a view row with a fresh first output only when its key is absent.
+    /// Arguments supply the keys and every output after the fresh id.
+    pub fn register_fresh_set_if_empty(
+        &mut self,
+        view_name: String,
+        n_keys: usize,
+        out_arity: usize,
+    ) -> ExternalFunctionId {
+        assert!(out_arity > 0, "fresh view insertion needs an output column");
+        let registry = self.action_registry.clone();
+        let spec_name = view_name.clone();
+        let counter = self.id_counter;
+        let id = self.register_external_func(Box::new(make_external_func(
+            move |state: &mut ExecutionState, args: &[Value]| {
+                let registry = registry.read();
+                let mut action = registry.lookup_table(&view_name)?.clone();
+                debug_assert_eq!(args.len(), n_keys + out_arity - 1);
+                action.default = Some(MergeVal::Counter(counter));
+                action.lookup_or_insert_multi(state, &args[..n_keys], &args[n_keys..])
+            },
+        )));
+        self.set_if_empty_specs.insert(
+            id,
+            SetIfEmptySpec {
+                view_name: spec_name,
+                n_keys,
+                out_arity,
+                fresh_counter: Some(counter),
+            },
+        );
+        id
+    }
+
+    /// Register a non-failing mint from the shared id counter. Its rule calls
+    /// need no panic fallback because this entrypoint always returns a value.
+    pub fn register_fresh_id(&mut self) -> ExternalFunctionId {
+        let counter = self.id_counter;
+        let id = self.register_external_func(Box::new(make_external_func(
+            move |state: &mut ExecutionState, _args: &[Value]| {
+                Some(Value::from_usize(state.inc_counter(counter)))
+            },
+        )));
+        self.fresh_id_funcs.insert(id);
         id
     }
 
@@ -651,7 +700,7 @@ impl EGraph {
         let math = action.table_math;
         if math.num_keys() != spec.n_keys
             || math.n_vals() != spec.out_arity
-            || n_args != spec.n_keys + spec.out_arity
+            || n_args != spec.n_keys + spec.out_arity - usize::from(spec.fresh_counter.is_some())
         {
             return None;
         }
@@ -660,6 +709,7 @@ impl EGraph {
             n_keys: spec.n_keys,
             ret_val_col: ColumnId::from_usize(math.ret_val_col()),
             subsume: math.subsume,
+            fresh_counter: spec.fresh_counter,
         })
     }
 
@@ -697,6 +747,7 @@ impl EGraph {
     }
 
     pub fn free_external_func(&mut self, func: ExternalFunctionId) {
+        self.fresh_id_funcs.remove(&func);
         self.external_write_deps.remove(&func);
         self.mint_specs.remove(&func);
         self.set_if_empty_specs.remove(&func);
@@ -3042,6 +3093,7 @@ struct SetIfEmptySpec {
     view_name: String,
     n_keys: usize,
     out_arity: usize,
+    fresh_counter: Option<CounterId>,
 }
 
 /// A lowered `set-if-empty`: the view table plus the layout its default row needs.
@@ -3051,6 +3103,7 @@ pub(crate) struct SetIfEmptyPlan {
     pub(crate) n_keys: usize,
     pub(crate) ret_val_col: ColumnId,
     pub(crate) subsume: bool,
+    pub(crate) fresh_counter: Option<CounterId>,
 }
 
 /// What a view-column read (`view-proof-<View>`, `@UF_<S>_canon`,

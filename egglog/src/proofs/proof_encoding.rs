@@ -301,6 +301,9 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// The nodes of the actions being lowered, by address, so the one in hand
     /// can be named. Where in them the encoder is writing rides on [`Emit`].
     action_expr_index: HashMap<usize, usize>,
+    /// Bare fresh-id bindings emitted by this instrumentor, which have no
+    /// effect if their value is never read. Other primitives are never pruned.
+    generated_fresh_ids: HashSet<String>,
 }
 
 /// Where a variable a rule body binds gets its reflexive `t = t` proof from: a
@@ -468,6 +471,7 @@ impl<'a> ProofInstrumentor<'a> {
         Self {
             global_action,
             action_expr_index: HashMap::default(),
+            generated_fresh_ids: HashSet::default(),
             egraph,
             reflexive: HashSet::default(),
             deferred: HashMap::default(),
@@ -1730,11 +1734,45 @@ impl<'a> ProofInstrumentor<'a> {
     /// Bind a fresh id of `sort`, asserting nothing about it.
     fn fresh_id(&mut self, stmts: &mut Vec<String>, sort: &str) -> String {
         let v = self.fresh_var();
-        // The generic `get-fresh!` takes the target sort as a string literal so it
-        // types its output without per-sort primitives (its runtime ignores the arg).
+        self.generated_fresh_ids.insert(v.clone());
         let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
         stmts.push(format!("(let {v} ({get_fresh} \"{sort}\"))"));
         v
+    }
+
+    /// Remove only our unread bare-id bindings in local scopes. Global action
+    /// commands may be read by later commands and must remain untouched.
+    pub(crate) fn prune_unused_fresh_ids(&self, program: &mut [Command]) {
+        if self.generated_fresh_ids.is_empty() {
+            return;
+        }
+        for command in program {
+            let mut unused = self.generated_fresh_ids.clone();
+            let actions = match command {
+                Command::Actions(actions) => actions,
+                Command::Rule { rule } => {
+                    for fact in &rule.body {
+                        fact.visit_vars(&mut |_, var| {
+                            unused.remove(var);
+                        });
+                    }
+                    &mut rule.head
+                }
+                _ => continue,
+            };
+            for action in actions.iter() {
+                let mut read = |_: &Span, var: &String| {
+                    unused.remove(var);
+                };
+                match action {
+                    Action::Let(_, _, rhs) => rhs.visit_vars(&mut read),
+                    _ => action.visit_vars(&mut read),
+                }
+            }
+            actions
+                .0
+                .retain(|action| !matches!(action, Action::Let(_, var, _) if unused.contains(var)));
+        }
     }
 
     /// Append the one statement minting a fresh id and asserting the relation
@@ -1861,7 +1899,7 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Term-only constructors: build the term with canonical children and
-    /// canonicalize it to the view's e-class via `set-if-empty`; return that
+    /// canonicalize it to the view's e-class via `intern`; return that
     /// canonical id so parents build with canonical children (views stay
     /// canonical).
     fn add_constructor_term_only(
@@ -1871,11 +1909,10 @@ impl<'a> ProofInstrumentor<'a> {
         args: &[String],
     ) -> String {
         let view = func_type.name.to_string();
-        let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
-        let fv = self.fresh_term_id(res, &func_type.name);
+        let intern = format!("intern-{view}!");
         let canon = self.fresh_var();
         res.push(format!(
-            "(let {canon} ({set_if_empty} {} {fv} ()))",
+            "(let {canon} ({intern} {} ()))",
             ListDisplay(args, " ")
         ));
         canon
@@ -1907,7 +1944,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// Proof-mode constructors: build the *natural* term (children at their
     /// as-built ids) and the *canonical* term (children at their view-deduped
     /// ids), connect them with a `Congr` chain over the changed children, then
-    /// `set-if-empty` to the view's deduped e-class and stitch on the view-dedup
+    /// intern to the view's deduped e-class and stitch on the view-dedup
     /// edge. The operand returned reads as the deduped e-class (so parents and
     /// views stay canonical), carrying the natural term and the connector
     /// `natural = deduped` for the parent's `Congr` and the root `union`.
@@ -1921,18 +1958,15 @@ impl<'a> ProofInstrumentor<'a> {
         run: Option<HeadRun>,
     ) -> Operand {
         let view = func_type.name.to_string();
-        let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
+        let intern = format!("intern-{view}!");
 
-        // `fv_nat` stays *unseeded* — only `fv_can` is written to the view — so the
-        // view's congruence `:merge` can never move it, and the proof of the shape the
-        // head wrote stays stated over the ids the head built. `fv_can` is a separate
-        // node even when no child changed.
+        // `fv_nat` stays unseeded: interning writes a separate canonical id to
+        // the view, so its congruence merge cannot move the natural node.
         let Natural {
             dedup_args,
             fv_nat,
             to_dedup,
         } = self.build_natural_with_congr(emit, &func_type.name, args);
-        let fv_can = self.fresh_term_id(emit.stmts, &func_type.name);
         let can_prf = match &to_dedup {
             Some(chain) => self.reflexive(chain.clone()),
             // One row records the composition proof lifting rebuilds.
@@ -1952,9 +1986,8 @@ impl<'a> ProofInstrumentor<'a> {
         let dedup_args = ListDisplay(&dedup_args, " ");
         // The two statements below read `can_prf` directly, not through a mint.
         self.emit_pending_group(emit.stmts, &can_prf);
-        emit.stmts.push(format!(
-            "(let {dedup} ({set_if_empty} {dedup_args} {fv_can} {can_prf}))"
-        ));
+        emit.stmts
+            .push(format!("(let {dedup} ({intern} {dedup_args} {can_prf}))"));
         emit.stmts.push(format!(
             "(let {vprf} ({view_proof} {dedup_args} {can_prf}))"
         ));
@@ -2200,11 +2233,23 @@ impl<'a> ProofInstrumentor<'a> {
                             // Global reads introduced by lowering are the only
                             // custom-function lookups allowed in these actions.
                             if func_type.role.is_global() {
-                                Operand::plain(self.lookup_global(
-                                    func_type,
-                                    &ids(&args),
-                                    emit.stmts,
-                                ))
+                                if !func_type.output().is_eq_sort() {
+                                    return Operand::plain(self.lookup_global(
+                                        func_type,
+                                        &ids(&args),
+                                        emit.stmts,
+                                    ));
+                                }
+                                // The source typechecker has already required this
+                                // global to be bound. Read its committed view row
+                                // without minting unused insertion fallbacks.
+                                let value = self.fresh_var();
+                                emit.stmts.push(format!(
+                                    "(let {value} (view-root-{} {}))",
+                                    func_type.name,
+                                    ListDisplay(&ids(&args), " ")
+                                ));
+                                Operand::plain(value)
                             } else {
                                 panic!(
                                     "Found a function lookup in actions, should have been prevented by typechecking"
@@ -2587,7 +2632,7 @@ impl<'a> ProofInstrumentor<'a> {
             }
             // A top-level action, or a block of them. The instrumented result
             // runs as one local-scope block so the minted temporaries stay
-            // local (see `parse_program_as_local_actions`).
+            // local. Declarations are collected separately in `pending_decls`.
             ResolvedNCommand::CoreAction(_) | ResolvedNCommand::CoreActions(_) => {
                 let actions: &[ResolvedAction] = match command {
                     ResolvedNCommand::CoreAction(action) => std::slice::from_ref(action),
@@ -2600,7 +2645,9 @@ impl<'a> ProofInstrumentor<'a> {
                 // A term built here records a connector nothing may go on to
                 // compose with; whatever is still deferred reached no statement.
                 self.drop_pending_lookups();
-                res.extend(self.parse_program_as_local_actions(&instrumented));
+                if !instrumented.is_empty() {
+                    res.extend(self.parse_program(&format!("(begin {instrumented})")));
+                }
             }
             ResolvedNCommand::LetBegin(..) => {
                 unreachable!("LetBegin is removed by remove_globals")
@@ -2801,5 +2848,39 @@ fn command_skips_rebuild(command: &ResolvedNCommand) -> bool {
         ResolvedNCommand::CoreAction(action) => action_skips_rebuild(action),
         ResolvedNCommand::CoreActions(actions) => actions.0.iter().all(action_skips_rebuild),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod fresh_liveness_tests {
+    use super::*;
+
+    #[test]
+    fn generated_fresh_liveness_respects_scope_literals_and_other_primitives() {
+        let mut graph = EGraph::default();
+        let mut encoder = ProofInstrumentor::new(&mut graph);
+        let mut statements = vec![];
+        let unused = encoder.fresh_id(&mut statements, "T");
+        let used = encoder.fresh_id(&mut statements, "T");
+        statements.push(format!("(consume {used})"));
+        statements.push("(let user-result (get-fresh-user!))".into());
+        statements.push(format!("(consume \"{unused}\")"));
+        let program = encoder.parse_program(&format!("(begin {})", statements.join("\n")));
+        let [Command::Actions(actions)] = program.as_slice() else {
+            panic!("expected a local block")
+        };
+        let names: Vec<_> = actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::Let(_, name, _) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, [used.as_str(), "user-result"]);
+        // A global command can be read by later commands outside this parse.
+        let global = encoder.parse_program(&format!("(let {unused} (get-fresh! \"T\"))"));
+        assert!(
+            matches!(global.as_slice(), [Command::Action(Action::Let(_, name, _))] if name == &unused)
+        );
     }
 }

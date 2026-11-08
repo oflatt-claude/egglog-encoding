@@ -36,6 +36,151 @@ fn valid_flat_config(name: &str) -> FunctionConfig {
 }
 
 #[test]
+fn fresh_id_calls_preserve_ids_without_allocating_panic_fallbacks() {
+    let mut egraph = EGraph::default();
+    let output = egraph.add_table(valid_flat_config("fresh-pairs"));
+    let fresh = egraph.register_fresh_id();
+    let before = egraph.register_external_func(Box::new(make_external_func(
+        |_: &mut core_relations::ExecutionState, _: &[Value]| Some(Value::new(0)),
+    )));
+    let rule = {
+        let mut rb = egraph.new_rule("mint pair", true);
+        let a = rb.call_external_func(fresh, &[], ColumnTy::Id, || panic!("fresh cannot fail"));
+        let b = rb.call_external_func(fresh, &[], ColumnTy::Id, || panic!("fresh cannot fail"));
+        rb.set(output, &[a.into(), b.into()]);
+        rb.build()
+    };
+    let after = egraph.register_external_func(Box::new(make_external_func(
+        |_: &mut core_relations::ExecutionState, _: &[Value]| Some(Value::new(0)),
+    )));
+    assert_eq!(after.index(), before.index() + 1);
+    assert!(egraph.run_rules(&[rule], None).unwrap().changed());
+    let mut pairs = vec![];
+    egraph.for_each(output, |row| pairs.push(row.vals.to_vec()));
+    assert_eq!(pairs.len(), 1);
+    assert_ne!(pairs[0][0], pairs[0][1]);
+    egraph.free_external_func(fresh);
+    assert!(!egraph.fresh_id_funcs.contains(&fresh));
+}
+
+#[test]
+fn fresh_view_interning_reuses_pending_and_committed_rows() {
+    for lowered in [false, true] {
+        let mut egraph = EGraph::default();
+        let int = egraph.base_values_mut().register_type::<i64>();
+        let intern = egraph.register_fresh_set_if_empty("view".into(), 1, 2);
+        let view = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Base(int), ColumnTy::Id, ColumnTy::Base(int)],
+            n_vals: 2,
+            n_identity_vals: None,
+            default: DefaultVal::Fail,
+            merge: MergeFn::Columns(vec![MergeFn::AssertEq, MergeFn::AssertEq]),
+            name: "view".into(),
+            can_subsume: false,
+        });
+        let output = egraph.add_table(FunctionConfig {
+            schema: vec![
+                ColumnTy::Base(int),
+                ColumnTy::Id,
+                ColumnTy::Id,
+                ColumnTy::Id,
+                ColumnTy::Id,
+            ],
+            n_vals: 4,
+            n_identity_vals: None,
+            default: DefaultVal::Fail,
+            merge: MergeFn::Columns(vec![
+                MergeFn::AssertEq,
+                MergeFn::AssertEq,
+                MergeFn::AssertEq,
+                MergeFn::AssertEq,
+            ]),
+            name: "output".into(),
+            can_subsume: false,
+        });
+        let fresh = egraph.register_fresh_id();
+        let key = egraph.base_values().get(1i64);
+        let payload = egraph.base_values().get(7i64);
+        let other = egraph.base_values().get(9i64);
+        let mut canonical = None;
+        for phase in 0..2i64 {
+            let out_key = egraph.base_values().get(phase);
+            let mut seen = vec![];
+            if lowered {
+                let key_expr = egraph.base_value_constant(1i64);
+                let payload_expr = egraph.base_value_constant(7i64);
+                let other_expr = egraph.base_value_constant(9i64);
+                let out_key_expr = egraph.base_value_constant(phase);
+                let rule = {
+                    let mut rb = egraph.new_rule("intern twice", true);
+                    let guard = rb.call_external_func(fresh, &[], ColumnTy::Id, String::new);
+                    let a = rb.call_external_func(
+                        intern,
+                        &[key_expr.clone(), payload_expr],
+                        ColumnTy::Id,
+                        String::new,
+                    );
+                    let again = rb.call_external_func(
+                        intern,
+                        &[key_expr, other_expr],
+                        ColumnTy::Id,
+                        String::new,
+                    );
+                    let next = rb.call_external_func(fresh, &[], ColumnTy::Id, String::new);
+                    rb.set(
+                        output,
+                        &[
+                            out_key_expr,
+                            guard.into(),
+                            a.into(),
+                            again.into(),
+                            next.into(),
+                        ],
+                    );
+                    rb.build()
+                };
+                egraph.run_rules(&[rule], None).unwrap();
+                egraph.for_each(output, |row| {
+                    if row.vals[0] == out_key {
+                        seen.extend_from_slice(&row.vals[1..]);
+                    }
+                });
+            } else {
+                egraph
+                    .run_actions(None, |state| {
+                        seen.push(state.call_external_func(fresh, &[]).unwrap());
+                        seen.push(state.call_external_func(intern, &[key, payload]).unwrap());
+                        seen.push(state.call_external_func(intern, &[key, other]).unwrap());
+                        seen.push(state.call_external_func(fresh, &[]).unwrap());
+                    })
+                    .unwrap();
+            }
+            assert_eq!(seen.len(), 4);
+            assert_eq!(seen[1], seen[2], "pending inserts must agree");
+            if phase == 0 {
+                assert_eq!(
+                    seen[3].index(),
+                    seen[1].index() + 1,
+                    "duplicate must not mint another id"
+                );
+                assert_eq!(seen[1].index(), seen[0].index() + 1);
+                canonical = Some(seen[1]);
+            } else {
+                assert_eq!(Some(seen[1]), canonical);
+                assert_eq!(
+                    seen[3].index(),
+                    seen[0].index() + 1,
+                    "committed hit must not mint an id"
+                );
+            }
+        }
+        let mut rows = vec![];
+        egraph.for_each(view, |row| rows.push(row.vals.to_vec()));
+        assert_eq!(rows, [vec![key, canonical.unwrap(), payload]]);
+    }
+}
+
+#[test]
 fn flat_storage_accepts_append_and_scan_semantics() {
     let mut egraph = EGraph::default();
     let table = egraph.add_internal_flat_table(valid_flat_config("flat"));

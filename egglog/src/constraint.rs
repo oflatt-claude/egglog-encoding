@@ -1032,6 +1032,14 @@ fn get_literal_and_global_constraints<'a>(
 /// A trait for generating type constraints from atom applications.
 /// This is used to create constraints that ensure proper typing of function/primitive applications.
 pub trait TypeConstraint {
+    /// Check a fully known signature without constructing inference constraints.
+    /// `None` retains the general constraint solver. Implementations returning
+    /// `Some` must agree with solving `get` over distinct placeholder arguments
+    /// assigned these sorts (including the output sort).
+    fn check_signature(&self, _sorts: &[ArcSort], _typeinfo: &TypeInfo) -> Option<bool> {
+        None
+    }
+
     /// Generates constraints for the given arguments based on this type constraint.
     /// The constraints ensure that the arguments have compatible types.
     fn get(
@@ -1063,6 +1071,15 @@ impl SimpleTypeConstraint {
 }
 
 impl TypeConstraint for SimpleTypeConstraint {
+    fn check_signature(&self, sorts: &[ArcSort], _typeinfo: &TypeInfo) -> Option<bool> {
+        Some(
+            self.sorts
+                .iter()
+                .map(|s| s.name())
+                .eq(sorts.iter().map(|s| s.name())),
+        )
+    }
+
     fn get(
         &self,
         arguments: &[AtomTerm],
@@ -1259,4 +1276,57 @@ pub(crate) fn grounded_check(
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+
+    #[test]
+    fn known_signature_checks_agree_with_general_constraint_solving() {
+        let graph = EGraph::default();
+        let sorts: Vec<ArcSort> = vec![
+            I64Sort.to_arcsort(),
+            StringSort.to_arcsort(),
+            Arc::new(EqSort { name: "T".into() }),
+        ];
+        let mut cases: Vec<Box<dyn TypeConstraint>> = (0..=3)
+            .map(|n| {
+                SimpleTypeConstraint::new("fixed", sorts[..n].to_vec(), Span::Panic).into_box()
+            })
+            .collect();
+        cases.push(
+            graph.type_info.get_prims("get-fresh!").unwrap()[0]
+                .primitive
+                .get_type_constraints(&Span::Panic),
+        );
+        for constraint in cases {
+            for len in 0..=4 {
+                for shift in 0..sorts.len() {
+                    let signature: Vec<_> = (0..len)
+                        .map(|i| sorts[(i + shift) % sorts.len()].clone())
+                        .collect();
+                    let lits: Vec<_> = (0..len)
+                        .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
+                        .collect();
+                    let mut constraints: Vec<_> = lits
+                        .iter()
+                        .zip(&signature)
+                        .map(|(lit, ty)| assign(lit.clone(), ty.clone()))
+                        .collect();
+                    constraints.extend(constraint.get(&lits, &graph.type_info));
+                    let expected = Problem {
+                        constraints,
+                        range: HashSet::default(),
+                    }
+                    .solve(|s: &ArcSort| s.name())
+                    .is_ok();
+                    assert_eq!(
+                        constraint.check_signature(&signature, &graph.type_info),
+                        Some(expected)
+                    );
+                }
+            }
+        }
+    }
 }
