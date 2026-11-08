@@ -95,6 +95,27 @@
         "slotted-ref-multi",
         "slotted-ref-nested-snapshot"
       ]
+    },
+    "parallel-scaling": {
+      "spec": "eval/parallel-scaling.vl.json",
+      "files": [
+        "../benchmarks/corpus/eggcc/*.egg",
+        "../benchmarks/corpus/hardboiled/*.egg",
+        "../benchmarks/corpus/misaal/*.egg",
+        "../benchmarks/corpus/churchroad/*.egg",
+        "../benchmarks/corpus/dialegg/*.egg",
+        "../benchmarks/corpus/luminal/*.egg"
+      ],
+      "treatments": [
+        "off",
+        "proof-testing"
+      ],
+      "threads": [
+        1,
+        2,
+        4,
+        8
+      ]
     }
   }
 }

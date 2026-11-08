@@ -7,20 +7,21 @@ From the code repository root:
 cp -R figures/output/eval ../extended-egglog-paper/figures/
 ./bench.py figures --help
 ./bench.py figures math-runtime slotted-runtime
+./bench.py figures parallel-scaling
 ./bench.py figures --rounds 3 --memory-limit --report /tmp/figures-quick.jsonl --output-dir /tmp/figure-previews
 ./bench.py figures --config path/to/catalog.json
 ./bench.py figures --output-dir ../extended-egglog-paper/figures/eval
 ```
 
 Install the root Python environment with `uv sync --locked`, the pinned Rust
-toolchain, and Node.js/npm. The command builds release executables and invokes
+toolchain, and Node.js 22 or newer with npm. The command builds release executables and invokes
 pinned standalone `npx` packages: Vega 6.4.0, Vega-Lite 6.4.3, Vega CLI 6.4.0,
 Canvas 3.2.3. No npm project or separate PDF converter is required. PDF text uses
 embedded font subsets. The first run may download the pinned renderer packages.
 
 Bare `./bench.py figures` writes one ignored output folder at
 `figures/output/eval/` in this checkout, independent of the invocation directory.
-Each of the six figures has seven companions: PDF, SVG, 3x PNG, `.bound.vl.json`,
+Each of the seven figures has seven companions: PDF, SVG, 3x PNG, `.bound.vl.json`,
 `.results.json`, `.numbers.tex` and `.table.tex`. Authored specifications remain
 under `figures/eval/`. Absolute artifact paths are printed on stderr.
 
@@ -45,12 +46,14 @@ before copying it, and remove obsolete artifacts explicitly when needed.
 | `corpus-proof-recording-cdf` | Recording-only proof time and peak-RSS overhead across the same replays; strict correctness coverage retained |
 | `corpus-proofs-cdf` | Full proof recording, extraction and checking time and peak-RSS overhead across the same replays |
 | `slotted-runtime` | Full 44-rule SDQL kernels/phases; aligned runtime/RSS encoding-to-native ratio panels and a table of both metrics |
+| `parallel-scaling` | One plot of ordinary and checked-proof Egglog speedup at 1, 2, 4 and 8 threads; medians and workload IQR |
 
 ## Flat configuration and automatic reuse
 
 [`catalog.json`](catalog.json) contains global `rounds` and `timeout_sec` settings
 and a `figures` object. Each figure declares `spec`, `files` and
-`treatments`, with optional correctness-only `checks`, using shared treatment strings:
+`treatments`, with optional correctness-only `checks` and worker `threads`
+(default `[1]`; sweeps are supported by `parallel-scaling`), using shared treatment strings:
 
 ```json
 {
@@ -146,7 +149,7 @@ recorded observations. Source targets are checked and rebound on each figure
 invocation. An ordinary comparison that assigns the same label/engine to two
 different binaries is rejected before launch. The raw
 `.reports.jsonl` remains append-only. The shared selector matches the current
-executable, physical input file hash, treatment, and encoding. Resource failures
+executable, physical input file hash, treatment, encoding, and thread count. Resource failures
 are selected under the shared retry rule; successes remain reusable when guards
 change. It binds their original row
 indices into the Vega-Lite specifications. They never borrow missing measurements
@@ -162,10 +165,34 @@ remaining exclusions stop the command, preserving the previous output bundle. Wi
 absolute mean intervals use Student's t at 95%. N = 1 permits a mean point but
 no interval. Math overhead uses independent-sample Fieller-style 95% intervals;
 unavailable or unbounded intervals retain their explanation. The t critical
-value is the only statistical scalar supplied to the plots: Vega performs means,
+value is the only statistical scalar supplied to the distribution plots: Vega performs means,
 sample variances, ratios, Fieller calculations, cohort selection and ranking.
 The companion exports use the existing Python report estimators; a shared
 fixture checks numerical parity against executed Vega transforms.
+
+`parallel-scaling` uses the same shared Python estimates for its exported numbers
+and plotted points. For each file and mode, speedup is its one-thread arithmetic
+mean divided by its N-thread arithmetic mean. The lines show medians across files;
+the bands show the 25th–75th percentiles across files (inclusive interpolation),
+not confidence intervals. Both modes use the same cohort, chosen solely by the
+ordinary one-thread mean >= 0.2 seconds, with no upper cutoff. Each mode starts at
+exactly 1x because its serial reference reuses the same observations. All selected
+conditions must be complete; failed parallel runs never silently drop from the
+curves. Per-file means, Fieller speedup intervals and raw observations remain in
+the companion exports. Normalizing each mode separately measures scaling, not
+absolute proof overhead; a matching curve alone does not imply equal runtimes.
+
+This figure times `off` and full `proof-testing`, including proof recording,
+extraction and checking. It measures whole-process wall time, including startup
+and lowering. Compilation is outside the boundary. Parallel runs omit the serial
+phase-summary flag because search and apply overlap; wall time and RSS use the
+same shared process runner at every thread count. Thread count is part of cache
+identity, so this change requires a fresh schema-versioned report cache.
+
+The default catalog collects the entire saved application corpus with ten
+observations per configuration. A shorter preview can use `--config` with a
+declared subset and `--rounds 3`, retaining explicit input provenance. Preview
+curves do not establish full-suite scaling or the paper's result.
 
 Disequality and Math absolute panels use the same gray/black boxes: medians,
 interquartile ranges and 1.5-IQR whiskers. Only generated outliers appear as
@@ -226,8 +253,9 @@ The runner reads each authored specification once and binds its declared
 parameters and grouped JSON URL in a temporary copy. The standard parameters are
 `target_label`, `timeout_sec`, `rounds`, `t_critical`, `selected_inputs` and
 `source_blockers`. Expected inputs include physical identities, selected row IDs
-and corpus metadata. They scope subset configurations; statistics remain in
-the authored Vega transforms. Vega resolves other
+and corpus metadata. They scope subset configurations; distribution statistics remain in
+the authored Vega transforms, while `parallel-scaling` binds its exported `scaling`
+points. Vega resolves other
 relative assets from the authored specification's directory.
 
 Each invocation stages all requested companions and replaces the previous
@@ -267,7 +295,7 @@ make check
 
 The figure tests use synthetic snapshots without writing the benchmark cache.
 They cover sample counts, means/intervals, missing/failing outcomes, label and
-subset selection, cohort boundaries and coverage. Inspect all six PDFs/PNGs at
+subset selection, cohort boundaries and coverage. Inspect all seven PDFs/PNGs at
 manuscript width for unclipped labels, tails and uncertainty; use `pdffonts` to
 verify embedding. `make check` includes the catalog-driven Rust correctness suite:
 visible table sizes, stable source results, extraction correspondence and strict proof

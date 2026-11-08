@@ -167,6 +167,13 @@ class ResolvedTarget:
         raise ValueError(f"target {self.row.display_label} has no {binary_name} binary")
 
 
+def validate_threads(treatment: Treatment, threads: int) -> None:
+    if type(threads) is not int or threads < 1:
+        raise ValueError("thread count must be a positive integer")
+    if threads != 1 and TREATMENT_SPECS[treatment].binary_name != "egglog-experimental":
+        raise ValueError("parallel execution is only supported by egglog treatments")
+
+
 @dataclass(frozen=True)
 class EndpointRequest:
     """One unresolved target/treatment selected by the CLI."""
@@ -175,8 +182,10 @@ class EndpointRequest:
     treatment: Treatment
     disequality_encoding: DisequalityEncoding = "nee"
     memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
+    threads: int = 1
 
     def __post_init__(self) -> None:
+        validate_threads(self.treatment, self.threads)
         if TREATMENT_SPECS[self.treatment].binary_name != "egglog-experimental" and self.disequality_encoding != "nee":
             raise ValueError("disequality encoding selection is only supported by egglog treatments")
         if not TREATMENT_SPECS[self.treatment].allocator_limit:
@@ -198,8 +207,10 @@ class BenchmarkEndpoint:
     treatment: Treatment
     disequality_encoding: DisequalityEncoding = "nee"
     memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
+    threads: int = 1
 
     def __post_init__(self) -> None:
+        validate_threads(self.treatment, self.threads)
         if not TREATMENT_SPECS[self.treatment].allocator_limit:
             object.__setattr__(self, "memory_limit_bytes", None)
 
@@ -210,13 +221,14 @@ class BenchmarkEndpoint:
         return cls(**{**data, "target": TargetRow(**data["target"])})
 
     @property
-    def cache_identity(self) -> tuple[str, Treatment, DisequalityEncoding]:
+    def cache_identity(self) -> tuple[str, Treatment, DisequalityEncoding, str]:
         """Return the endpoint coordinates shared by all of its file keys."""
 
         return (
             self.binary_sha256,
             self.treatment,
             self.disequality_encoding,
+            str(self.threads),
         )
 
 

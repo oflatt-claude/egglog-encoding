@@ -99,7 +99,7 @@ TREATMENT_SPECS: dict[Treatment, TreatmentSpec] = {
     "slotted-ref-nested-snapshot": replace(_SLOTTED, flags=("--matcher", "nested", "--substitution", "snapshot")),
 }
 TREATMENTS = tuple(TREATMENT_SPECS)
-EGGLOG_FLAGS = ("--mode", "no-messages", "-j", "1")
+EGGLOG_FLAGS = ("--mode", "no-messages")
 PROCESS_ENV = {"RUST_LOG": "error"}
 NATIVE_PARAMETER_ARGUMENTS = ("100000", "10000")
 

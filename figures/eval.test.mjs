@@ -15,7 +15,7 @@ const input = (id, treatment, changes={}) => ({logical_id:id, label:id, family:'
   binary_sha256:'current', memory_limit_bytes:null, treatment, exclusion:null, validation_failures:{}, ...changes});
 function group(id, treatment, values, changes={}) {
   const key={binary_sha256:'current',file_sha256:id,treatment,
-    disequality_encoding:'nee'};
+    disequality_encoding:'nee',threads:1};
   return {key,labels:['figures'],samples:values.map((value,index)=>({...key,row_index:index,
     started_at:new Date(Date.UTC(2026,9,1,0,0,index)).toISOString(),status:'success',timeout_sec:300,
     wall_sec:value,max_rss_bytes:value===null?null:value*1048576,...changes}))};
@@ -25,6 +25,7 @@ async function evaluate(name, inputs, groups, rounds=2, boundSpec=null, treatmen
   for(const p of spec.params) if(p.name==='selected_inputs')p.value=inputs.map(input=>({...input,
     selected_row_indices:input.selected_row_indices??groups.find(g=>g.labels.includes('figures')&&
       g.key.file_sha256===input.file_sha256&&
+      g.key.threads===(input.threads??1)&&
       g.key.treatment===input.treatment)?.samples.slice(-rounds).map(row=>row.row_index)??[]}));
     else if(p.name==='rounds')p.value=rounds;
     else if(p.name==='treatments')p.value=treatmentsOverride??figures[name].treatments;
@@ -33,7 +34,7 @@ async function evaluate(name, inputs, groups, rounds=2, boundSpec=null, treatmen
   const logger=vega.logger(vega.Warn,undefined,(...args)=>warnings.push(args));
   const runtime=compile(spec,{logger}).spec;
   const loader=vega.loader();
-  loader.load=async()=>JSON.stringify({grouped_schema_version:5,report_schema_version:8,groups});
+  loader.load=async()=>JSON.stringify({grouped_schema_version:7,report_schema_version:9,groups});
   const view=new vega.View(vega.parse(runtime),{renderer:'none',loader,logger});
   try {
     await view.runAsync();
@@ -45,6 +46,38 @@ async function evaluate(name, inputs, groups, rounds=2, boundSpec=null, treatmen
   } finally {view.finalize();}
 }
 const find=(result,name)=>result.marks.filter(m=>m.mark.name===name+'_marks');
+
+test('parallel curves plot the shared exported medians and workload IQR, with a horizontal serial reference',async()=>{
+  const spec=JSON.parse(await readFile(new URL(figures['parallel-scaling'].spec,import.meta.url),'utf8'));
+  const points=['off','proof-testing'].flatMap((treatment,i)=>[1,2,4,8].map(threads=>({
+    treatment,threads,workloads:5,speedup:1+(threads-1)/(i+2),
+    q25:1+(threads-1)/(i+3),q75:1+(threads-1)/(i+1)
+  })));
+  spec.params.find(p=>p.name==='scaling').value=points;
+  const result=await evaluate('parallel-scaling',[],[],3,spec);
+  const plotted=result.marks.filter(m=>m.mark.marktype==='symbol'&&m.datum.point);
+  assert.equal(plotted.length,8);
+  assert.deepEqual(plotted.map(m=>m.datum.point.speedup),points.map(p=>p.speedup));
+  assert.ok(result.marks.some(m=>m.mark.marktype==='area'&&m.datum.point.q25));
+  const references=result.marks.filter(m=>m.mark.marktype==='rule'&&m.stroke==='#666');
+  assert.equal(references.length,1);
+  assert.equal(references[0].x,0);
+  assert.equal(references[0].x2,480);
+  assert.match(result.svg,/Egglog \+ proofs/);
+});
+
+test('serial figures ignore parallel observations from the same cache',async()=>{
+  const treatments=['off','proof-testing'];
+  const serial=treatments.map((t,i)=>group('a',t,[1+i,1+i]));
+  const parallel=treatments.map(t=>{
+    const g=group('a',t,[99,99],{threads:4});
+    g.key.threads=4;
+    return g;
+  });
+  const result=await evaluate('corpus-proofs-cdf',treatments.map(t=>input('a',t)),[...parallel,...serial]);
+  assert.equal(find(result,'cdf_points_zoom').length,2);
+  assert.ok(find(result,'cdf_points_zoom').every(p=>p.datum.ratio===2));
+});
 
 test('Math standard boxes preserve condition labels and selected arithmetic-mean ratio statistics',async()=>{
   const treatments=['egg','egg-proof-testing','off','proof-testing'];
@@ -127,6 +160,8 @@ test('missing or zero RSS and strict validation veto only affected boxes and est
 
 test('all figure designs preserve missing conditions and render without warnings',async()=>{
   for(const name of Object.keys(figures)) {
+    // Scaling requires a nonempty, complete cohort before invoking Vega.
+    if(name==='parallel-scaling') continue;
     const result=await evaluate(name,figures[name].treatments.map(t=>input('case',t)),[]);
     if(name==='disequality-runtime') {
       assert.equal(find(result,'absolute_status').length,6);

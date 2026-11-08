@@ -89,6 +89,7 @@ class BenchmarkRunPlan:
     missing_observations: int
     disequality_encoding: DisequalityEncoding = "nee"
     memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES
+    threads: int = 1
 
 
 @dataclass(frozen=True)
@@ -212,6 +213,7 @@ def plan_collection(
             request.endpoint.treatment,
             request.endpoint.disequality_encoding,
             request.endpoint.memory_limit_bytes,
+            request.endpoint.threads,
         )
         endpoints = scopes.setdefault((target, request.files), [])
         if endpoint not in endpoints:
@@ -242,6 +244,7 @@ def plan_collection(
                 missing_observations=missing,
                 disequality_encoding=endpoint.disequality_encoding,
                 memory_limit_bytes=endpoint.memory_limit_bytes,
+                threads=endpoint.threads,
             )
         )
     return tuple(CollectionPlan(target, tuple(runs)) for target, runs in runs_by_target.items())
@@ -485,6 +488,7 @@ def label_has_enough_rows(
             request.treatment,
             request.disequality_encoding,
             request.memory_limit_bytes,
+            request.threads,
         )
         for file in files_by_endpoint[request] if files_by_endpoint is not None else files:
             selection = select_observations(store, endpoint, file, rounds, timeout_sec)
@@ -503,18 +507,19 @@ def run_process(
     timeout_sec: int,
     disequality_encoding: DisequalityEncoding = "nee",
     memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES,
+    threads: int = 1,
 ) -> ProcessObservation:
     """Run one measured workload and read the summary it emitted on success."""
 
     file_spec = file_spec.for_binary(TREATMENT_SPECS[treatment].binary_name)
     with tempfile.TemporaryDirectory(prefix="egglog-benchmark-") as directory:
         summary_path = Path(directory) / "timing-summary.json"
-        workload = workload_command(binary_path, file_spec, treatment, disequality_encoding)
+        workload = workload_command(binary_path, file_spec, treatment, disequality_encoding, threads)
         controlled = TREATMENT_SPECS[treatment].allocator_limit
         allocator_env = NATIVE_ALLOCATOR_ENV if controlled else {}
         if not controlled:
             memory_limit_bytes = None
-        if not TREATMENT_SPECS[treatment].timing_summary:
+        if threads != 1 or not TREATMENT_SPECS[treatment].timing_summary:
             result = run_command(
                 workload, checkout_path, timeout_sec, env_overrides=allocator_env, memory_limit_bytes=memory_limit_bytes
             )
@@ -576,8 +581,10 @@ def preflight_collection(plan: CollectionPlan, timeout_sec: int) -> None:
         if binary_name not in ("egglog-experimental", "egg-math-benchmark", "slotted-reference"):
             continue
         required_outputs = []
-        if any(TREATMENT_SPECS[run.treatment].timing_summary for run in binary_runs):
+        if any(run.threads == 1 and TREATMENT_SPECS[run.treatment].timing_summary for run in binary_runs):
             required_outputs.append("--timing-summary")
+        if any(run.threads > 1 for run in binary_runs):
+            required_outputs.append("--threads")
         bound = next((run.memory_limit_bytes for run in binary_runs if run.memory_limit_bytes is not None), None)
         if bound is not None:
             required_outputs.append("--memory-limit-bytes")
@@ -697,6 +704,7 @@ def flat_report_record(
         "file_path": run.file.display_path,
         "file_sha256": run.file.sha256,
         "treatment": run.treatment,
+        "threads": run.threads,
         "disequality_encoding": run.disequality_encoding,
         "timeout_sec": timeout_sec,
         "wall_sec": result.timing.wall_sec,
@@ -722,7 +730,7 @@ class CollectionETAColumn(ProgressColumn):
         super().__init__(table_column=Column(no_wrap=True))
         self.remaining: dict[CacheKey, int] = {}
         self.durations: dict[CacheKey, list[float]] = {}
-        self.hints: dict[tuple[str, Treatment, DisequalityEncoding], tuple[tuple[datetime, int], float]] = {}
+        self.hints: dict[tuple[str, Treatment, DisequalityEncoding, int], tuple[tuple[datetime, int], float]] = {}
         self.active: tuple[CacheKey, float] | None = None
         for row_index, record in enumerate(store.records):
             wall = record["wall_sec"]
@@ -732,6 +740,7 @@ class CollectionETAColumn(ProgressColumn):
                 record["file_sha256"],
                 record["treatment"],
                 record["disequality_encoding"],
+                record["threads"],
             )
             order = (datetime.fromisoformat(record["started_at"]), row_index)
             prior = self.hints.get(identity)
@@ -745,6 +754,7 @@ class CollectionETAColumn(ProgressColumn):
                     run.treatment,
                     run.disequality_encoding,
                     run.memory_limit_bytes,
+                    run.threads,
                 ),
                 run.file,
             )
@@ -771,7 +781,7 @@ class CollectionETAColumn(ProgressColumn):
         }
         for key, count in self.remaining.items():
             if count and key not in means:
-                hint = self.hints.get((key.file_sha256, key.treatment, key.disequality_encoding))
+                hint = self.hints.get((key.file_sha256, key.treatment, key.disequality_encoding, key.threads))
                 if hint is not None:
                     means[key] = hint[1]
         fallback = sum(means.values()) / len(means) if means else 1.0
@@ -837,6 +847,7 @@ def collect_rows(
                         run.treatment,
                         run.disequality_encoding,
                         run.memory_limit_bytes,
+                        run.threads,
                     ),
                     run.file,
                 )
@@ -848,6 +859,8 @@ def collect_rows(
                     run.treatment,
                     run.disequality_encoding,
                 )
+                if run.threads != 1:
+                    label += f" · {run.threads} threads"
                 if len(plans) > 1:
                     label = f"{target.row.display_label} · {label}"
                 estimate.active = (key, progress.tasks[0].elapsed or 0.0)
@@ -872,6 +885,7 @@ def collect_rows(
                     timeout_sec,
                     run.disequality_encoding,
                     run.memory_limit_bytes,
+                    run.threads,
                 )
                 store.append(
                     flat_report_record(

@@ -457,6 +457,7 @@ def _endpoint_from_record(record: ReportRecord) -> BenchmarkEndpoint:
         record["treatment"],
         record["disequality_encoding"],
         record["memory_limit_bytes"],
+        record["threads"],
     )
 
 
@@ -478,6 +479,7 @@ def _record_endpoint_id(record: ReportRecord) -> str:
         record["binary_sha256"],
         record["treatment"],
         record["disequality_encoding"],
+        str(record["threads"]),
     )
 
 
@@ -492,7 +494,8 @@ def _endpoint_label(endpoint: BenchmarkEndpoint) -> str:
         if TREATMENT_SPECS[endpoint.treatment].binary_name == "egglog-experimental"
         else ""
     )
-    return f"{target_and_git} · {endpoint.treatment}{encoding}"
+    threads = f" · {endpoint.threads} threads" if endpoint.threads != 1 else ""
+    return f"{target_and_git} · {endpoint.treatment}{encoding}{threads}"
 
 
 def _file_id(file: FileSpec) -> str:

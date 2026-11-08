@@ -34,6 +34,7 @@ def figure_results(
     records: dict[int, dict[str, Any]] = {
         row["row_index"]: dict(row) for group in grouped.data["groups"] for row in group["samples"]
     }
+    scaling = name == "parallel-scaling"
     conditions = []
     estimates = {}
     workloads: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -54,6 +55,7 @@ def figure_results(
         condition: dict[str, Any] = {
             **item,
             "workload": workload,
+            "condition": f"{item['treatment']}-{item['threads']}threads" if scaling else item["treatment"],
             "sample_n": len(selected),
             "failed_n": sum(row["status"] != "success" for row in selected),
             "observations": [
@@ -87,7 +89,7 @@ def figure_results(
                 or ("measurement unavailable" if len(values) != len(selected) else None)
             )
             estimate = _sample_estimate(values, issue, t_critical)
-            estimates[(item["logical_id"], item["treatment"], metric)] = estimate
+            estimates[(item["logical_id"], condition["condition"], metric)] = estimate
             condition["metrics"][metric] = {
                 "unit": unit,
                 "valid_n": len(values),
@@ -101,9 +103,13 @@ def figure_results(
         workloads[item["logical_id"]].append(condition)
     comparisons = []
     for logical_id, rows in workloads.items():
-        by_treatment = {row["treatment"]: row for row in rows}
-        treatments = list(by_treatment)
-        if name == "disequality-runtime":
+        by_condition = {row["condition"]: row for row in rows}
+        treatments = list(by_condition)
+        if scaling:
+            # Shared comparisons compute candidate / baseline: use the serial
+            # condition as numerator and the N-thread condition as denominator.
+            pairs = [(row["condition"], f"{row['treatment']}-1threads") for row in rows]
+        elif name == "disequality-runtime":
             pairs = [("egg-de", t) for t in treatments if t != "egg-de"]
         elif name == "math-runtime":
             pairs = [("egg", "egg-proof-testing"), ("off", "proof-testing")]
@@ -112,7 +118,7 @@ def figure_results(
         else:
             pairs = [("off", t) for t in treatments if t != "off"]
         for baseline, candidate in pairs:
-            if baseline not in by_treatment or candidate not in by_treatment:
+            if baseline not in by_condition or candidate not in by_condition:
                 continue
             comparison = {
                 "workload": rows[0]["workload"],
@@ -132,13 +138,13 @@ def figure_results(
                     "ci_low": ratio.estimate.ci_low,
                     "ci_high": ratio.estimate.ci_high,
                     "issue": ratio.issue,
-                    "baseline_n": by_treatment[baseline]["sample_n"],
-                    "candidate_n": by_treatment[candidate]["sample_n"],
+                    "baseline_n": by_condition[baseline]["sample_n"],
+                    "candidate_n": by_condition[candidate]["sample_n"],
                 }
             if name.startswith("corpus-"):
                 # Cohort membership uses baseline wall time for both metrics,
                 # independently of missing RSS. Exclusions remain in coverage.
-                baseline_row = by_treatment[baseline]
+                baseline_row = by_condition[baseline]
                 wall = [
                     r["wall_sec"]
                     for r in baseline_row["observations"]
@@ -151,10 +157,24 @@ def figure_results(
                 comparison["cohort"] = (
                     "selected" if resolved and sum(wall) / rounds >= 0.2 else "too-fast" if resolved else "unresolved"
                 )
-                comparison["excluded"] = bool(baseline_row["exclusion"] or by_treatment[candidate]["exclusion"])
+                comparison["excluded"] = bool(baseline_row["exclusion"] or by_condition[candidate]["exclusion"])
                 comparison["failed"] = bool(
-                    by_treatment[candidate]["failed_n"] or by_treatment[candidate].get("validation_issue")
+                    by_condition[candidate]["failed_n"] or by_condition[candidate].get("validation_issue")
                 )
+            if scaling:
+                parallel = by_condition[baseline]
+                serial_off = by_condition["off-1threads"]["metrics"]["runtime"]["mean"]
+                comparison["cohort"] = (
+                    "unresolved" if serial_off is None else "selected" if serial_off >= 0.2 else "too-fast"
+                )
+                comparison["threads"] = parallel["threads"]
+                comparison["treatment"] = parallel["treatment"]
+                if parallel["threads"] == 1:
+                    # The reference reuses the same observations; it is exactly 1,
+                    # not an independent ratio with an artificial confidence interval.
+                    for values in comparison["metrics"].values():
+                        if values["ratio"] is not None:
+                            values.update(ratio=1.0, ci_low=1.0, ci_high=1.0, issue=None)
             comparisons.append(comparison)
     coverage = {}
     if name.startswith("corpus-"):
@@ -179,7 +199,7 @@ def figure_results(
                 "q95": next((value for i, value in enumerate(ratios, 1) if i / len(cohort) >= 0.95), None),
                 "maximum": max(ratios, default=None),
             }
-    return {
+    result: dict[str, Any] = {
         "figure": name,
         "rounds": rounds,
         "confidence": 0.95,
@@ -191,6 +211,37 @@ def figure_results(
         "comparisons": comparisons,
         "coverage": coverage,
     }
+    if scaling:
+        cohort = [row for row in comparisons if row["cohort"] == "selected"]
+        result["cohort_n"] = len({row["logical_id"] for row in cohort})
+        points = []
+        for treatment, threads in sorted({(row["treatment"], row["threads"]) for row in cohort}):
+            ratios = [
+                row["metrics"]["runtime"]["ratio"]
+                for row in cohort
+                if row["treatment"] == treatment and row["threads"] == threads
+            ]
+            if any(value is None for value in ratios):
+                raise ValueError("parallel-scaling: incomplete cohort; refusing to drop failed workloads")
+            quartiles = statistics.quantiles(ratios, n=4, method="inclusive") if len(ratios) > 1 else ratios * 3
+            points.append(
+                {
+                    "treatment": treatment,
+                    "threads": threads,
+                    "workloads": len(ratios),
+                    "speedup": statistics.median(ratios),
+                    "q25": quartiles[0],
+                    "q75": quartiles[2],
+                }
+            )
+        result["scaling"] = points
+        result["statistics"] = (
+            "Arithmetic means; Student-t mean intervals; independent Fieller speedup intervals. "
+            "Each mode normalized to its own one-thread mean (exactly 1 at one thread). "
+            "Fixed cohort selected by proofs-off one-thread mean >= 0.2 s. "
+            "Curves: median per-workload speedup; bands: workload IQR, not confidence intervals."
+        )
+    return result
 
 
 def corpus_view_domains(result: dict[str, Any]) -> dict[str, dict[str, float]]:
@@ -254,7 +305,7 @@ def latex_results(result: dict[str, Any]) -> tuple[str, str]:
     ]
     numbers: dict[str, Any] = {}
     for row in result["conditions"]:
-        prefix = f"{figure_key}/{row['workload']}/{row['treatment']}"
+        prefix = f"{figure_key}/{row['workload']}/{row['condition']}"
         numbers[f"{prefix}/n"] = row["sample_n"]
         for metric, values in row["metrics"].items():
             for field in ("mean", "ci_low", "ci_high", "valid_n"):

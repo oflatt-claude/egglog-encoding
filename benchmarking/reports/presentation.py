@@ -128,7 +128,7 @@ def _selection_section(
                 endpoint.target.git_sha,
                 _git_display(endpoint.target.git_sha, endpoint.target.is_dirty),
             ),
-            endpoint.treatment,
+            endpoint.treatment if endpoint.threads == 1 else f"{endpoint.treatment} · {endpoint.threads} threads",
             endpoint.disequality_encoding
             if TREATMENT_SPECS[endpoint.treatment].binary_name == "egglog-experimental"
             else "n/a",
@@ -158,14 +158,22 @@ def _selection_section(
         baseline_engine == candidate_engine and comparison.baseline.binary_sha256 != comparison.candidate.binary_sha256
     )
     encoding_changed = comparison.baseline.disequality_encoding != comparison.candidate.disequality_encoding
-    changed = (target_changed, comparison.baseline.treatment != comparison.candidate.treatment, encoding_changed)
+    threads_changed = comparison.baseline.threads != comparison.candidate.threads
+    changed = (
+        target_changed,
+        comparison.baseline.treatment != comparison.candidate.treatment,
+        encoding_changed,
+        threads_changed,
+    )
     if sum(changed) > 1:
         blocks.append(
             ReportMessage(
                 report_id("message", "selection", "joint-comparison"),
                 None,
                 (
-                    "This comparison changes the disequality encoding and another endpoint setting. "
+                    "This comparison changes thread count and another endpoint setting. "
+                    if threads_changed
+                    else "This comparison changes the disequality encoding and another endpoint setting. "
                     if encoding_changed
                     else "This comparison changes both target and treatment. "
                 )
@@ -243,7 +251,8 @@ def _endpoint_identity(endpoint: BenchmarkEndpoint) -> str:
         if TREATMENT_SPECS[endpoint.treatment].binary_name == "egglog-experimental"
         else ""
     )
-    return f"{endpoint.target.display_label} {endpoint.treatment}{encoding}"
+    threads = f" · {endpoint.threads} threads" if endpoint.threads != 1 else ""
+    return f"{endpoint.target.display_label} {endpoint.treatment}{encoding}{threads}"
 
 
 def _deduplicate_summary_rows(

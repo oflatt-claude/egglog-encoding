@@ -13,6 +13,7 @@ import tempfile
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
+from itertools import product
 from pathlib import Path
 from time import perf_counter
 from typing import Any, TypedDict
@@ -24,7 +25,14 @@ from benchmarks.reproduction.native import NATIVE_ALLOCATION_FAILURE
 
 from .config import DEFAULT_MEMORY_LIMIT_BYTES, DEFAULT_TIMEOUT_SEC
 from .engines import TREATMENT_SPECS, TREATMENTS, Treatment
-from .models import BenchmarkEndpoint, EndpointRequest, FileSpec, ResolvedTarget, validate_unique_file_identities
+from .models import (
+    BenchmarkEndpoint,
+    EndpointRequest,
+    FileSpec,
+    ResolvedTarget,
+    validate_threads,
+    validate_unique_file_identities,
+)
 from .native_memory import add_memory_limit_options
 from .reports.grouped import grouped_report_path, write_grouped_report
 from .reports.store import CacheKey, GroupedReport, select_observations
@@ -50,6 +58,7 @@ class Figure:
     patterns: tuple[str, ...]
     treatments: tuple[Treatment, ...]
     checks: tuple[Treatment, ...] = ()
+    threads: tuple[int, ...] = (1,)
 
 
 @dataclass(frozen=True)
@@ -161,9 +170,9 @@ def load_config(path: Path) -> FigureConfig:
         if (
             not isinstance(item, dict)
             or not {"spec", "files", "treatments"} <= set(item)
-            or set(item) - {"spec", "files", "treatments", "checks"}
+            or set(item) - {"spec", "files", "treatments", "checks", "threads"}
         ):
-            raise ValueError(f"{name}: requires spec, files, treatments, and optional checks")
+            raise ValueError(f"{name}: requires spec, files, treatments, and optional checks/threads")
         if not isinstance(item["spec"], str) or not item["spec"]:
             raise ValueError(f"{name}: spec must be a path")
         for key in ("files", "treatments"):
@@ -181,6 +190,18 @@ def load_config(path: Path) -> FigureConfig:
         unknown = set(item["treatments"] + checks) - set(TREATMENTS)
         if unknown:
             raise ValueError(f"{name}: unknown treatments: {', '.join(sorted(unknown))}")
+        threads = item.get("threads", [1])
+        if not isinstance(threads, list) or not threads or any(type(n) is not int or n < 1 for n in threads):
+            raise ValueError(f"{name}: threads must be positive integers")
+        if len(set(threads)) != len(threads):
+            raise ValueError(f"{name}: duplicate thread count")
+        if name != "parallel-scaling" and threads != [1]:
+            raise ValueError(f"{name}: thread sweeps require the parallel-scaling figure")
+        for treatment in item["treatments"]:
+            for count in threads:
+                validate_threads(treatment, count)
+        if name == "parallel-scaling" and (1 not in threads or item["treatments"] != ["off", "proof-testing"]):
+            raise ValueError("parallel-scaling requires thread count 1 and treatments off, proof-testing")
         figures.append(
             Figure(
                 name,
@@ -188,6 +209,7 @@ def load_config(path: Path) -> FigureConfig:
                 tuple(item["files"]),
                 tuple(item["treatments"]),
                 tuple(checks),
+                tuple(threads),
             )
         )
     return FigureConfig(path, data["rounds"], data["timeout_sec"], tuple(figures))
@@ -337,13 +359,14 @@ def render_figures(
             selected_inputs = []
             for file in resolved.files:
                 info = metadata.get(file.sha256)
-                for treatment in figure.treatments:
+                for treatment, threads in product(figure.treatments, figure.threads):
                     physical = file.for_binary(TREATMENT_SPECS[treatment].binary_name)
                     endpoint = BenchmarkEndpoint(
                         target.row,
                         target.binary_sha256_for(treatment),
                         treatment,
                         memory_limit_bytes=config.memory_limit_bytes,
+                        threads=threads,
                     )
                     key = CacheKey.for_endpoint(endpoint, file)
                     selection = select_observations(grouped, endpoint, file, config.rounds, config.timeout_sec)
@@ -375,6 +398,7 @@ def render_figures(
                             "family": info["family"] if info else "",
                             "file_sha256": physical.sha256,
                             "treatment": treatment,
+                            "threads": threads,
                             "binary_sha256": key.binary_sha256,
                             "memory_limit_bytes": endpoint.memory_limit_bytes,
                             "selected_row_indices": [row.row_index for row in rows],
@@ -429,9 +453,19 @@ def render_figures(
                 )
                 if issue:
                     raise ValueError(
-                        f"{figure.name}: {condition['label']} · {condition['treatment']}: {issue}; "
+                        f"{figure.name}: {condition['label']} · {condition['condition']}: {issue}; "
                         "no figure outputs replaced"
                     )
+            if figure.name == "parallel-scaling":
+                if not results["scaling"]:
+                    raise ValueError("parallel-scaling: no workloads meet the serial baseline threshold")
+                for parameter in spec["params"]:
+                    if parameter["name"] == "scaling":
+                        parameter["value"] = results["scaling"]
+                spec["title"]["subtitle"] = [
+                    f"{results['cohort_n']} workloads · {config.rounds} runs/condition · whole-process time",
+                    "Own 1-thread baseline; shaded bands show workload IQR",
+                ]
             if figure.name.startswith("corpus-"):
                 domains = corpus_view_domains(results)
                 results["view_domains"] = domains
@@ -536,9 +570,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             console.print(f"  loaded {store.row_count} observations in {perf_counter() - started:.1f}s")
         requests = tuple(
             BenchmarkRequest(
-                EndpointRequest(target_request, treatment, memory_limit_bytes=config.memory_limit_bytes), figure.files
+                EndpointRequest(
+                    target_request, treatment, memory_limit_bytes=config.memory_limit_bytes, threads=threads
+                ),
+                figure.files,
             )
             for figure in figures
+            for threads in figure.figure.threads
             for treatment in figure.figure.treatments
         )
         console.print("Resolving targets")

@@ -137,8 +137,8 @@ or modify the JSONL.
 - Benchmark files are resolved relative to the command invocation directory,
   not relative to comparison targets. Require self-contained files without
   `(include ...)` or `(input ...)`; expand external inputs before benchmarking.
-- Cache identity includes binary SHA-256, physical file SHA-256, treatment and
-  disequality encoding. Reuse completed successes independently of time/memory
+- Cache identity includes binary SHA-256, physical file SHA-256, treatment,
+  disequality encoding, and thread count. Reuse completed successes independently of time/memory
   guards. `select_records` centrally retries timeouts only after raising the
   timeout, and memory-limited outcomes only after raising/removing the memory
   guard. Ordinary failures require force-run. Classify outcomes once at launch;
@@ -153,16 +153,16 @@ or modify the JSONL.
   their exact expectations. Complete successful samples bypass cap-specific
   resource deferrals; unsupported configurations remain excluded.
 - The baseline and candidate must have different endpoint cache identities
-  (binary SHA-256, treatment, and disequality encoding). They may use the same
-  binary when treatment or encoding differs.
+  (binary SHA-256, treatment, disequality encoding, and threads). They may use the same
+  binary when treatment, encoding, or thread count differs.
 - A request must not contain duplicate file hashes; those
   selectors would address the same cached workload observations twice.
 
 ## Paper figures
 
-- `./bench.py figures` collects and renders the six paper PDFs through the shared
+- `./bench.py figures` collects and renders the seven paper PDFs through the shared
   benchmark phases. `--config` selects a flat JSON catalog with global `rounds`
-  and optional `timeout_sec` override, and direct per-figure `spec`, `files`, `treatments`, and optional correctness-only `checks`.
+  and optional `timeout_sec` override, and direct per-figure `spec`, `files`, `treatments`, optional correctness-only `checks`, and optional `threads` (default `[1]`).
 - Resource defaults for all entrypoints come from `benchmarking/config.py`.
   The Rust paper parent reads them once through stdlib-only `python3`; execution
   and worker scheduling stay in Rust. The catalog requests ten observations.
@@ -178,7 +178,7 @@ or modify the JSONL.
   separate validators. Retain selected published input hashes/aliases, strict
   failures and source blockers. Source blockers are not saved replay counts.
 - The outputs are `disequality-runtime`, `math-runtime`, `slotted-runtime`,
-  `corpus-congruence-cdf`, `corpus-proof-recording-cdf`, and `corpus-proofs-cdf`.
+  `corpus-congruence-cdf`, `corpus-proof-recording-cdf`, `corpus-proofs-cdf`, and `parallel-scaling`.
   Each has PDF/SVG/PNG, bound specification, results JSON, numeric TeX macros,
   and a TeX table under `figures/output/eval/` by default. Authored specifications
   stay in `figures/eval/`. `--output-dir` overrides the common generated folder.
@@ -189,12 +189,16 @@ or modify the JSONL.
   files and replace the requested bundle only after every condition is complete
   and every format succeeds. Failed/missing measurements stop publication.
   Observation provenance remains in the raw JSONL, grouped JSON and results JSON.
-- `make check` includes the Vega tests; inspect all six exported figures at manuscript width
+- `make check` includes the Vega tests; inspect all seven exported figures at manuscript width
   and verify PDF font embedding. Tests must cover latest-N selection, N=1 without
   intervals, independent Fieller intervals, incomplete-bundle rejection, and
   the shared baseline-runtime corpus cohort (>=0.2 seconds, no upper cutoff).
 
 - The shared runner owns whole-process wall time and peak RSS for every engine.
+  Parallel Egglog uses `--threads` and omits serial phase summaries; thread counts
+  must remain distinct in caches, grouped selection, and interactive endpoints.
+  Scaling uses one fixed proofs-off serial cohort (mean >=0.2 s), normalizes each
+  mode to its own serial mean, and plots the median and workload IQR, not a CI.
   Native slotted is a workload driver with no self-timing or phase-summary path.
 - Local allocation protection uses the existing allocator/address-space cap only.
   Do not add host-reserve, host-pressure, or RSS-ceiling supervisors. Use

@@ -1,0 +1,203 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "Median per-workload speedup for egglog and egglog with fully checked proofs. Each mode is normalized to its own one-thread mean. A fixed cohort is selected only by the proofs-off one-thread mean (at least 0.2 seconds). Bands show the workload interquartile range, not confidence intervals. The shared figure-results estimator supplies exactly the exported values.",
+  "data": {
+    "url": "../../.reports-grouped.json",
+    "format": {
+      "type": "json"
+    }
+  },
+  "params": [
+    {
+      "name": "scaling",
+      "value": []
+    }
+  ],
+  "transform": [
+    {
+      "calculate": "scaling",
+      "as": "points"
+    },
+    {
+      "flatten": [
+        "points"
+      ],
+      "as": [
+        "point"
+      ]
+    },
+    {
+      "calculate": "datum.point.treatment === 'off' ? 'Egglog' : 'Egglog + proofs'",
+      "as": "Mode"
+    }
+  ],
+  "title": {
+    "text": "Parallel scaling",
+    "subtitle": []
+  },
+  "width": 480,
+  "height": 260,
+  "encoding": {
+    "x": {
+      "field": "point.threads",
+      "type": "ordinal",
+      "title": "Worker threads",
+      "axis": {
+        "labelAngle": 0
+      }
+    },
+    "color": {
+      "field": "Mode",
+      "type": "nominal",
+      "scale": {
+        "domain": [
+          "Egglog",
+          "Egglog + proofs"
+        ],
+        "range": [
+          "#0072B2",
+          "#D55E00"
+        ]
+      },
+      "legend": {
+        "title": null,
+        "orient": "top",
+        "symbolType": "stroke",
+        "symbolOpacity": 1
+      }
+    }
+  },
+  "layer": [
+    {
+      "name": "spread",
+      "mark": {
+        "type": "area",
+        "opacity": 0.13
+      },
+      "encoding": {
+        "y": {
+          "field": "point.q25",
+          "type": "quantitative",
+          "title": "Speedup over one thread",
+          "scale": {
+            "zero": true
+          }
+        },
+        "y2": {
+          "field": "point.q75"
+        }
+      }
+    },
+    {
+      "name": "scaling",
+      "mark": {
+        "type": "line",
+        "point": {
+          "filled": true,
+          "size": 55
+        },
+        "strokeWidth": 2
+      },
+      "encoding": {
+        "y": {
+          "field": "point.speedup",
+          "type": "quantitative",
+          "title": "Speedup over one thread"
+        },
+        "strokeDash": {
+          "field": "Mode",
+          "scale": {
+            "domain": [
+              "Egglog",
+              "Egglog + proofs"
+            ],
+            "range": [
+              [
+                1,
+                0
+              ],
+              [
+                6,
+                3
+              ]
+            ]
+          },
+          "legend": {
+            "title": null,
+            "orient": "top",
+            "symbolType": "stroke",
+            "symbolOpacity": 1
+          }
+        },
+        "tooltip": [
+          {
+            "field": "Mode"
+          },
+          {
+            "field": "point.threads",
+            "title": "Threads"
+          },
+          {
+            "field": "point.speedup",
+            "format": ".3f",
+            "title": "Median speedup"
+          },
+          {
+            "field": "point.workloads",
+            "title": "Workloads"
+          }
+        ]
+      }
+    },
+    {
+      "mark": {
+        "type": "rule",
+        "color": "#666",
+        "strokeDash": [
+          3,
+          3
+        ]
+      },
+      "encoding": {
+        "y": {
+          "datum": 1
+        },
+        "color": {
+          "value": "#666"
+        },
+        "x": {
+          "value": 0
+        },
+        "x2": {
+          "value": "width"
+        }
+      },
+      "data": {
+        "values": [
+          {}
+        ]
+      }
+    }
+  ],
+  "config": {
+    "font": "Arial",
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelFontSize": 12,
+      "titleFontSize": 13,
+      "titleFontWeight": "normal",
+      "gridColor": "#e8eaed"
+    },
+    "legend": {
+      "labelFontSize": 13
+    },
+    "title": {
+      "anchor": "start",
+      "fontSize": 17,
+      "subtitleFontSize": 11,
+      "subtitlePadding": 8
+    }
+  }
+}

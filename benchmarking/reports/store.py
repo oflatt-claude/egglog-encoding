@@ -25,11 +25,11 @@ from ..models import (
     Treatment,
 )
 
-type ReportSchemaVersion = Literal[8]
-REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 8
+type ReportSchemaVersion = Literal[9]
+REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 9
 
-type GroupedSchemaVersion = Literal[6]
-GROUPED_SCHEMA_VERSION: Final[GroupedSchemaVersion] = 6
+type GroupedSchemaVersion = Literal[7]
+GROUPED_SCHEMA_VERSION: Final[GroupedSchemaVersion] = 7
 
 type TimingSummarySchemaVersion = Literal[4]
 TIMING_SUMMARY_SCHEMA_VERSION: Final[TimingSummarySchemaVersion] = 4
@@ -81,6 +81,7 @@ class ReportRecord(TypedDict):
     file_path: str
     file_sha256: str
     treatment: Treatment
+    threads: int
     disequality_encoding: DisequalityEncoding
     timeout_sec: int
     wall_sec: float | None
@@ -98,6 +99,7 @@ class CacheKey:
     file_sha256: str
     treatment: Treatment
     disequality_encoding: DisequalityEncoding = "nee"
+    threads: int = 1
 
     @classmethod
     def for_endpoint(cls, endpoint: BenchmarkEndpoint, file_spec: FileSpec) -> CacheKey:
@@ -109,6 +111,7 @@ class CacheKey:
             file_sha256=file_spec.sha256,
             treatment=endpoint.treatment,
             disequality_encoding=endpoint.disequality_encoding,
+            threads=endpoint.threads,
         )
 
 
@@ -165,6 +168,7 @@ class GroupedKey(TypedDict):
     binary_sha256: str
     file_sha256: str
     treatment: Treatment
+    threads: int
     disequality_encoding: DisequalityEncoding
 
 
@@ -421,6 +425,7 @@ def _record_key(record: ReportRecord) -> CacheKey:
         file_sha256=record["file_sha256"],
         treatment=record["treatment"],
         disequality_encoding=record["disequality_encoding"],
+        threads=record["threads"],
     )
 
 
@@ -484,7 +489,12 @@ def _require_current_record(record: ReportRecord) -> None:
     summary = record["timing_summary"]
     if summary is not None:
         _require_current_timing_summary(summary)
-    if record["status"] == "success" and summary is None and TREATMENT_SPECS[record["treatment"]].timing_summary:
+    if (
+        record["status"] == "success"
+        and record["threads"] == 1
+        and summary is None
+        and TREATMENT_SPECS[record["treatment"]].timing_summary
+    ):
         raise ValueError("successful benchmark record is missing its timing summary")
 
 

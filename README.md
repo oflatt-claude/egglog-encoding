@@ -425,6 +425,10 @@ The remaining collection options are:
   A filesystem path is required; `-` is not a streaming destination.
 - `--rounds N`: selected observations required for every endpoint/file;
   default `6`.
+- `--threads N`: egglog worker threads for both endpoints; default `1`.
+  `--compare-threads N` overrides the baseline, for example
+  `./bench.py --treatment off --threads 8 --compare-threads 1`.
+  Other engines currently require one thread.
 - `--timeout-sec N`: per-process guard; the shared default is 500 seconds.
 - `--memory-limit-gib N`: allocator/address-space guard in GiB; fractions are
   accepted, for example `--memory-limit-gib 2.5`. The cap is enabled at 16 GiB
@@ -449,9 +453,9 @@ Use `./bench.py --help` for the complete option reference.
 
 ### Engine timing
 
-Every successful benchmark observation records timing from the same measured
-process. Timing collection is always enabled; requesting a detailed report does
-not rerun a diagnostic process or change the cache key.
+Every successful benchmark observation records whole-process wall time and peak
+RSS. Serial runs also collect the engine's phase summary from that same measured
+process; requesting a detailed report never reruns a diagnostic process.
 
 The versioned timing summary stores seven fixed process counters, one typed row
 per named ruleset with its Program or Equality role and five exclusive own-work
@@ -465,8 +469,9 @@ that a rebuild triggered by a top-level action such as `(union ...)` remains in
 Commands/Actions. The captions printed next to `--detail phases` and
 `--detail rulesets` are the source of truth for grouping and display rules.
 
-Benchmarks run single-threaded. This keeps Search and Apply attribution
-additive for egglog's interleaved executor.
+Benchmarks default to one thread. Parallel runs use `--threads N` and retain
+whole-process measurements without a phase summary: Search and Apply overlap
+in the parallel executor and cannot be presented as additive phases.
 
 ### Interactive report
 
@@ -571,7 +576,7 @@ Unchanged output keeps its modification time. For another report path, `.jsonl`
 becomes `-grouped.json`; other names gain `-grouped.json`.
 
 Cache reuse is keyed by binary SHA-256, physical input file SHA-256, treatment,
-and disequality encoding. Target source, path, revision, dirty state, labels,
+disequality encoding, and worker thread count. Target source, path, revision, dirty state, labels,
 and display paths are provenance. Time and memory guards are per-attempt limits,
 not cache identities. Allocator startup settings stay fixed with or without a cap.
 
@@ -612,7 +617,7 @@ Each observation contains target and workload
 provenance, exact cache coordinates, status, wall time, peak RSS, and failure
 details. A top-level report schema version covers both the persisted shape and
 measurement semantics, so methodology changes cannot silently reuse stale
-measurements. Successful observations from engines with timing-summary support
+measurements. Successful serial observations from engines with timing-summary support
 also contain the version-4 timing summary: fixed process counters, a typed list of named ruleset timings, and one
 global native-Rebuild counter. Changes to timing coverage or meaning require a
 schema-version change so stale measurements cannot be reused silently.
@@ -628,7 +633,7 @@ incomplete instead of averaging only successful rows.
 
 This tool writes the cache and grouped data; figures read the grouped data
 directly. The codec rejects old schema versions and requires successful rows
-from timing-summary-capable engines to contain timing data. It trusts the tool's typed writer rather than repeating the
+from timing-summary-capable engines running serially to contain timing data. It trusts the tool's typed writer rather than repeating the
 `TypedDict` as runtime field-by-field validation. An incompatible schema change intentionally
 invalidates existing caches: move or remove an incompatible report and
 recompute it.

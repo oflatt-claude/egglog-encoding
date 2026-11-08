@@ -628,6 +628,7 @@ def test_fresh_failure_stops_only_its_condition(
         _timeout: int,
         _encoding: models.DisequalityEncoding,
         _memory_limit_bytes: int | None,
+        _threads: int,
     ) -> collection.ProcessObservation:
         calls.append((file.display_path, treatment))
         if file.display_path == "file.egg" and treatment == "off":

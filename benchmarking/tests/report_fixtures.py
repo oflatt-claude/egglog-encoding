@@ -30,12 +30,13 @@ def make_record(
     file_sha256: str = "sha256:file",
     treatment: models.Treatment = "off",
     disequality_encoding: models.DisequalityEncoding = "nee",
+    threads: int = 1,
     timeout_sec: int = 120,
     memory_limit_bytes: int | None = NATIVE_LIMIT_BYTES,
     target_label: str | None = None,
     timing_summary: TimingSummaryRecord | None = None,
 ) -> ReportRecord:
-    if status == "success" and timing_summary is None:
+    if status == "success" and timing_summary is None and threads == 1:
         timing_summary = make_timing_summary()
     if not TREATMENT_SPECS[treatment].allocator_limit:
         memory_limit_bytes = None
@@ -53,6 +54,7 @@ def make_record(
         "file_path": "file.egg",
         "file_sha256": file_sha256,
         "treatment": treatment,
+        "threads": threads,
         "disequality_encoding": disequality_encoding,
         "timeout_sec": timeout_sec,
         "memory_limit_bytes": memory_limit_bytes,

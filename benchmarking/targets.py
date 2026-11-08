@@ -27,7 +27,7 @@ from .engines import (
     math_workload_arguments,
     validate_binary_workload,
 )
-from .models import BuiltBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow
+from .models import BuiltBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow, validate_threads
 
 BuildProfile = Literal["release", "profiling"]
 
@@ -288,7 +288,9 @@ def workload_command(
     file_spec: FileSpec,
     treatment: Treatment,
     disequality_encoding: str = "nee",
+    threads: int = 1,
 ) -> list[str]:
+    validate_threads(treatment, threads)
     specification = TREATMENT_SPECS[treatment]
     file_spec = file_spec.for_binary(specification.binary_name)
     if specification.binary_name != "egglog-experimental":
@@ -303,6 +305,8 @@ def workload_command(
     return [
         str(binary_path),
         *EGGLOG_FLAGS,
+        "-j",
+        str(threads),
         *(["--disequality-encoding", disequality_encoding] if disequality_encoding != "nee" else []),
         *specification.flags,
         str(file_spec.absolute_path),
