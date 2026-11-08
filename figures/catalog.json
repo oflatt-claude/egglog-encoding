@@ -95,6 +95,23 @@
         "slotted-ref-multi",
         "slotted-ref-nested-snapshot"
       ]
+    },
+    "slotted-multipattern-runtime": {
+      "spec": "eval/slotted-runtime.vl.json",
+      "files": [
+        "../benchmarks/slotted/inputs/sdql/batax_1st-44rules.egg",
+        "../benchmarks/slotted/inputs/sdql/mmm_1st-44rules.egg",
+        "../benchmarks/slotted/inputs/sdql/mmm_2nd-44rules.egg",
+        "../benchmarks/slotted/inputs/sdql/mmm_sum_1st-44rules.egg",
+        "../benchmarks/slotted/inputs/sdql/mmm_sum_2nd-44rules.egg",
+        "../benchmarks/slotted/inputs/sdql/mttkrp_1st-44rules.egg",
+        "../benchmarks/slotted/inputs/sdql/ttm_1st-44rules.egg",
+        "../benchmarks/slotted/inputs/sdql/ttm_2nd-44rules.egg"
+      ],
+      "treatments": [
+        "slotted-ref-multi",
+        "slotted"
+      ]
     }
   }
 }

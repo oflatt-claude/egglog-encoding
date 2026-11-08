@@ -121,7 +121,7 @@
           "padding": 6,
           "nice": false
         },
-        "axis": {"title": "Encoding / native (symlog)", "labelExpr": "format(datum.value,',~f') + '×'", "values": [ -1024, -256, -64, -16, -4, -1, -0.25, 0, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024 ], "labelOverlap": "greedy", "labelFlush": 20}
+        "axis": {"title": "Pass / reference (symlog)", "labelExpr": "format(datum.value,',~f') + '×'", "values": [ -1024, -256, -64, -16, -4, -1, -0.25, 0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024 ], "labelOverlap": "greedy", "labelFlush": 20}
       },
       "y": {
         "field": "workload",
@@ -181,7 +181,7 @@
         "mark": {"type": "point", "filled": true, "size": 28, "shape": "square", "color": "#111111"},
         "encoding": {
           "x": {"field": "ratio"},
-          "tooltip": [{"field": "workload"}, {"field": "metric"}, {"field": "ratio"}, {"field": "ratio_low"}, {"field": "ratio_high"}]
+          "tooltip": [{"field": "workload"}, {"field": "candidate.input.label", "title": "Full source name"}, {"field": "metric"}, {"field": "ratio"}, {"field": "ratio_low"}, {"field": "ratio_high"}]
         },
         "transform": [{"filter": "isValid(datum.ratio) && isFinite(datum.ratio)"}]
       },
