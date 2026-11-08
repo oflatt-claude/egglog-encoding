@@ -109,6 +109,7 @@
   ],
   "vconcat": [
     {
+      "bounds": "flush",
       "facet": {
         "column": {
           "field": "metric",
@@ -217,7 +218,7 @@
       "spacing": 24
     },
     {
-      "transform": [{"filter": "datum.beyond_n > 0"}],
+      "bounds": "flush",
       "facet": {
         "column": {
           "field": "metric",
@@ -238,35 +239,50 @@
               "domain": {"expr": "[0, view_domains[parent.metric].full]"},
               "nice": false, "padding": 4
             },
-            "axis": {"title": "Full range", "labelExpr": "format(datum.value,'~f') + '×'", "tickCount": 5, "grid": false}
+            "axis": {
+              "title": {"expr": "view_domains[parent.metric].zoom < view_domains[parent.metric].full ? parent.metric + ' · full range' : ''"},
+              "labelOverlap": false,
+              "labelOpacity": {"expr": "view_domains[parent.metric].zoom < view_domains[parent.metric].full ? 1 : 0"},
+              "domainOpacity": {"expr": "view_domains[parent.metric].zoom < view_domains[parent.metric].full ? 1 : 0"},
+              "tickOpacity": {"expr": "view_domains[parent.metric].zoom < view_domains[parent.metric].full ? 1 : 0"},
+              "labelExpr": "format(datum.value,'~f') + '×'", "tickCount": 5, "grid": false
+            }
           },
           "y": {
             "field": "cdf",
             "type": "quantitative",
             "title": null,
             "scale": {"domain": [0, 1.08], "nice": false, "padding": 4},
-            "axis": {"format": ".0%", "values": [0, 0.5, 1], "grid": false}
+            "axis": {
+              "labelOverlap": false,
+              "labelOpacity": {"expr": "view_domains[parent.metric].zoom < view_domains[parent.metric].full ? 1 : 0"},
+              "domainOpacity": {"expr": "view_domains[parent.metric].zoom < view_domains[parent.metric].full ? 1 : 0"},
+              "tickOpacity": {"expr": "view_domains[parent.metric].zoom < view_domains[parent.metric].full ? 1 : 0"},
+              "format": ".0%", "values": [0, 0.5, 1], "grid": false
+            }
           }
         },
         "layer": [
           {
             "name": "cdf_zoom_region",
+            "transform": [{"filter": "datum.beyond_n > 0"}],
             "mark": {"type": "rect", "color": "#e4edf3"},
             "encoding": {"x": {"datum": {"expr": "view_domains[parent.metric].min"}}, "x2": {"datum": {"expr": "view_domains[parent.metric].zoom"}}, "y": {"value": 0}, "y2": {"value": 65}}
           },
           {
-            "mark": {"type": "rule", "color": "#a3a7ad"},
+            "transform": [{"aggregate": [{"op": "max", "field": "beyond_n", "as": "beyond_n"}], "groupby": ["metric"]}],
+            "mark": {"type": "rule", "color": "#a3a7ad", "opacity": {"expr": "datum.beyond_n > 0 ? 1 : 0"}},
             "encoding": {"x": {"datum": 1}, "y": {"value": 0}, "y2": {"value": 65}}
           },
           {
             "name": "cdf_line",
-            "transform": [{"filter": "datum.valid"}],
+            "transform": [{"filter": "datum.valid && datum.beyond_n > 0"}],
             "mark": {"type": "line", "interpolate": "step-after", "color": "#374151", "strokeWidth": 0.7, "opacity": 0.7, "clip": true},
             "encoding": {"order": {"field": "ratio", "type": "quantitative", "sort": "ascending"}}
           },
           {
             "name": "cdf_points",
-            "transform": [{"filter": "datum.valid"}],
+            "transform": [{"filter": "datum.valid && datum.beyond_n > 0"}],
             "mark": {"type": "point", "filled": true, "size": 11, "opacity": 0.8, "clip": true},
             "encoding": {
               "color": {
@@ -295,6 +311,7 @@
           },
           {
             "transform": [
+              {"filter": "datum.beyond_n > 0"},
               {"aggregate": [{"op": "max", "field": "q50", "as": "q50"}, {"op": "max", "field": "q95", "as": "q95"}, {"op": "max", "field": "cohort_n", "as": "cohort_n"}, {"op": "max", "field": "measured_n", "as": "measured_n"}], "groupby": ["mode", "metric", "zoom_min", "zoom_max", "full_max"]},
               {"fold": ["q50", "q95"], "as": ["quantile", "threshold_ratio"]},
               {"calculate": "datum.quantile === 'q50' ? 0.5 : 0.95", "as": "percentile"},
@@ -329,6 +346,7 @@
           },
           {
             "transform": [
+              {"filter": "datum.beyond_n > 0"},
               {"aggregate": [{"op": "max", "field": "cohort_n", "as": "cohort_n"}, {"op": "max", "field": "measured_n", "as": "measured_n"}, {"op": "max", "field": "maximum_ratio", "as": "maximum_ratio"}, {"op": "max", "field": "beyond_n", "as": "beyond_n"}], "groupby": ["metric", "zoom_min", "zoom_max", "full_max"]},
               {"calculate": "(datum.beyond_n ? datum.beyond_n + ' outside zoom' : 'All observations in zoom') + '; max ' + (isValid(datum.maximum_ratio) ? format(datum.maximum_ratio,'.3g') + '×' : 'unavailable')", "as": "summary"}
             ],
@@ -338,7 +356,7 @@
           }
         ]
       },
-      "resolve": {"scale": {"x": "independent"}},
+      "resolve": {"scale": {"x": "independent", "y": "independent"}},
       "spacing": 24
     }
   ],
