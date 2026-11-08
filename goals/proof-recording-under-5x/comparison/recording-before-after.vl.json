@@ -1,0 +1,372 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "Both recording/off empirical CDFs use the identical 127 frozen input identities and shared full-range axes. Before is the ten-run paper dataset from November 4; after is the ten-run accepted optimized dataset from November 8. Each point is one per-replay ratio of arithmetic means; no confidence band is implied.",
+  "title": {
+    "text": "Proof recording overhead: before and after",
+    "subtitle": [
+      "Same 127 replays; ten off and recording runs per replay and version.",
+      "Includes congruence; excludes proof extraction and checking. Lower ratios are better."
+    ]
+  },
+  "data": {
+    "url": "full-cohort-ratios.json",
+    "format": {
+      "type": "json"
+    }
+  },
+  "transform": [
+    {
+      "joinaggregate": [
+        {
+          "op": "count",
+          "as": "cohort_n"
+        }
+      ],
+      "groupby": [
+        "metric",
+        "version"
+      ]
+    },
+    {
+      "window": [
+        {
+          "op": "row_number",
+          "as": "rank"
+        }
+      ],
+      "sort": [
+        {
+          "field": "ratio",
+          "order": "ascending"
+        },
+        {
+          "field": "workload_id",
+          "order": "ascending"
+        }
+      ],
+      "groupby": [
+        "metric",
+        "version"
+      ]
+    },
+    {
+      "calculate": "datum.rank / datum.cohort_n",
+      "as": "cdf"
+    }
+  ],
+  "facet": {
+    "column": {
+      "field": "metric",
+      "type": "nominal",
+      "sort": [
+        "Runtime",
+        "Peak RSS"
+      ],
+      "header": {
+        "title": null,
+        "labelFontSize": 18,
+        "labelFontWeight": "bold",
+        "labelPadding": 12
+      }
+    }
+  },
+  "spec": {
+    "width": 410,
+    "height": 290,
+    "layer": [
+      {
+        "transform": [
+          {
+            "aggregate": [
+              {
+                "op": "count",
+                "as": "n"
+              }
+            ],
+            "groupby": [
+              "metric"
+            ]
+          }
+        ],
+        "mark": {
+          "type": "rule",
+          "color": "#707070",
+          "strokeDash": [
+            4,
+            4
+          ],
+          "strokeWidth": 1.25
+        },
+        "encoding": {
+          "x": {
+            "datum": 5,
+            "type": "quantitative",
+            "scale": {
+              "domain": [
+                1,
+                7.1
+              ],
+              "nice": false,
+              "zero": false
+            }
+          }
+        }
+      },
+      {
+        "mark": {
+          "type": "line",
+          "interpolate": "step-after",
+          "strokeWidth": 2.5
+        },
+        "encoding": {
+          "x": {
+            "field": "ratio",
+            "type": "quantitative",
+            "scale": {
+              "domain": [
+                1,
+                7.1
+              ],
+              "nice": false,
+              "zero": false
+            },
+            "axis": {
+              "title": "Recording / off (ratio of means)",
+              "values": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "labelExpr": "datum.value + '×'"
+            }
+          },
+          "y": {
+            "field": "cdf",
+            "type": "quantitative",
+            "scale": {
+              "domain": [
+                0,
+                1.03
+              ],
+              "nice": false
+            },
+            "axis": {
+              "title": "Share of the 127 replays",
+              "format": ".0%",
+              "values": [
+                0,
+                0.25,
+                0.5,
+                0.75,
+                1
+              ]
+            }
+          },
+          "color": {
+            "field": "version",
+            "type": "nominal",
+            "scale": {
+              "domain": [
+                "Before · paper, Nov 4",
+                "After · optimized, Nov 8"
+              ],
+              "range": [
+                "#a55a08",
+                "#255f9b"
+              ]
+            },
+            "legend": {
+              "title": null,
+              "orient": "top",
+              "direction": "horizontal",
+              "labelLimit": 400,
+              "columns": 2,
+              "symbolSize": 400
+            }
+          },
+          "strokeDash": {
+            "field": "version",
+            "type": "nominal",
+            "scale": {
+              "domain": [
+                "Before · paper, Nov 4",
+                "After · optimized, Nov 8"
+              ],
+              "range": [
+                [
+                  6,
+                  4
+                ],
+                [
+                  1,
+                  0
+                ]
+              ]
+            }
+          },
+          "order": {
+            "field": "rank",
+            "type": "quantitative"
+          },
+          "tooltip": [
+            {
+              "field": "version"
+            },
+            {
+              "field": "workload"
+            },
+            {
+              "field": "ratio",
+              "format": ".4f"
+            },
+            {
+              "field": "cdf",
+              "format": ".1%"
+            }
+          ]
+        }
+      },
+      {
+        "transform": [
+          {
+            "filter": "datum.rank === datum.cohort_n"
+          }
+        ],
+        "mark": {
+          "type": "point",
+          "filled": true,
+          "size": 48
+        },
+        "encoding": {
+          "x": {
+            "field": "ratio",
+            "type": "quantitative",
+            "scale": {
+              "domain": [
+                1,
+                7.1
+              ],
+              "nice": false,
+              "zero": false
+            },
+            "axis": {
+              "title": "Recording / off (ratio of means)",
+              "values": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "labelExpr": "datum.value + '×'"
+            }
+          },
+          "y": {
+            "field": "cdf",
+            "type": "quantitative",
+            "scale": {
+              "domain": [
+                0,
+                1.03
+              ],
+              "nice": false
+            },
+            "axis": {
+              "title": "Share of the 127 replays",
+              "format": ".0%",
+              "values": [
+                0,
+                0.25,
+                0.5,
+                0.75,
+                1
+              ]
+            }
+          },
+          "color": {
+            "field": "version",
+            "type": "nominal",
+            "scale": {
+              "domain": [
+                "Before · paper, Nov 4",
+                "After · optimized, Nov 8"
+              ],
+              "range": [
+                "#a55a08",
+                "#255f9b"
+              ]
+            },
+            "legend": {
+              "title": null,
+              "orient": "top",
+              "direction": "horizontal",
+              "labelLimit": 400,
+              "columns": 2,
+              "symbolSize": 400
+            }
+          },
+          "tooltip": [
+            {
+              "field": "version"
+            },
+            {
+              "field": "workload"
+            },
+            {
+              "field": "ratio",
+              "format": ".4f"
+            },
+            {
+              "field": "cdf",
+              "format": ".1%"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "config": {
+    "font": "Arial",
+    "background": "white",
+    "view": {
+      "stroke": null
+    },
+    "title": {
+      "anchor": "start",
+      "fontSize": 22,
+      "subtitleFontSize": 14,
+      "subtitleLineHeight": 20,
+      "subtitlePadding": 10
+    },
+    "axis": {
+      "labelFontSize": 13,
+      "titleFontSize": 14,
+      "titleFontWeight": "normal",
+      "titlePadding": 10,
+      "gridColor": "#e6e8eb"
+    },
+    "legend": {
+      "labelFontSize": 14,
+      "symbolStrokeWidth": 3,
+      "padding": 8
+    },
+    "facet": {
+      "spacing": 28
+    }
+  },
+  "usermeta": {
+    "threshold": "Dashed grey rule is the 5× target.",
+    "uncertainty": "CDFs show 127 per-file mean ratios per version, without a confidence band. Gemma after has a 95% Fieller interval of [4.914324, 5.044428].",
+    "source_files": [
+      "../cohort.json",
+      "../final-acceptance.json",
+      "comparison-provenance.json"
+    ]
+  }
+}

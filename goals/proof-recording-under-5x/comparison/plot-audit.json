@@ -1,0 +1,40 @@
+{
+  "passed": true,
+  "plotted_ratios": 508,
+  "groups": [
+    {
+      "metric": "Runtime",
+      "version": "Before · paper, Nov 4",
+      "points": 127,
+      "maximum": 6.904146311666768
+    },
+    {
+      "metric": "Runtime",
+      "version": "After · optimized, Nov 8",
+      "points": 127,
+      "maximum": 4.978895257183726
+    },
+    {
+      "metric": "Peak RSS",
+      "version": "Before · paper, Nov 4",
+      "points": 127,
+      "maximum": 6.696843883044229
+    },
+    {
+      "metric": "Peak RSS",
+      "version": "After · optimized, Nov 8",
+      "points": 127,
+      "maximum": 4.2943652697427215
+    }
+  ],
+  "executed_x_domain": [
+    1,
+    7.1
+  ],
+  "executed_y_domain": [
+    0,
+    1.03
+  ],
+  "all_four_maximum_markers_in_bounds": true,
+  "warnings": []
+}
