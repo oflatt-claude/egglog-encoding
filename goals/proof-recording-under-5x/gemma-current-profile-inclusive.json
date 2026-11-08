@@ -1,0 +1,287 @@
+{
+  "artifact": "/Users/saul/p/wt/egglog-encoding/proof-recording-outliers/benchmarks/local/proof-recording-under-5x/profiles-current/v5/0acec04d74e8fb5a61d96659911851f003ff0b78f6bdbbace97647f1af2cd00d/48e976d7ad8efaae76eade21c6cad033b4bb4de26fc5536fcd6af9ac6e33ee96/proofs-nee-auto10s.json.gz",
+  "binary": "/Users/saul/p/wt/egglog-encoding/proof-recording-outliers/target/profiling/egglog-experimental",
+  "observed_cpu_seconds": 10.051612000000027,
+  "note": "Inclusive sampled CPU counts a symbol once per sample stack; values overlap and are not wall times.",
+  "top_inclusive": [
+    {
+      "function": "std::rt::lang_start::_{{closure}}::h1171f507a74330f5",
+      "cpu_seconds": 10.051612000000027,
+      "share": 1.0
+    },
+    {
+      "function": "egglog_experimental::main::h6421f930429390fc",
+      "cpu_seconds": 10.051612000000027,
+      "share": 1.0
+    },
+    {
+      "function": "std::rt::lang_start_internal::h7e788da8c79e20dc",
+      "cpu_seconds": 10.051612000000027,
+      "share": 1.0
+    },
+    {
+      "function": "main",
+      "cpu_seconds": 10.051612000000027,
+      "share": 1.0
+    },
+    {
+      "function": "std::sys::backtrace::__rust_begin_short_backtrace::h6d046633e535cbf3",
+      "cpu_seconds": 10.051612000000027,
+      "share": 1.0
+    },
+    {
+      "function": "egglog::EGraph::parse_and_run_program::h08713537a01420f4",
+      "cpu_seconds": 10.031888000000025,
+      "share": 0.9980377276798983
+    },
+    {
+      "function": "egglog::cli::cli_with_preprocessor_impl::h5ba245fd697ef63b",
+      "cpu_seconds": 10.031888000000025,
+      "share": 0.9980377276798983
+    },
+    {
+      "function": "egglog::process_program::_<impl egglog::EGraph>::process_program_internal::h8025bcf328d8bedf",
+      "cpu_seconds": 9.95520900000003,
+      "share": 0.9904092000367706
+    },
+    {
+      "function": "egglog::EGraph::resolve_command::he92b641a56995334",
+      "cpu_seconds": 5.749796000000003,
+      "share": 0.5720272529421139
+    },
+    {
+      "function": "egglog::process_program::_<impl egglog::EGraph>::run_command::hfd090a3dc62df54e",
+      "cpu_seconds": 4.184938999999996,
+      "share": 0.4163450598769615
+    },
+    {
+      "function": "egglog::process_program::_<impl egglog::EGraph>::run_command_inner::hf9b5208601166405",
+      "cpu_seconds": 4.179302999999996,
+      "share": 0.41578435379320106
+    },
+    {
+      "function": "egglog::typechecking::_<impl egglog::EGraph>::typecheck_program::h2a2db5ba3a8714d9",
+      "cpu_seconds": 3.340656999999996,
+      "share": 0.3323503732535624
+    },
+    {
+      "function": "egglog::typechecking::_<impl egglog::EGraph>::typecheck_command::hd08c22a2b6fca3fc",
+      "cpu_seconds": 3.336717999999996,
+      "share": 0.3319584958114168
+    },
+    {
+      "function": "egglog::typechecking::TypeInfoView::typecheck_standalone_actions::hd07cf0d1fb6f7b31",
+      "cpu_seconds": 2.9561419999999905,
+      "share": 0.2940963101241853
+    },
+    {
+      "function": "egglog_bridge::EGraph::run_rules::hfc86cce066473bbe",
+      "cpu_seconds": 2.4481329999999937,
+      "share": 0.24355625744407833
+    },
+    {
+      "function": "egglog_bridge::EGraph::run_rules_inner::h42e5c422e5b89471",
+      "cpu_seconds": 2.4473249999999935,
+      "share": 0.24347587232774076
+    },
+    {
+      "function": "egglog_bridge::run_rules_impl::ha20b1aa85fa96b19",
+      "cpu_seconds": 2.4473249999999935,
+      "share": 0.24347587232774076
+    },
+    {
+      "function": "egglog_core_relations::free_join::execute::_<impl egglog_core_relations::free_join::Database>::run_rule_set::h31829c0ccf112a06",
+      "cpu_seconds": 2.1561949999999976,
+      "share": 0.21451235881368996
+    },
+    {
+      "function": "egglog::proofs::proof_encoding::ProofInstrumentor::add_term_encoding::hf363d9e44117669c",
+      "cpu_seconds": 2.098005,
+      "share": 0.20872323762596431
+    },
+    {
+      "function": "egglog::EGraph::run_schedule::hfaa8aca47c084b87",
+      "cpu_seconds": 2.087280999999999,
+      "share": 0.20765634407694938
+    },
+    {
+      "function": "egglog::proofs::proof_encoding::ProofInstrumentor::term_encode_command::h686936347f8e725a",
+      "cpu_seconds": 2.0839540000000003,
+      "share": 0.2073253523912378
+    },
+    {
+      "function": "egglog::EGraph::step_rules::h232a0474f8c51c41",
+      "cpu_seconds": 2.083312999999999,
+      "share": 0.20726158152543028
+    },
+    {
+      "function": "egglog_core_relations::free_join::execute::JoinState::run_join_stages::h755d40cda03b144b",
+      "cpu_seconds": 1.804670000000001,
+      "share": 0.17954035631299697
+    },
+    {
+      "function": "egglog::EGraph::eval_actions::h5b791c6789c24e69",
+      "cpu_seconds": 1.7881450000000012,
+      "share": 0.17789634140275176
+    },
+    {
+      "function": "egglog_core_relations::free_join::execute::JoinState::run_plan::h214146608457b63a",
+      "cpu_seconds": 1.5159850000000004,
+      "share": 0.15082008736509092
+    },
+    {
+      "function": "0x80b9c3",
+      "cpu_seconds": 1.3899710000000005,
+      "share": 0.13828339175845594
+    },
+    {
+      "function": "egglog_core_relations::free_join::execute::JoinState::run_plan::_{{closure}}::h37c120111a080653",
+      "cpu_seconds": 1.3531070000000003,
+      "share": 0.13461592031208494
+    },
+    {
+      "function": "<benchmark_memory::LimitedAllocator as core::alloc::global::GlobalAlloc>::alloc::h4bddfe19afd0f5d1",
+      "cpu_seconds": 1.1669820000000006,
+      "share": 0.11609898989336213
+    },
+    {
+      "function": "egglog::proofs::proof_encoding::ProofInstrumentor::instrument_actions::h8162b40cc33e8b3f",
+      "cpu_seconds": 1.1619899999999985,
+      "share": 0.11560235313499918
+    },
+    {
+      "function": "egglog::proofs::proof_encoding::ProofInstrumentor::instrument_action::h66923df6e0329c7b",
+      "cpu_seconds": 1.1073359999999977,
+      "share": 0.11016501631778014
+    },
+    {
+      "function": "egglog::proofs::proof_encoding::ProofInstrumentor::instrument_action_expr_inner::h4e47f410fc008138",
+      "cpu_seconds": 1.071321999999998,
+      "share": 0.10658210842201184
+    },
+    {
+      "function": "egglog::proofs::proof_encoding::ProofInstrumentor::instrument_action_expr::hd84816636a140bf5",
+      "cpu_seconds": 1.0684049999999978,
+      "share": 0.1062919062136496
+    },
+    {
+      "function": "egglog::proofs::proof_encoding::ProofInstrumentor::add_term_and_view::h22ef425e8b1b7aa2",
+      "cpu_seconds": 1.0449999999999982,
+      "share": 0.10396342397617371
+    },
+    {
+      "function": "0x48b44b",
+      "cpu_seconds": 0.9727939999999984,
+      "share": 0.09677989958227554
+    },
+    {
+      "function": "egglog::constraint::Problem<Var,Value>::solve::hfbec467c286fec22",
+      "cpu_seconds": 0.9718359999999995,
+      "share": 0.09668459148641997
+    },
+    {
+      "function": "<egglog_ast::generic_ast::GenericActions<Head,Leaf> as egglog::core::GenericActionsExt<Head,Leaf>>::to_core_actions::h6efda0b44ca26fa6",
+      "cpu_seconds": 0.8641200000000003,
+      "share": 0.08596830040793436
+    },
+    {
+      "function": "egglog::EGraph::parse_program_timed::h301feb32a86af6da",
+      "cpu_seconds": 0.8245870000000008,
+      "share": 0.08203529941267118
+    },
+    {
+      "function": "egglog::ast::parse::Parser::get_program_from_string::hdc60e709697486ca",
+      "cpu_seconds": 0.8235960000000009,
+      "share": 0.08193670826132153
+    },
+    {
+      "function": "egglog::proofs::proof_encoding_helpers::_<impl egglog::proofs::proof_encoding::ProofInstrumentor>::parse_program::hd9216599877f09da",
+      "cpu_seconds": 0.8157580000000006,
+      "share": 0.08115693283823515
+    },
+    {
+      "function": "<alloc::string::String as core::clone::Clone>::clone::hb553bb1e077a1ad1",
+      "cpu_seconds": 0.7452889999999996,
+      "share": 0.07414621654715658
+    },
+    {
+      "function": "egglog::proofs::proof_encoding::ProofInstrumentor::emit_pending_group::h0f0c5cc779e76ede",
+      "cpu_seconds": 0.7001059999999996,
+      "share": 0.06965111665671116
+    },
+    {
+      "function": "<egglog_ast::generic_ast::GenericExpr<Head,Leaf> as egglog::core::GenericExprExt<Head,Leaf>>::to_core_actions::hb4842c571d0b9b6f",
+      "cpu_seconds": 0.6517819999999999,
+      "share": 0.06484352957515652
+    },
+    {
+      "function": "egglog::constraint::Problem<egglog::core::GenericAtomTerm<alloc::string::String>,alloc::sync::Arc<dyn egglog::sort::Sort>>::add_actions::h7d8a57a62f7d315c",
+      "cpu_seconds": 0.6434549999999986,
+      "share": 0.06401510523884098
+    },
+    {
+      "function": "egglog::constraint::Assignment<egglog::core::GenericAtomTerm<alloc::string::String>,alloc::sync::Arc<dyn egglog::sort::Sort>>::annotate_action::h9975020732dd5707",
+      "cpu_seconds": 0.6292479999999999,
+      "share": 0.06260170010541576
+    },
+    {
+      "function": "alloc::raw_vec::finish_grow::h548173589c708581",
+      "cpu_seconds": 0.6278580000000005,
+      "share": 0.062463413828547976
+    },
+    {
+      "function": "mi_free",
+      "cpu_seconds": 0.6118819999999991,
+      "share": 0.060874017023338896
+    },
+    {
+      "function": "core::iter::adapters::try_process::h84c72f211ce8dd16",
+      "cpu_seconds": 0.6106949999999995,
+      "share": 0.06075592651208561
+    },
+    {
+      "function": "<egglog_ast::generic_ast::GenericActions<Head,Leaf> as egglog::core::GenericActionsExt<Head,Leaf>>::to_core_actions::h43ddac29c421945e",
+      "cpu_seconds": 0.6059980000000001,
+      "share": 0.06028863828010855
+    },
+    {
+      "function": "mi_malloc_aligned",
+      "cpu_seconds": 0.5960640000000003,
+      "share": 0.05930033908988913
+    },
+    {
+      "function": "egglog::constraint::Assignment<egglog::core::GenericAtomTerm<alloc::string::String>,alloc::sync::Arc<dyn egglog::sort::Sort>>::annotate_expr::h83e642d03b402236",
+      "cpu_seconds": 0.5733289999999996,
+      "share": 0.057038512827594035
+    },
+    {
+      "function": "0x480707",
+      "cpu_seconds": 0.5670679999999998,
+      "share": 0.05641562766250809
+    },
+    {
+      "function": "<egglog::constraint::Assign<Var,Value> as egglog::constraint::Constraint<Var,Value>>::update::habc4f47a10879b67",
+      "cpu_seconds": 0.5492689999999996,
+      "share": 0.05464486691288901
+    },
+    {
+      "function": "egglog::constraint::_<impl egglog::core::GenericCoreAction<alloc::string::String,alloc::string::String>>::get_constraints::h9cfb7afab91628e1",
+      "cpu_seconds": 0.5444049999999995,
+      "share": 0.054160964430381715
+    },
+    {
+      "function": "_mi_malloc_generic",
+      "cpu_seconds": 0.5016400000000002,
+      "share": 0.04990642296976831
+    },
+    {
+      "function": "<egglog_ast::generic_ast::GenericExpr<Head,Leaf> as egglog::core::GenericExprExt<Head,Leaf>>::to_core_actions::h25a10108c62ac1ea",
+      "cpu_seconds": 0.47419200000000034,
+      "share": 0.047175716691014245
+    }
+  ],
+  "assignment_lookup_callers": [],
+  "warnings": [
+    "could not resolve 230 application frame address(es)"
+  ]
+}

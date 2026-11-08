@@ -1,0 +1,30 @@
+{
+  "source_head": "c0f9c91f9a74728e0cd74c59c1be12fbb171f146",
+  "source_patch_sha256": "sha256:db7f0d4d122445bb4966426f30278747288d6404ef63c87cb786fe34019f2b2d",
+  "scope": "Correctness checkpoint on the one-line capacity trial; performance goal remains incomplete.",
+  "ci": {
+    "command": "RUST_TEST_ARGS='--skip paper/' UV_PYTHON=3.12 make check",
+    "exit_code": 0,
+    "log_sha256": "sha256:5793ef963eb26baaade66245ea262609f4c0e4379b6802108e836b0adf0e04aa",
+    "note": "Uses the repository CI paper-skip profile, including all nits, Python/workspace Rust and figure checks."
+  },
+  "broad_paper": {
+    "source_head": "c5d94ad89fb38affadcda4da578a3c2771f3db27",
+    "passed": 510,
+    "failed": 1,
+    "seconds": 7043.03,
+    "failure": "Native Math proof checker exceeded the16GiB VM guard.",
+    "log": "make-check-final.log",
+    "resolution": "User requested removing the native Math test guard; scoped rerun below passes."
+  },
+  "math_rerun": {
+    "implementation_commit": "c0f9c91f",
+    "passed": 2,
+    "failed": 0,
+    "seconds": 504.35,
+    "native_memory_limit_bytes": null,
+    "source_memory_limit_bytes": 17179869184,
+    "log": "math-uncapped-rerun.log"
+  },
+  "performance_accepted": false
+}
