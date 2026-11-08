@@ -437,9 +437,13 @@ def names (P : Program) (e : Elision) (pf : Proof) : Names :=
   let occurrences (ts : List Term) (x : Expr) : Nat :=
     (ts.filter fun t => t.subtermList.any fun s => same s.toExpr x).length
   let candidates := dedup (full.flatMap fun t => proofSubs t.toExpr)
-  let terms := candidates.filter fun x =>
-    if e.localNames then occurrences positions x ≥ 2
-    else occurrences full x ≥ 2 && occurrences positions x ≥ 1
+  -- With local names, a term is named only when the name saves room: it recurs in what
+  -- is shown and is wide when spelled out with the names chosen before it.
+  let terms :=
+    if e.localNames then
+      candidates.foldl (fun acc x =>
+        if occurrences positions x ≥ 2 && visible (expr acc x) ≥ 15 then acc ++ [x] else acc) []
+    else candidates.filter fun x => occurrences full x ≥ 2 && occurrences positions x ≥ 1
   let distinct := ((parts.flatMap (·.1)).map fun p => (inlineProof P p, p)).foldl
     (fun acc kp => if acc.any (·.1 == kp.1) then acc else acc ++ [kp]) []
   let substs := recurring (distinct.filterMap fun kp => match kp.2 with
