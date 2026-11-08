@@ -1,0 +1,17 @@
+;;; The artifact's two vertical-fusion rules and beta reduction.
+;;; Keep Unique markers distinct from their values throughout optimization.
+(rewrite (Let t $x body) (subst body $x t) :name "beta")
+(rewrite
+  (Sum (Sum R $k2 $v2 (Sing $k2 body1)) $k1 $v1 body2)
+  (Sum R $k2 $v2 (Let $k2 $k1 (Let body1 $v1 body2)))
+  :name
+  "sum-sum-vert-fuse-1"
+  :when
+  ((not-free $k1 body1) (not-free $k2 body2) (not-free $v2 body2)))
+(rewrite
+  (Sum (Sum R $k2 $v2 (Sing (Unique key) body1)) $k1 $v1 body2)
+  (Sum R $k2 $v2 (Let (Unique key) $k1 (Let body1 $v1 body2)))
+  :name
+  "sum-sum-vert-fuse-2"
+  :when
+  ((not-free $k1 body1) (not-free $k2 body2) (not-free $v2 body2)))

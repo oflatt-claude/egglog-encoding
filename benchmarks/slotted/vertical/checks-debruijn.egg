@@ -1,0 +1,100 @@
+;;; Frozen reachability and scope checks. Expected terms are added after rewriting.
+(let input
+  (Lambda
+    (Lambda
+      (Lambda
+        (Lambda
+          (Lambda
+            (Lambda
+              (Lambda
+                (Lambda
+                  (Lambda
+                    (Sum
+                      (Sum
+                        (Var 5)
+                        (Let
+                          (Get (Var 6) (Var 1))
+                          (Let
+                            (Get (Var 7) (Add (Var 2) (Num 1)))
+                            (Sing
+                              (Unique (Var 2))
+                              (Sum
+                                (SubArray (Var 7) (Var 1) (Sub (Var 0) (Num 1)))
+                                (Let
+                                  (Get (Var 8) (Var 1))
+                                  (Let
+                                    (Get (Var 9) (Add (Var 2) (Num 1)))
+                                    (Sing
+                                      (Unique (Var 2))
+                                      (Sum
+                                        (SubArray (Var 9) (Var 1) (Sub (Var 0) (Num 1)))
+                                        (Let (Get (Var 10) (Var 1)) (Sing (Unique (Var 1)) (Var 0))))))))))))
+                      (Sing
+                        (Var 1)
+                        (Sum
+                          (Var 0)
+                          (Sing
+                            (Var 1)
+                            (Sum
+                              (Sum
+                                (Var 12)
+                                (Let
+                                  (Get (Var 14) (Add (Var 1) (Num 1)))
+                                  (Sing
+                                    (Var 2)
+                                    (Sum
+                                      (SubArray (Var 14) (Var 1) (Sub (Var 0) (Num 1)))
+                                      (Sing (Unique (Var 0)) (Get (Var 15) (Var 1)))))))
+                              (Sing (Var 1) (Sum (Var 2) (Mult (Var 0) (Get (Var 2) (Var 1))))))))))))))))))))
+(let capture (Lambda (Let (Var 0) (Lambda (Mult (Var 1) (Var 0))))))
+(let collision (Lambda (Sum (Sum (Var 0) (Sing (Num 0) (Var 0))) (Mult (Var 0) (Var 0)))))
+(let annotation (Lambda (Sum (Var 0) (Sing (Unique (Var 1)) (Var 0)))))
+(let value-collision (Lambda (Sum (Sum (Var 0) (Sing (Var 0) (Var 0))) (Mult (Var 0) (Var 0)))))
+(run 64)
+(let expected
+  (Lambda
+    (Lambda
+      (Lambda
+        (Lambda
+          (Lambda
+            (Lambda
+              (Lambda
+                (Lambda
+                  (Lambda
+                    (Sum
+                      (Var 5)
+                      (Sing
+                        (Unique (Var 0))
+                        (Sum
+                          (SubArray
+                            (Var 5)
+                            (Get (Var 6) (Var 1))
+                            (Sub (Get (Var 6) (Add (Var 1) (Num 1))) (Num 1)))
+                          (Sing
+                            (Unique (Var 0))
+                            (Sum
+                              (Var 12)
+                              (Sing
+                                (Var 1)
+                                (Sum
+                                  (SubArray
+                                    (Var 7)
+                                    (Get (Var 8) (Var 3))
+                                    (Sub (Get (Var 8) (Add (Var 3) (Num 1))) (Num 1)))
+                                  (Mult
+                                    (Get (Var 8) (Var 1))
+                                    (Get
+                                      (Sum
+                                        (SubArray
+                                          (Var 15)
+                                          (Var 2)
+                                          (Sub (Get (Var 16) (Add (Var 3) (Num 1))) (Num 1)))
+                                        (Sing (Unique (Var 0)) (Get (Var 16) (Var 1))))
+                                      (Unique (Var 0)))))))))))))))))))))
+(let capture-expected (Lambda (Lambda (Mult (Var 1) (Var 0)))))
+(let collision-wrong (Lambda (Sum (Var 0) (Mult (Var 0) (Var 0)))))
+(run 0)
+(check (= input expected))
+(check (= capture capture-expected))
+(fail (check (= collision collision-wrong)))
+(fail (check (= value-collision collision-wrong)))

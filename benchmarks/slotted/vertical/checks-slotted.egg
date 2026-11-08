@@ -1,0 +1,105 @@
+;;; Frozen reachability and scope checks. Expected terms are added after rewriting.
+(let input
+  (Lambda $1
+    (Lambda $2
+      (Lambda $3
+        (Lambda $4
+          (Lambda $5
+            (Lambda $6
+              (Lambda $7
+                (Lambda $8
+                  (Lambda $9
+                    (Sum
+                      (Sum $4 $10 $11
+                        (Let
+                          (Get $5 $10)
+                          $12
+                          (Let
+                            (Get $5 (Add $10 (Num 1)))
+                            $13
+                            (Sing
+                              (Unique $11)
+                              (Sum
+                                (SubArray $6 $12 (Sub $13 (Num 1)))
+                                $14
+                                $15
+                                (Let
+                                  (Get $7 $14)
+                                  $16
+                                  (Let
+                                    (Get $7 (Add $14 (Num 1)))
+                                    $17
+                                    (Sing
+                                      (Unique $15)
+                                      (Sum
+                                        (SubArray $8 $16 (Sub $17 (Num 1)))
+                                        $18
+                                        $19
+                                        (Let (Get $9 $18) $20 (Sing (Unique $19) $20)))))))))))
+                      $10
+                      $11
+                      (Sing $10
+                        (Sum $11 $12 $13
+                          (Sing $12
+                            (Sum
+                              (Sum $1 $14 $15
+                                (Let
+                                  (Get $1 (Add $14 (Num 1)))
+                                  $16
+                                  (Sing $14
+                                    (Sum
+                                      (SubArray $2 $15 (Sub $16 (Num 1)))
+                                      $17
+                                      $18
+                                      (Sing (Unique $18) (Get $3 $17))))))
+                              $14
+                              $15
+                              (Sing $14 (Sum $13 $16 $17 (Mult $17 (Get $15 $16)))))))))))))))))))
+(let capture (Lambda $outside (Let $outside $x (Lambda $outside (Mult $x $outside)))))
+(let collision (Lambda $R (Sum (Sum $R $k $v (Sing (Num 0) $v)) $k $v (Mult $v $v))))
+(let annotation (Lambda $R (Sum $R $k $v (Sing (Unique $k) $v))))
+(let value-collision (Lambda $R (Sum (Sum $R $k $v (Sing $v $v)) $g $s (Mult $s $s))))
+(run 64)
+(let expected
+  (Lambda $0
+    (Lambda $21
+      (Lambda $22
+        (Lambda $23
+          (Lambda $24
+            (Lambda $25
+              (Lambda $26
+                (Lambda $27
+                  (Lambda $28
+                    (Sum $23 $29 $30
+                      (Sing
+                        (Unique $30)
+                        (Sum
+                          (SubArray $25 (Get $24 $29) (Sub (Get $24 (Add $29 (Num 1))) (Num 1)))
+                          $31
+                          $32
+                          (Sing
+                            (Unique $32)
+                            (Sum $0 $33 $34
+                              (Sing $33
+                                (Sum
+                                  (SubArray $27
+                                    (Get $26 $31)
+                                    (Sub (Get $26 (Add $31 (Num 1))) (Num 1)))
+                                  $35
+                                  $36
+                                  (Mult
+                                    (Get $28 $35)
+                                    (Get
+                                      (Sum
+                                        (SubArray $21 $34 (Sub (Get $0 (Add $33 (Num 1))) (Num 1)))
+                                        $37
+                                        $38
+                                        (Sing (Unique $38) (Get $22 $37)))
+                                      (Unique $36))))))))))))))))))))
+(let capture-expected (Lambda $outer (Lambda $inner (Mult $outer $inner))))
+(let collision-wrong (Lambda $R (Sum $R $k $v (Mult $v $v))))
+(run 0)
+(check (= input expected))
+(check (= capture capture-expected))
+(fail (check (= collision collision-wrong)))
+(fail (check (= value-collision collision-wrong)))
