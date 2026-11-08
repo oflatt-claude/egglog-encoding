@@ -793,6 +793,7 @@ where
         key: fn(&Value) -> &str,
     ) -> Result<Assignment<Var, Value>, ConstraintError<Var, Value>> {
         let mut assignment = Assignment(AssignmentMap::default());
+        assignment.0.flat.reserve(self.range.len());
         let mut changed = true;
         while changed {
             changed = false;
