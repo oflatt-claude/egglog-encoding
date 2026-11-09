@@ -105,32 +105,24 @@ def comparison_caption(report: dict[str, Any]) -> str:
     bound = f"{limit / 1024**3:g} GiB allocator/address-space cap" if limit is not None else "no memory cap"
     baseline = interval(report["execution"]["original"]["computation_seconds"]["mean"], 4)
     lines = [
-        "The original 140-query Favorita covariance workload on the public 2M-Sales-row fragment, using the "
-        "same pinned frontend and corrected C++ backend. This replicates the workload and pipeline, not the "
-        "paper's full dataset (127M joined tuples). The paper-heuristic control uses our implementation of "
-        "section 3.3's "
-        "coverage heuristic; it is distinct from the roots shipped in the artifact.",
+        "Favorita covariance batch (140 queries) on the public 2M-Sales-row sample, using the same pinned frontend "
+        "and corrected C++ backend. This replicates the workload, not the paper's full dataset (127M joined tuples). "
+        "The paper-root control uses our implementation of section 3.3's coverage heuristic; configured roots "
+        "are those shipped in the artifact.",
         "",
-        "Both egraph modes use hoisting, independent-loop interchange and tuple fusion on the same nested bag sums. "
-        "Shared views are derived from fused reductions; the same joint DAG extractor selects the plan. "
-        f"Both modes have the same {report['rewrite_round_budget']}-round budget and {bound}. "
-        "Ordinary egglog uses de Bruijn indices with explicit shift/swap rules. "
-        "A resource failure is reported as a failure, never as an execution speedup.",
+        f"Both egraph encodings use the same {report['rewrite_round_budget']}-round search and {bound}, "
+        "with proofs off. "
+        "Resource failures have no query-time ratio. Samples count completed egraph/query runs; "
+        "collection stops after a resource failure.",
         "",
-        "The sample counts show completed egraph and execution runs; collection stops after a resource failure. "
-        "Rewrite time and peak RSS are means with 95% Student-t confidence intervals from separate processes, "
-        "including parsing and rewriting "
-        "but excluding extraction. These optimizer rows have proofs off; proof replay is measured separately. "
-        "Plan + generate is one measured preparation run, "
-        "including query export, input validation, rewriting, DAG extraction and code generation. "
-        "It overlaps the separately sampled rewrite work: these columns must not be added. "
-        "C++ compilation is separate; neither preparation column has repetitions or a confidence interval. "
-        "Query time is the mean warm computation time divided by the configured-roots LMFAO mean (lower is better), "
-        "with independent 95% Fieller intervals. Undefined intervals and single-sample intervals are omitted. "
-        f"The measured baseline is {baseline} seconds. "
-        "Computation excludes loading, sorting and checking, as in the paper's "
-        "timing scope. Identical selected plans reuse compilation/execution observations, charged in full; "
-        "pipeline.json records those aliases, samples, hashes and all output checks.",
+        "Rewrite time and peak RSS are process means with 95% Student-t intervals, excluding DAG extraction. "
+        "Plan + generate includes a rewrite run, extraction and C++ generation; do not add it to Rewrite. "
+        "Planning/generation and C++ compilation are single observations without intervals.",
+        "",
+        "Query time is mean warm computation time divided by the configured-roots LMFAO mean (lower is better), "
+        f"with independent 95% Fieller intervals. The baseline is {baseline} seconds. "
+        "Computation excludes loading, sorting and checking, as in the paper. "
+        "Undefined and single-sample intervals are omitted. Identical plans reuse checked execution observations.",
     ]
     return "\n".join(lines) + "\n"
 
