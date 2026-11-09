@@ -60,6 +60,7 @@ fn variable_expansion_replays_its_construction_witness() {
         names: HashMap::default(),
         classes: BTreeMap::new(),
         readings: BTreeMap::new(),
+        rows: BTreeMap::new(),
         bridges: &bridges,
     };
     let expanded = lifter
