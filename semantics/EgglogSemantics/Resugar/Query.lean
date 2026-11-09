@@ -35,13 +35,13 @@ shared derivation, whose proof is `trans(sym(π), π)`. -/
   \and
   \ir{Edge}{\pi':b=x\\ e\Uparrow\pi:x=\eval{e}}{e\Uparrow\kw{trans}(\pi',\pi):b=\eval{e}}
   \and
+  \ir{Compare}{e_1\Uparrow\pi_1:x=\eval{e_1}\\e_2\Uparrow\pi_2:x=\eval{e_2}}
+    {(e_1=e_2)\Uparrow\kw{trans}(\kw{sym}(\pi_1),\pi_2):\eval{e_1}=\eval{e_2}}
+  \and
   \ir{App}{e_i\Uparrow\pi_i:b_i=\eval{e_i}\ (\forall i)\\
     \pi_0:f(b_1,\ldots,b_n)=f(b_1,\ldots,b_n)\\ \pi_r:f(b_1,\ldots,b_n)=y}
     {f(e_1,\ldots,e_n)\Uparrow\kw{trans}(\kw{sym}(\pi_r),\kw{cong}_n(\cdots\kw{cong}_1(\pi_0,\pi_1)\cdots,\pi_n))
       :y=\eval{f(e_1,\ldots,e_n)}}
-  \and
-  \ir{Compare}{e_1\Uparrow\pi_1:x=\eval{e_1}\\e_2\Uparrow\pi_2:x=\eval{e_2}}
-    {(e_1=e_2)\Uparrow\kw{trans}(\kw{sym}(\pi_1),\pi_2):\eval{e_1}=\eval{e_2}}
   \end{mathpar}
   -/)
   (latexEnv := "paperfragment")]
