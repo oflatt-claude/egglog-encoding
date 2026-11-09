@@ -309,7 +309,15 @@ impl<'a> ProofLifter<'a> {
                 let bindings = match &carried {
                     Some(_) => HashMap::default(),
                     None => {
-                        let mut bindings = globals.clone();
+                        // Each continuation retains its bindings while lifting.
+                        // Keep only the globals this head reads, rather than
+                        // copying every program global into every firing.
+                        let mut bindings = HashMap::default();
+                        rule.head.visit_vars(&mut |_, var| {
+                            if let Some(&term) = globals.get(&var.name) {
+                                bindings.insert(var.name.clone(), term);
+                            }
+                        });
                         bindings
                             .extend(substitution.iter().map(|(var, term)| (var.clone(), *term)));
                         bindings
