@@ -29,6 +29,15 @@ mistaken for the log. This covers the congruence compiler's output. -/
 def programOk (P : Program) : Bool :=
   unionFree P && P.names.all fun f => !firePrefix.isPrefixOf f
 
+/-- The programs the instrumentation preserves (`Provenance.correctness`): `programOk`,
+and every variable of a rule query or of the check is an argument of an application
+pattern, so that no query can bind a variable to a log row. The congruence compiler's
+output satisfies this (`Provenance.encode_instrumentable`). -/
+structure Instrumentable (P : Program) : Prop where
+  ok : programOk P = true
+  keyedRules : ∀ r ∈ P.rules, Query.VarsKeyed r.query
+  keyedCheck : Query.VarsKeyed P.check
+
 /-- The row recording a firing of rule `k`. -/
 def fireAction (k : Nat) (r : Rule) : Action :=
   .expr (.app (fireName k) (r.query.vars.map Expr.var))
