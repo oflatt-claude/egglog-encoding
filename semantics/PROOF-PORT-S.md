@@ -171,4 +171,19 @@ types.
 
 - `#print axioms Egglog.Congruence.correctness`:
   `'Egglog.Congruence.correctness' depends on axioms: [propext, Classical.choice, Quot.sound]`
-- Gate results: to be filled in.
+- `make -C semantics lean-check` (with `LAKE="lake --no-cache"`): exit 0. This is the
+  build, the proof-hole audit (`lean-holes`), the congruence, provenance, resugar and egg
+  gates, and the certificate check: the exported fixtures equal
+  `egglog/tests/lean-certificates.json`, and `cargo test -p egglog --test lean_certificates`
+  passed.
+- `make -C semantics lean-difftest`: exit 0 (104 passed, 0 failed, 0 skipped).
+- `make -C semantics lean-compiled-difftest`: exit 0 (104 passed, 0 failed).
+- `make -C semantics paper-check` (with `LAKE="lake --no-cache"`): exit 0; the extracted
+  `thm:congruence` node is a theorem with a proof.
+- The dead-declaration analysis on the final tree reports 118 declarations of the two
+  namespaces outside the closure, all of them in the kept categories above (53 `rfl`
+  simp lemmas, 39 members of `mutual` blocks with a used partner, 13 declarations of the
+  two counterexample modules, 7 derived or `where`-nested declarations, 3 declarations
+  used by `example` or `#guard` in the tests, 2 `Coe` instances, and `encodeActions_nil`,
+  an `rfl`-lemma named in a `simp` list).
+- Python and Rust sources are untouched, so the root `make nits` was not run.
