@@ -375,11 +375,8 @@ mentions, so that a union-find edge finds every row it moves by lookup. -/
 @[blueprint "def:view-index"
   (statement := /--
   \[
-  \begin{aligned}
-  \textsc{Idx}_f&:\ \mathtt{View}_f(c_1,\ldots,c_{n+1})\\
-    &\qquad\Rightarrow\mathtt{HasChild}(\mathtt{View}_f(c_1,\ldots,c_{n+1}),c_1),\ \ldots,\
-    \mathtt{HasChild}(\mathtt{View}_f(c_1,\ldots,c_{n+1}),c_{n+1})
-  \end{aligned}
+  \textsc{Idx}_f:\ \mathtt{View}_f(c_1,\ldots,c_{n+1})
+    \Rightarrow\mathtt{HasChild}(\mathtt{View}_f(c_1,\ldots,c_{n+1}),c_i)\ (\forall i)
   \]
   -/)
   (latexEnv := "paperfragment")]
