@@ -46,14 +46,10 @@ regeneration live under [`benchmarks/reproduction/`](benchmarks/reproduction/).
 The [source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also
 included in the Rust documentation for `egglog_experimental::slotted`.
 
-The [LMFAO case study](benchmarks/lmfao/README.md) uses bag-sum rewrites and joint
-DAG extraction to optimize the artifact's 140 covariance queries. It is included
-in `./bench.py figures`; `./bench.py figures lmfao` selects just its table.
-Prepare its pinned external backend and data first, following the case-study
-guide. It compares slotted and ordinary egglog with LMFAO's configured roots and
-the paper's root heuristic, retaining the upstream frontend and C++ backend.
-Egraph measurements share collection and caching with the other paper inputs;
-query execution is reported separately from optimization and compilation.
+The [LMFAO case study](benchmarks/lmfao/README.md) optimizes 140 related aggregate
+queries together and executes the selected plan through LMFAO's C++ backend.
+Follow its setup guide, then run `./bench.py figures lmfao` for the comparison
+with LMFAO and ordinary egglog. The full `./bench.py figures` run includes it.
 
 The reusable Rust checker accepts `egraph-serialize` JSON from either engine,
 with optional annotations for slotted graphs:
@@ -351,10 +347,10 @@ The [paper figures](figures/README.md) use the checked-in
 `benchmarks/corpus/manifest.json` rather than the default workload list.
 Run `./bench.py figures` from this checkout to build the required release engines,
 reuse compatible observations, collect missing runs, and render all seven paper
-figures and the LMFAO table into the ignored `figures/output/eval/` folder. Each figure has seven
+figures and the LMFAO table into the ignored `figures/output/eval/` folder.
+Each figure has seven
 companions: PDF, SVG, PNG, bound specification, results JSON, numeric TeX macros,
-and a TeX table. LMFAO exports a table, caption, Markdown and results JSON, with
-generated programs and validation records in the `lmfao/` subdirectory.
+and a TeX table. See the [output guide](figures/README.md) for the LMFAO files.
 Setup requires the Python environment above, the
 pinned Rust toolchain, and Node.js/npm (`npx`); renderer packages are pinned in
 the command. The [LMFAO setup](benchmarks/lmfao/README.md#reproduce) prepares its

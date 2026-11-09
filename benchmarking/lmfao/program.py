@@ -1,4 +1,4 @@
-"""Lower LMFAO frontend queries to scoped bag sums and extract executable views."""
+"""Translate LMFAO queries into egglog inputs and generate selected-plan equality checks."""
 
 from __future__ import annotations
 

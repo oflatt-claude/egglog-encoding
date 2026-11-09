@@ -1,56 +1,44 @@
 # LMFAO covariance case study
 
-This uses an egraph to optimize all of LMFAO's aggregate queries together. A DAG
-extractor chooses which views to compute and share between queries. The workload
-is the artifact's 140 covariance queries over six
-Favorita relations: counts, sums, squares and pairwise products, with categorical
-features as grouping keys. We run the public fragment with 2,000,000 Sales rows.
-This reproduces the workload and compiler pipeline, not the paper's full
-dataset (127M joined tuples) or model training. It corresponds to **Favorita / Covar Matrix /
-LMFAO** in Table 3, not the separate Count experiment. We chose it because the
-public artifact supplies its data and compiler pipeline, and the related queries
-exercise aggregate sharing. We have not compared all of the paper's workloads.
+This case study optimizes LMFAO's 140 Favorita covariance queries together in an
+egraph and executes the selected plan through LMFAO's C++ backend. The queries
+compute counts, sums, squares and pairwise products, grouped by categorical
+features. A **view** is an intermediate aggregate result that several queries
+can reuse. A query's **root** is the table where its final grouping happens.
+The extractor chooses roots and shared views together.
+
+We use the public sample: six tables and 2,000,000 Sales rows. This corresponds
+to **Favorita / Covar Matrix / LMFAO** in the [paper's Table 3](https://dept.stat.lsa.umich.edu/~xuanlong/Papers/soann-sigmod19.pdf#page=12).
+It reproduces the released workload and compiler pipeline on that sample, not
+the full dataset (127M joined tuples), model training or other workloads. We
+chose it because the artifact provides runnable data and many related queries
+that can share work; we have not compared all of the paper's workloads.
 
 ```text
 LMFAO query generation
-  → original logical optimizer OR egraph + DAG extraction
-  → LMFAO views → upstream grouping/code generation → C++ execution
+  → original optimizer OR egraph rewriting + plan extraction
+  → LMFAO C++ generation → compilation → answer checking → timed execution
 ```
 
 ## Rules and extraction
 
 [`logical.egg`](logical.egg) is the single handwritten rule source.
-[`program.py`](../../benchmarking/lmfao/program.py) reads LMFAO's frontend export
-and translates each query into nested bag sums for the six roots of its supplied
-join tree. It supplies schema metadata and unoptimized traversals, never selected
-views. Arbitrary join trees are outside the search space.
+[`program.py`](../../benchmarking/lmfao/program.py) translates each query into
+nested sums over joined rows, preserving duplicates. It supplies unoptimized
+alternatives for all six roots of LMFAO's join tree. The search changes the root
+and evaluation order within that tree; it does not consider arbitrary join trees.
 
-The normal harness reads the checked-in [`inputs/slotted.egg`](inputs/slotted.egg)
-and [`inputs/debruijn.egg`](inputs/debruijn.egg). Regenerate them explicitly from
-`workload.json` and `logical.egg` with:
+Rules perform three kinds of work:
 
-```sh
-uv run --locked python -m benchmarking.lmfao.program
-uv run --locked python -m benchmarking.lmfao.program --check
-```
+- **Hoisting and loop interchange:** move independent factors out of sums and
+  exchange independent loops. These transformations allow a child table to be
+  aggregated before it is joined.
+- **Fusion:** combine aggregates over the same rows. Multipatterns find the
+  compatible reductions across queries and intermediate results.
+- **Lowering:** turn the resulting expressions into views LMFAO can execute.
+  Rules derive the grouping keys, scalar functions and dependencies too.
 
-The live LMFAO bridge checks that its exported workload matches that snapshot
-before using the same static input. Normal collection does not regenerate inputs.
-An explicit nondefault `--rewrite-rounds` still generates an experimental input.
-
-The rules optimize those sums and lower them to executable views:
-
-- **Hoisting** moves a factor out of a sum when it does not depend on the bound
-  row. **Loop interchange** exchanges independent sums. This lets a query
-  aggregate a child table before joining it, while preserving duplicate rows.
-- **Tuple fusion** combines sums over the same rows. Multipatterns find
-  compatible reductions across queries and intermediate results; fused bodies
-  derive columns of a common `SharedView`.
-- **Lowering** translates local scalar functions, grouping keys and already
-  derived child views into views that LMFAO can execute. Schema masks and function
-  vectors are evaluated by rules too.
-
-For example, the fusion rule matches both reductions in a tuple:
+For example, this rule combines two reductions into one computing both results:
 
 ```lisp
 (rewrite pair (Reduce rows $row (Tuple a b)) :name "scoped-fuse"
@@ -58,26 +46,28 @@ For example, the fusion rule matches both reductions in a tuple:
          (= left (Reduce rows $row a)) (= right (Reduce rows $row b))))
 ```
 
-Slotted egglog handles binding and alpha-equivalence. The ordinary egglog control
-uses de Bruijn indices, explicit shift/swap rules and free-variable analyses,
-with the same query alternatives, transformations and rewrite budget.
+Slotted egglog handles binding and identifies expressions that differ only in
+bound-variable names. The ordinary egglog comparison uses de Bruijn indices
+with explicit rules for shifting indices and exchanging bound variables.
+Both receive the same query alternatives, transformations and rewrite budget.
 
-The Rust [`lmfao-extract`](src/lib.rs) crate reads executable alternatives directly
-from the live egraph. Its HiGHS-backed [DAG extractor](src/dag.rs) selects roots,
-columns and shared producers jointly across all 140 outputs. A producer costs
-`1 + incoming regions + grouping columns`; a column costs
-`2 + local scalar functions`. Each selected producer and column is charged once.
-The solver reports its objective, bound and optimality status. Optimality refers
-to this structural objective over available alternatives, not execution time.
+The Rust [`lmfao-extract`](src/lib.rs) crate selects a plan directly from the
+live egraph. Its [DAG extractor](src/dag.rs) uses HiGHS to solve a 0–1 integer
+program across all 140 outputs, charging shared work once. Computing a view
+costs `1 + input branches + grouping columns`; each aggregate column adds
+`2 + local scalar functions`. The functions are the unchanged per-row
+computations supplied by LMFAO. The solver reports the chosen cost, a lower
+bound and whether it proved optimality. That optimum concerns the cost model
+and available alternatives, not measured execution time.
 
-The serializer validates and writes the selected views and their dependencies.
-LMFAO's physical grouping, loops and data structures remain in its backend.
-Scalar functions are immutable frontend kernels identified by vector position.
+LMFAO handles physical grouping, loops, data structures and C++ generation after
+extraction. The selected equations are written to `plan.txt`, with the machine
+representation in `plan.json`.
 
 ## Reproduce
 
-Prepare sources explicitly. CMake, a C++ compiler, libclang and Boost are required;
-Cargo.lock pins the Rust solver and bundled HiGHS source.
+CMake, a C++ compiler, libclang and Boost are required. Cargo.lock pins the Rust
+solver and bundled HiGHS source. Prepare the external backend explicitly:
 
 ```sh
 git clone https://github.com/fdbresearch/LMFAO /tmp/LMFAO
@@ -87,143 +77,131 @@ uv run --locked python -m benchmarks.reproduction.lmfao.prepare \
 ./bench.py figures lmfao --rounds 3 --timeout-sec 300
 ```
 
-The default paper catalog includes this experiment, so `./bench.py figures`
-runs it along with the other paper figures. The command above selects only
-LMFAO. `--lmfao-data` and `--lmfao-backend` can select another prepared directory.
-Neither command downloads sources or prepares the external backend implicitly.
-
-The experiment compares shipped LMFAO roots, our implementation of the paper's
-section 3.3 root heuristic, slotted egglog, and ordinary egglog. Every generated
-program uses the same corrected backend and compiler flags. All 140 answers are
-checked against independent DECIMAL queries before timing: keys and counts must
-match exactly; floating moments use `rtol=1e-9`, `atol=1e-7`.
-
-Preparation uses a separate checkout of the exact commit, checks both patches
-before applying them, and records commit, adapter and executable hashes.
-Evaluation rejects mismatched provenance. An adapter change requires a new
-prepared directory; preparation preserves the source checkout.
+`./bench.py figures` includes LMFAO in the full paper evaluation; adding `lmfao`
+selects only this table. `--lmfao-data` and `--lmfao-backend` override the prepared
+paths. Neither command downloads sources or prepares the backend implicitly.
+Preparation uses a separate checkout, verifies the patches and records the
+source revision, patch/header hashes and binary hash. Evaluation rejects
+mismatches; after changing the adapter, prepare a new output directory.
 
 `--boost PREFIX` supports unpacked Boost. Generated programs also need its include
-path; `--lmfao-cxxflags` replaces all defaults, so retain the optimization flags:
+path. `--lmfao-cxxflags` replaces all default flags, so retain the optimization flags:
 
 ```sh
 --lmfao-cxxflags '-std=c++11 -O3 -pthread -mtune=native -ftree-vectorize -fopenmp -I/PREFIX/include'
 ```
 
-`--rounds` sets measured repetitions; the paper experiment uses a 192-round
-egraph budget, not a claim of saturation. Optimizers and generated programs use
-one thread. The focused `./bench.py lmfao --data PATH --backend PATH --output-dir PATH`
-command retains advanced options: `--rewrite-rounds` changes that budget,
-`--cpu N` pins the experiment, `--jobs` controls compilation, and `--cxxflags`
-sets generated-program flags.
-`--dag-timeout` bounds extraction; `--build-timeout` bounds backend builds and
-checks. The shared timeout and 16 GiB allocator/address-space cap apply to egraph
-runs, including extraction. `--memory-limit-gib` and `--no-memory-limit` override
-the cap; peak RSS is measured separately. Generated C++ execution has a timeout
-but no allocator cap.
+The harness reads checked-in [`inputs/slotted.egg`](inputs/slotted.egg) and
+[`inputs/debruijn.egg`](inputs/debruijn.egg). Regenerate them after changing
+`workload.json` or `logical.egg`; tests check that they match:
+
+```sh
+uv run --locked python -m benchmarking.lmfao.program
+uv run --locked python -m benchmarking.lmfao.program --check
+```
+
+Each live LMFAO invocation must export the same workload as `workload.json`
+before optimization uses the static input. Benchmark collection does not
+regenerate the inputs.
+
+`--rounds` controls measured repetitions. The search uses 192 rewrite rounds;
+this does not imply saturation. Optimizers and generated programs use one
+thread. The focused `./bench.py lmfao --data PATH --backend PATH --output-dir PATH`
+command provides additional controls: `--rewrite-rounds` generates an input
+with a different search budget, `--cpu N` sets CPU affinity, `--jobs` controls
+compilation, and `--cxxflags` supplies generated-program flags.
+`--dag-timeout` limits extraction; `--build-timeout` limits backend builds and
+checks. Egraph runs, including extraction, use the shared timeout and 16 GiB
+allocator/address-space cap. `--memory-limit-gib` and `--no-memory-limit`
+override the cap; peak RSS is measured separately. Generated C++ execution
+has a timeout but no allocator cap.
 
 ## Results and timing
 
-Egraph measurements join the paper invocation's collector, resource limits and
-append-only JSONL cache. `--report PATH` selects that cache (default `.reports.jsonl`;
-the focused `./bench.py lmfao` command defaults to `OUTPUT/optimizer.jsonl`).
-Successful observations are reused; a resource failure stops repetition at
-unchanged bounds and remains visible. Query executions are fresh, with rotating
-and reversing method order after correctness checking has warmed each program.
-The C++ preparation and execution records are case-specific outputs; they do not
-use the shared egraph cache or its interactive reports.
+The experiment compares LMFAO's shipped roots, our implementation of the paper's
+section 3.3 root heuristic, slotted egglog, and ordinary egglog. Every program
+uses the same corrected backend and compiler flags. Before timing, all 140
+outputs are checked against independent DECIMAL queries: keys and counts must
+match exactly; floating-point results use `rtol=1e-9`, `atol=1e-7`.
 
-- **Rewrite time/RSS:** separate processes measuring parsing and rewriting,
-  excluding DAG extraction.
-- **Plan + generate:** the full preparation run. For egraph plans this
-  includes LMFAO query export, input validation, rewriting, DAG extraction, and a
-  second LMFAO invocation that imports the plan and generates C++. Both frontend
-  invocations are charged. The controls use one normal LMFAO invocation. This
-  includes another rewrite run; do not add it to the separate rewrite measurement.
-- **C++ compilation:** one separate observation per distinct program.
-- **Query time / LMFAO:** mean warm computation time divided by the configured-roots
-  LMFAO mean; lower is better. Computation excludes loading/sorting and checking,
-  matching the paper's scope. Absolute times and whole-process execution remain
-  in the results JSON.
+Egraph measurements use the shared collector and JSONL cache. `--report PATH`
+selects the cache (default `.reports.jsonl`; the focused `./bench.py lmfao`
+command defaults to `OUTPUT/optimizer.jsonl`). Successful observations are
+reused. A resource failure stops repetition at unchanged limits and remains
+visible in the table. C++ preparation and execution run afresh and have separate
+records. Correctness checking warms each program; timed executions rotate and
+reverse method order.
 
-Repeated time/RSS measurements use 95% Student-t intervals. Execution ratios use
-independent Fieller intervals, as in the other paper reports. With one sample,
-only the point estimate is shown. Planning/generation and C++ compilation each
-have one observation and no confidence interval.
+| Column | What is measured |
+|---|---|
+| Rewrite time / peak RSS | Parsing and rewriting in separate processes; excludes DAG extraction. RSS is resident memory. |
+| Plan + generate | LMFAO query export, input validation, rewriting, extraction, and a second LMFAO invocation to import the plan and generate C++. Controls use one LMFAO invocation. |
+| C++ compilation | One build per distinct generated program. |
+| Query time / LMFAO | Mean warm computation time divided by the shipped-roots LMFAO mean; lower is better. Excludes loading, sorting and checking, as in the paper. |
 
-The separate egraph measurements are not added to the preparation time.
-Identical plans share compilation/execution observations, recorded as aliases.
-For repeated use, preparation plus N executions is an amortization estimate.
+**Plan + generate already includes a rewrite run; do not add the Rewrite column.**
+Repeated time/RSS measurements have 95% Student-t intervals. Query-time ratios
+use independent Fieller intervals, as in the other paper reports. A single
+sample has no interval. Planning/generation and compilation each have one
+observation. Identical plans share compilation/execution observations, with that
+reuse recorded in the report. Absolute query times and whole-process execution
+times remain in the results JSON.
 
-The paper command writes `lmfao.table.tex`, `lmfao.caption.tex`, `lmfao.md` and
-`lmfao.results.json` to the common paper output directory. Its `lmfao/` subdirectory
-contains `pipeline.json`, `comparison.md`, `execution.jsonl`, validation records
-and per-method `plan.json`/`plan.txt`/generated C++. Status and artifact paths go
-to stderr. The focused command prints Markdown to stdout (`--format json` selects
-JSON). Results are generated, not checked in.
-
-On the measured machine, a fresh three-repetition evaluation takes about 25
-minutes once tools are built, or about 12 minutes with compatible egraph
-measurements cached. Ten repetitions are estimated at about 40 minutes. Most
-time goes to rewriting and C++ compilation; query computation takes less than
-one second. Initial source/dependency setup is additional.
+The [paper output guide](../../figures/README.md) lists the generated table and
+caption files. Detailed `pipeline.json`, `comparison.md`, `execution.jsonl`,
+validation records and per-method plans/C++ live under the output's `lmfao/`
+directory. Status and artifact paths go to stderr; the focused command prints
+Markdown to stdout (`--format json` selects JSON). Results are generated, not
+checked in.
 
 ## Comparison with the paper
 
-The [paper](https://arxiv.org/abs/1906.08687) describes a batch coverage heuristic
-for choosing roots. The released covariance frontend instead uses configured
-roots. Our `paper` control implements that heuristic and runs the original
-logical optimizer afterward; it is not another released upstream mode.
+The paper describes a rule for choosing roots across the query batch. The
+released covariance code instead uses configured roots. Our `paper` control
+implements the described rule and then runs LMFAO's original optimizer; it is
+not a released upstream mode. Comparing with both separates an improvement over
+the shipped configuration from an improvement over the paper's algorithm.
 
-The public configuration yields 140 final aggregates, 46 intermediate aggregates
-and 125 views, matching the Favorita counts in Table 2. The paper's experiment
-scripts refer to an unavailable feature configuration, so matching counts do
-not establish identical roots or reproduce the published timings. Compare query
-execution with both root policies, and assess the egraph representations using
-the same input, rules, budget and resource cap. A failure of the ordinary encoding
-is evidence about this implementation; different encodings or rule schedules
+The public configuration gives 140 final aggregates, 46 intermediate aggregates
+and 125 views, matching Table 2. The paper's experiment scripts refer to an
+unavailable feature configuration, so these counts do not establish identical
+roots or reproduce published timings. The ordinary egglog comparison is also
+specific to the chosen encoding, rules and budget; another encoding or schedule
 can behave differently.
 
 ## Ownership and tests
 
-Upstream [LMFAO](https://github.com/fdbresearch/LMFAO) is pinned to
-`df6a5f59d597e9d7dd5984f268700223553789d0`. We reuse its query generation,
-schema parsing, view grouping, multi-output loops, data structures and C++
-generator. `features.conf`, `treedecomposition.conf` and `LICENSE` are unchanged
-upstream files. LMFAO reads the configuration in the data directory; our copies
-verify that it matches this experiment. `treedecomposition.conf` gives the table
-schemas and join edges, while `features.conf` selects the model's features.
+LMFAO is pinned to `df6a5f59d597e9d7dd5984f268700223553789d0`. We reuse its query
+generation, schema parsing, physical grouping and C++ backend.
+`features.conf`, `treedecomposition.conf` and `LICENSE` are unchanged upstream
+files. The two configuration files verify the dataset's selected features,
+table schemas and join tree. `workload.json` is the unoptimized frontend export;
+it also supplies tests that need neither an external LMFAO build nor its data.
 
-`workload.json` records LMFAO's unoptimized queries, function definitions and
-schema. It supplies routine tests without requiring an external LMFAO build or
-dataset. Each live frontend export must match it; selected plans are separate
-`plan.json` outputs.
+The [adapter](../reproduction/lmfao/) contains one header and two patches:
 
-The [adapter](../reproduction/lmfao/) contains one header and two patches.
-`OptimizerBridge.hpp` exports queries/plans, imports selected views and implements
-the paper-root control. `optimizer-bridge.patch` adds export-only and plan-import
-paths to `QueryCompiler::compile()`. Python runs the Rust optimizer between these
-two LMFAO invocations; C++ does not launch Python or parse optimizer settings.
-`dependent-output.patch` fixes accumulation across terminal output keys and is
-applied to every compared method. The rules, translator, Rust extractor and
-Python evaluation/checking code are new.
+- `OptimizerBridge.hpp` exports queries/plans, imports selected views and
+  implements the paper's root heuristic.
+- `optimizer-bridge.patch` adds export-only and plan-import paths. Python runs
+  the Rust optimizer between those two LMFAO invocations.
+- `dependent-output.patch` fixes accumulation of output values. Every compared
+  method receives the same fix.
 
-`make check` discovers the Python integration/semantic tests and Rust solver tests
-through the normal workspace configuration. Small exact bag-semantics tests run
-both representations with duplicates, fractional/negative weights and empty
-relations. Controls require hoisting for executable lowering and fusion for
-shared producers. Solver tests compare DAG choices with exhaustive enumeration;
-backend tests cover timeout cleanup, patch drift and provenance rejection.
+The rules, translator, Rust extractor and evaluation/checking code are new.
+Their tests are included in `make check`. Small examples cover duplicate rows,
+fractional/negative values and empty tables in both encodings. Tests also check
+that extraction needs hoisting, sharing needs fusion, small DAG choices match
+exhaustive search, and the adapter rejects mismatched files and cleans up after
+timeouts.
 
 ## Proof replay
 
-Slotted proof checking uses the shared `slotted-proof-testing` treatment, which
-passes `--slotted --proofs`. Unlike ordinary egglog's recording-only `--proofs`,
-that combination translates and checks ground source equality claims. An input
-without equality checks does not certify a plan.
+The `slotted-proof-testing` treatment passes `--slotted --proofs` to generate
+and check source proofs. Ordinary egglog's `proofs` treatment only records proof
+information. A slotted input without equality checks does not certify a plan.
 
-After extracting a plan, produce a self-contained replay with one ground equality
-for the entire output batch and run it through the normal harness:
+After extraction, generate a self-contained input that asks whether the original
+query batch equals the selected computations, then run it through the harness:
 
 ```sh
 uv run --locked python -m benchmarking.lmfao.program \
@@ -232,10 +210,9 @@ uv run --locked python -m benchmarking.lmfao.program \
   --treatment slotted-proof-testing --rounds 3 --report /tmp/lmfao-proof.jsonl
 ```
 
-The check equates the original batch with the selected aggregate computations.
-It is appended after rewriting and asserts no new equalities. One batch claim
-avoids copying the full proof context for each query. These proofs
-cover the logical query transformations; backend code generation and physical
-sharing are still checked by executing all outputs against independent answers.
-Proof replay reruns rewriting with proof instrumentation, extracts source proofs,
-and checks them. It is separate from DAG extraction and C++ compilation.
+The check is appended after rewriting and asserts no new equalities. One batch
+claim avoids copying the proof context for each query. The run repeats rewriting
+with proofs enabled, extracts source proofs, and checks them; it is separate
+from DAG extraction and C++ compilation. These proofs cover logical query
+transformations. Backend code generation and physical sharing are checked
+separately by executing every output against independent answers.

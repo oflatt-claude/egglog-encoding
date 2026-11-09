@@ -55,7 +55,7 @@ before copying it, and remove obsolete artifacts explicitly when needed.
 | `corpus-proof-recording-cdf` | Recording-only proof time and peak-RSS overhead across the same replays; strict correctness coverage retained |
 | `corpus-proofs-cdf` | Full proof recording, extraction and checking time and peak-RSS overhead across the same replays |
 | `slotted-runtime` | Full 44-rule SDQL kernels/phases; aligned runtime/RSS encoding-to-native ratio panels and a table of both metrics |
-| `lmfao` (table) | Original covariance queries: released/paper LMFAO roots, slotted and ordinary egglog; preparation, memory, execution and selected views |
+| `lmfao` (table) | Favorita covariance queries: LMFAO, slotted and ordinary egglog; preparation time, memory use and query-time ratios |
 | `slotted-multipattern-runtime` | Complete multipattern matching on the original SDQL kernels/phases, omitting pairs with a resource-failing endpoint |
 
 The two Slotted figures share the authored `eval/slotted-runtime.vl.json`
@@ -103,8 +103,9 @@ the case-study guide. `--lmfao-data` and `--lmfao-backend` override those paths;
 `--lmfao-cxxflags` supplies custom generated-program flags, such as a Boost include
 path. The selected repetition count, timeout, memory cap, report and output
 directory also apply to LMFAO. It currently requires the source target to be this
-checkout. Its ordinary-encoding resource failure is an explicit table row;
-successful slotted measurements and executable plans are required for publication.
+checkout. A memory limit or timeout for ordinary egglog appears in the table;
+publishing the table requires successful slotted measurements and checked results
+from the generated programs.
 
 No names selects every figure and table; names select a subset. An alternate catalog is
 selected with `--config`, not a positional path. Help lists that catalog without

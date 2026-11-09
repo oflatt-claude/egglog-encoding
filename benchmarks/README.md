@@ -84,12 +84,10 @@ The Python suite includes a real CLI integration test on small Math and
 disequality fixtures. It uses a temporary report and checks successful runtime/RSS
 observations through the same public runner.
 
-The [LMFAO case study](lmfao/README.md) is included in `./bench.py figures`;
-`./bench.py figures lmfao` selects only its table. It uses the shared collector,
-cache and resource guards, and compares slotted/ordinary egglog
-with two LMFAO root policies, then checks and times generated C++ programs.
-Python bag-semantics/integration tests and Rust DAG solver tests run in `make check`.
-Its external frontend/backend and data are prepared explicitly before the paper run.
+The [LMFAO case study](lmfao/README.md) compares slotted and ordinary egglog with
+LMFAO, then checks and times the generated C++ programs. Follow its setup guide
+before running `./bench.py figures` or the focused `./bench.py figures lmfao`.
+Its Python and Rust tests are included in `make check`.
 
 For a disposable three-round verification preview:
 

@@ -96,7 +96,7 @@ def collect_optimizers(
     *,
     rewrite_rounds: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Measure the executable scoped lowering with the shared collector."""
+    """Measure LMFAO rewriting through the shared benchmark collector."""
     request = parse_target(str(ROOT))
     files = optimizer_inputs(output, rewrite_rounds)
     requests = optimizer_requests(files, request, memory_limit_bytes)
