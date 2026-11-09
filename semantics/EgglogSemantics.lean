@@ -37,6 +37,7 @@ import EgglogSemantics.SourceProof.Simplify
 
 -- Provenance
 import EgglogSemantics.Provenance.Checker
+import EgglogSemantics.Provenance.Correctness
 import EgglogSemantics.Provenance.Encode
 import EgglogSemantics.Provenance.Log
 
@@ -97,9 +98,16 @@ import EgglogSemantics.Proofs.Operands
 import EgglogSemantics.Proofs.Order
 import EgglogSemantics.Proofs.OrderFinite
 import EgglogSemantics.Proofs.Presentation
+import EgglogSemantics.Proofs.Provenance.Compiled
 import EgglogSemantics.Proofs.Provenance.Counterexamples
+import EgglogSemantics.Proofs.Provenance.Diverge
 import EgglogSemantics.Proofs.Provenance.GeneratedClaim
 import EgglogSemantics.Proofs.Provenance.GeneratedSoundness
+import EgglogSemantics.Proofs.Provenance.Good
+import EgglogSemantics.Proofs.Provenance.Main
+import EgglogSemantics.Proofs.Provenance.Match
+import EgglogSemantics.Proofs.Provenance.Round
+import EgglogSemantics.Proofs.Provenance.Simulate
 import EgglogSemantics.Proofs.Provenance.Soundness
 import EgglogSemantics.Proofs.Query
 import EgglogSemantics.Proofs.Representatives

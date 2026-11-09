@@ -67,11 +67,19 @@ def dataRows (P : Program) (terms : List Term) : List Term :=
     | .app f _ => heads.contains f
     | .lit _ => false
 
+/-- A row of the firing log: an application of a name with the log prefix. -/
+def isLog : Term → Bool
+  | .app f _ => firePrefix.isPrefixOf f
+  | .lit _ => false
+
 /-- The held terms without the log. -/
-def eraseLog (terms : List Term) : List Term :=
-  terms.filter fun t => match t with
-    | .app f _ => (fireIndex f).isNone
-    | .lit _ => true
+def eraseLog (terms : List Term) : List Term := terms.filter fun t => !isLog t
+
+/-- The e-graph without the log: the equations whose row is not a log row, and the same
+subsumed rows. `Provenance.correctness` states that this is the e-graph the original
+program reaches. -/
+def _root_.Egglog.Database.eraseLog (d : Database) : Database :=
+  ⟨{q ∈ d.eqs | isLog q.1 = false}, d.subsumed⟩
 
 /-- Every row with its checked proof from the log, or `none` where no proof checks. -/
 def rowProofs (P : Program) (terms : List Term) : List (Term × Option Proof) :=

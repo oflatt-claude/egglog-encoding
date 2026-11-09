@@ -39,10 +39,19 @@ source programs in the fragment and their compilations have exactly the same out
 the same divergence, over mathematical databases. Its proof (`Congruence.correctness`,
 developed under `Proofs/Congruence/`) is a simulation between the source and the compiled
 schedules up to the meaning of the source state; the congruence gate also checks the
-statement executably on the corpus. The specification-level proofs, the interpreter refinement (subsume-free programs, and
-union-free programs with subsumption such as the compiler's output), and the certificate
-soundness proofs are ported to the declaration-free specification; `EgglogPaper.lean`
-lists the theorems the paper relies on. Brief certificate notes live with the
+statement executably on the corpus. Provenance pass correctness is stated in
+[Provenance/Correctness.lean](EgglogSemantics/Provenance/Correctness.lean): a union-free
+program whose names avoid the log prefix and whose query variables are all arguments of
+application patterns, which the compiler's output is (`Provenance.encode_instrumentable`),
+and its instrumentation have the same outcomes and the same divergence, and erasing the
+log from the instrumented final state gives the original's final state up to meaning. Its
+proof (`Provenance.correctness`, developed under `Proofs/Provenance/`) is a simulation in
+which the instrumented state is the original state plus log rows; the provenance gate
+checks the state clause executably on the corpus. The specification-level proofs, the
+interpreter refinement (subsume-free programs, and union-free programs with subsumption
+such as the compiler's output), and the certificate soundness proofs are ported to the
+declaration-free specification; `EgglogPaper.lean` lists the theorems the paper relies on.
+Brief certificate notes live with the
 [source checker](EgglogSemantics/SourceProof/Checker.lean) and
 [relational checker](EgglogSemantics/Provenance/Checker.lean).
 
@@ -57,7 +66,7 @@ lists the theorems the paper relies on. Brief certificate notes live with the
 | `EgglogSemantics/SourceProof/` | Source proof format and checker |
 | `EgglogSemantics/Provenance/` | Firing-log instrumentation, proof format, checker, and extraction |
 | `EgglogSemantics/Resugar/` | Proof lifting to source proofs, fixtures, and JSON export |
-| `EgglogSemantics/Proofs/` | Theorems about the specification, checker and lifting soundness, and the compiler proof under `Proofs/Congruence/` |
+| `EgglogSemantics/Proofs/` | Theorems about the specification, checker and lifting soundness, the compiler proof under `Proofs/Congruence/`, and the provenance pass proof under `Proofs/Provenance/` |
 | `EgglogSemantics/Tests/` | Executable regressions, `.egg` parsing and emission, and proof rendering |
 | `tests/` | Hand-written `.egg` programs with snapshots of their encodings and lifted proofs |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |

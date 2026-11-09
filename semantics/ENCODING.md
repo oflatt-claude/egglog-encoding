@@ -136,11 +136,21 @@ changes nothing leaves the state canonical.
 ### Provenance: a firing log
 
 The provenance pass (`Provenance/Encode.lean`) adds one action to every rule: a row
-`@prov:fire:<i>(x₁, …, xₙ)` that records a firing of rule `i`, the rule's position in
-`Program.rules`, under the values of its query variables. No rule reads these rows, so the instrumented program builds exactly the data of
-the original, round for round, subsumes the same rows, and settles when the original does.
-The difftest checks this literally: the instrumented final state minus the log is the
-original final state (`difftest provenance 64`).
+`@fire:<i>(x₁, …, xₙ)` that records a firing of rule `i`, the rule's position in
+`Program.rules`, under the values of its query variables. No rule reads these rows, so the
+instrumented program builds exactly the data of the original, round for round, and
+subsumes the same rows. A saturation of the instrumented program may run one or two more
+passes than the original's, because a new log row is a change of the state, but those
+passes write only log rows, which belong to a finite set, so they terminate. This is the
+theorem `Provenance.correctness` (`Provenance/Correctness.lean`, proved under
+`Proofs/Provenance/`): for a union-free program whose names avoid the log prefix and
+whose every query variable is an argument of an application pattern (`Instrumentable`,
+which the congruence compiler's output satisfies, `Provenance.encode_instrumentable`),
+the instrumented program has the same outcomes and the same divergence, and erasing the
+log from its final state (`Database.eraseLog`) gives the original's final state up to
+meaning. The keyed-variable premise is what keeps a query from binding a variable to a
+log row. The difftest checks the state clause literally: the instrumented final state
+minus the log is the original final state (`difftest provenance 64`).
 
 Proofs are read off the log afterwards (`Provenance/Log.lean`), in the one proof language
 of `SourceProof/Format.lean`: a certificate for the compiled program is a rule node
@@ -193,7 +203,12 @@ identity out of the data entirely.
   (`Congruence.correctness`, developed under `Proofs/Congruence/`; `PROOF-PORT-S.md`
   records the plan) and is also checked executably by the congruence gate. The proofs of
   the previous, merge-function encoding were deleted on 2026-10-30 (`PROOF-PORT-*.md`
-  record the ports that preceded them).
+  record the ports that preceded them). Provenance pass correctness, stated in
+  `Provenance/Correctness.lean`, is proved for every union-free program with keyed
+  queries whose names avoid the log prefix, in particular for the compiler's output
+  (`Provenance.correctness`, `Provenance.correctness_compiled`, developed under
+  `Proofs/Provenance/`; `PROOF-PORT-T.md` records the plan), and is also checked
+  executably by the provenance gate.
 
 
 ## Current implementation
