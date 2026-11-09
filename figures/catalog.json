@@ -99,6 +99,18 @@
         "slotted-ref-multi",
         "slotted-ref-nested-snapshot"
       ]
+    },
+    "slotted-multipattern-runtime": {
+      "spec": "eval/slotted-runtime.vl.json",
+      "files": [
+        "../benchmarks/slotted/inputs/sdql/*.egg",
+        "!../benchmarks/slotted/inputs/sdql/batax_2nd-44rules.egg",
+        "!../benchmarks/slotted/inputs/sdql/mttkrp_2nd-44rules.egg"
+      ],
+      "treatments": [
+        "slotted-ref-multi",
+        "slotted"
+      ]
     }
   }
 }

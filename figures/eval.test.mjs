@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile, readdir} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import {existsSync, realpathSync} from 'node:fs';
 import {delimiter, join} from 'node:path';
@@ -132,7 +132,7 @@ test('all figure designs preserve missing conditions and render without warnings
       assert.equal(find(result,'absolute_status').length,6);
       assert.equal(find(result,'absolute_runs').length,0);
       assert.equal(find(result,'ratio_points').length,0);
-    } else if(name==='slotted-runtime') {
+    } else if(['slotted-runtime','slotted-multipattern-runtime'].includes(name)) {
       assert.equal(find(result,'slotted_ratio_status').length,2);
       assert.equal(find(result,'slotted_ratio_points').length,0);
     } else if(name.startsWith('corpus-')) {
@@ -205,24 +205,90 @@ test('Slotted aligns runtime/RSS ratio panels with uniform black estimates and c
   for(const label of ['MMM · 1st','MMM · 2nd'])assert.equal(labels.filter(v=>v===label).length,1,'shared workload labels');
 });
 
+test('complete SDQL ratios pair the native multipattern fork with Egglog',async()=>{
+  const name='slotted-multipattern-runtime';
+  const treatments=figures[name].treatments;
+  assert.deepEqual(treatments,['slotted-ref-multi','slotted']);
+  assert.equal(figures[name].spec,figures['slotted-runtime'].spec,'both figures must share their authored transforms');
+  const labels=['mmm_1st-44rules.egg','mmm_2nd-44rules.egg'];
+  const inputs=labels.flatMap(label=>treatments.map(t=>input(label+'-'+t,t,{logical_id:label,label})));
+  const groups=inputs.map((item,i)=>group(item.file_sha256,item.treatment,
+    [20,21,22].map(value=>value*(i%2?[3,4][Math.floor(i/2)]:1)),
+    {max_rss_bytes:(i%2?[5,6][Math.floor(i/2)]:1)*100*1048576}));
+  const result=await evaluate(name,inputs,groups,3);
+  const points=find(result,'slotted_ratio_points');
+  assert.equal(points.length,4);
+  assert.deepEqual(points.filter(p=>p.datum.metric==='Runtime').map(p=>p.datum.ratio),[3,4]);
+  assert.deepEqual(points.filter(p=>p.datum.metric==='Peak RSS').map(p=>p.datum.ratio),[5,6]);
+  assert.ok(points.every(p=>p.datum.baseline.input.treatment==='slotted-ref-multi'&&p.datum.candidate.input.treatment==='slotted'));
+  assert.equal(find(result,'slotted_ratio_intervals').length,4);
+  const axisLabelMarks=result.marks.filter(p=>p.mark.role==='axis-label');
+  const axisLabels=axisLabelMarks.map(p=>p.text);
+  assert.ok(!axisLabels.includes('0.25×'),'keep the sub-unit scale sparse');
+  const halfTicks=axisLabelMarks.filter(p=>p.text==='0.5×'&&p.opacity!==0);
+  assert.equal(halfTicks.length,2,'both panels need a visible 0.5× reference');
+  for(const half of halfTicks) {
+    const equal=axisLabelMarks.find(p=>p.mark===half.mark&&p.text==='1×');
+    assert.ok(equal&&equal.opacity!==0,'the 1× reference must remain visible');
+    assert.ok(half.bounds.x2+2<=equal.bounds.x1,'the 0.5× label must not crowd 1×');
+  }
+  assert.match(result.svg,/Pass \/ reference \(symlog\)/);
+  for(const label of ['MMM · 1st','MMM · 2nd'])
+    assert.equal(axisLabels.filter(value=>value===label).length,1,'kernel/phase labels must appear once beside aligned panels');
+});
+
+test('complete multipattern figure retains the selected original SDQL rows',async()=>{
+  const name='slotted-multipattern-runtime';
+  const directory='../benchmarks/slotted/inputs/sdql/';
+  assert.equal(figures[name].files[0],directory+'*.egg');
+  const excluded=new Set(figures[name].files.slice(1).map(pattern=>pattern.slice(1)));
+  const paths=(await readdir(new URL(directory,import.meta.url)))
+    .filter(file=>file.endsWith('.egg')&&!excluded.has(directory+file)).sort()
+    .map(file=>directory.slice(3)+file);
+  assert.equal(paths.length,8);
+  assert.ok(paths.every(path=>path.includes('/inputs/sdql/')&&!['batax_2nd-44rules.egg','mttkrp_2nd-44rules.egg'].includes(path.split('/').at(-1))));
+  const inputs=paths.flatMap(path=>figures[name].treatments.map(t=>input(path+'-'+t,t,{logical_id:path,label:path})));
+  const groups=inputs.map((item,i)=>group(item.file_sha256,item.treatment,
+    [20,21,22].map(value=>value*(i%2?3:1)),{max_rss_bytes:(i%2?5:1)*100*1048576}));
+  const result=await evaluate(name,inputs,groups,3);
+  const points=find(result,'slotted_ratio_points');
+  assert.equal(points.length,2*paths.length);
+  assert.equal(find(result,'slotted_ratio_status').length,0);
+  assert.ok(points.every(p=>p.datum.ratio===(p.datum.metric==='Runtime'?3:5)));
+  const labels=result.marks.filter(p=>p.mark.role==='axis-label').map(p=>p.text);
+  const expected=paths.map(path=>{
+    const stem=path.split('/').at(-1).replace(/\.egg$/,'');
+    const kernel=stem.replace(/_(1st|2nd)-44rules$/,'');
+    return ({batax:'BATAX',mmm:'MMM',mmm_sum:'ΣMMM',mttkrp:'MTTKRP',ttm:'TTM'}[kernel])+' · '+(stem.includes('_1st-')?'1st':'2nd');
+  });
+  assert.equal(new Set(expected).size,paths.length);
+  for(const label of expected) {
+    assert.equal(labels.filter(value=>value===label).length,1,'one full shared label for each workload');
+    assert.ok(result.svg.includes('>'+label+'<'),'labels must render completely without truncation');
+  }
+  assert.deepEqual(new Set(points.map(p=>p.datum.candidate.input.label)),new Set(inputs.map(item=>item.label)));
+});
+
 test('Slotted retains failed, missing-metric, excluded and unbounded outcomes separately',async()=>{
-  const treatments=figures['slotted-runtime'].treatments;
-  const inputs=treatments.map(t=>input(t,t,{logical_id:'a',label:'batax_1st-44rules.egg'}));
-  const groups=inputs.map((item,i)=>group(item.file_sha256,item.treatment,i?[4,6]:[1,2]));
-  groups[0].samples[0].max_rss_bytes=null;
-  const result=await evaluate('slotted-runtime',inputs,groups);
-  assert.deepEqual(find(result,'slotted_ratio_points').map(p=>p.datum.metric),['Runtime']);
-  assert.ok(find(result,'slotted_ratio_status').some(p=>p.datum.metric==='Peak RSS'&&/metric missing/.test(p.text)));
-  groups[1].samples[0].status='memory-limited';
-  const failed=await evaluate('slotted-runtime',inputs,groups);
-  assert.equal(find(failed,'slotted_ratio_points').length,0);
-  assert.match(failed.svg,/memory limit/);
-  const excluded=await evaluate('slotted-runtime',inputs.map(i=>({...i,exclusion:{kind:'unsupported',reason:'recorded limitation'},selected_row_indices:[]})),groups);
-  assert.match(excluded.svg,/excluded \(unsupported\)/);
-  const one=await evaluate('slotted-runtime',inputs,inputs.map((item,i)=>group(item.file_sha256,item.treatment,[i?2:1])),1);
-  assert.equal(find(one,'slotted_ratio_points').length,2);
-  assert.equal(find(one,'slotted_ratio_intervals').length,0);
-  assert.match(one.svg,/n=1; CI unavailable/);
+  for(const name of ['slotted-runtime','slotted-multipattern-runtime']) {
+    const treatments=figures[name].treatments;
+    const inputs=treatments.map(t=>input(t,t,{logical_id:'a',label:'batax_1st-44rules.egg'}));
+    const groups=inputs.map((item,i)=>group(item.file_sha256,item.treatment,i?[4,6]:[1,2]));
+    groups[0].samples[0].max_rss_bytes=null;
+    const result=await evaluate(name,inputs,groups);
+    assert.deepEqual(find(result,'slotted_ratio_points').map(p=>p.datum.metric),['Runtime']);
+    assert.ok(find(result,'slotted_ratio_status').some(p=>p.datum.metric==='Peak RSS'&&/metric missing/.test(p.text)));
+    groups[1].samples[0].status='memory-limited';
+    const failed=await evaluate(name,inputs,groups);
+    assert.equal(find(failed,'slotted_ratio_points').length,0);
+    assert.match(failed.svg,/memory limit/);
+    const excluded=await evaluate(name,inputs.map(i=>({...i,exclusion:{kind:'unsupported',reason:'recorded limitation'},selected_row_indices:[]})),groups);
+    assert.match(excluded.svg,/excluded \(unsupported\)/);
+    const one=await evaluate(name,inputs,inputs.map((item,i)=>group(item.file_sha256,item.treatment,[i?2:1])),1);
+    assert.equal(find(one,'slotted_ratio_points').length,2);
+    assert.equal(find(one,'slotted_ratio_intervals').length,0);
+    assert.match(one.svg,/n=1; CI unavailable/);
+  }
 });
 
 test('CDF recording aliases retain strict vetoes and baseline-wall cohort with missing RSS',async()=>{
@@ -276,6 +342,9 @@ test('CDF overviews retain metric columns when just one has a tail',async()=>{
       group(id,'proofs',[runtimeTail&&i===3?1000:2,runtimeTail&&i===3?1000:2],
         {max_rss_bytes:(memoryTail&&i===3?1000:2)*1048576})]);
     const result=await evaluate('corpus-proof-recording-cdf',inputs,groups);
+    const titles=result.marks.filter(p=>p.mark.role==='axis-title').map(p=>p.text);
+    assert.deepEqual(titles.filter(title=>title.endsWith(' · full range')),
+      [runtimeTail?'Runtime · full range':null,memoryTail?'Peak RSS · full range':null].filter(Boolean));
     const percentLabels=result.marks.filter(p=>p.mark.role==='axis-label'&&p.opacity!==0&&['0%','50%','100%'].includes(p.text));
     assert.equal(percentLabels.length,3+3*(Number(runtimeTail)+Number(memoryTail)),
       'only metrics with tails should show overview axes');
@@ -302,16 +371,23 @@ test('CDF quarantines preserve coverage without measured points or altered denom
 });
 
 test('executed Vega Slotted statistics match the shared export fixture',async()=>{
-  const fixture=JSON.parse(await readFile(new URL('../benchmarking/tests/figure_statistics.json',import.meta.url),'utf8'));
-  const result=await evaluate('slotted-runtime',fixture.inputs,fixture.groups,fixture.rounds);
-  const points=find(result,'slotted_ratio_points');
-  for(const {datum:row} of points) {
-    const expected=fixture.expected[row.metric];
-    for(const field of ['ratio','ratio_low','ratio_high'])assert.ok(Math.abs(row[field]-expected[field])<1e-9,`${row.metric} ${field}`);
-    assert.equal(row.baseline.mean,expected.baseline_mean);
-    assert.equal(row.candidate.mean,expected.candidate_mean);
-    assert.ok(Math.abs(row.candidate.ci_low-expected.candidate_ci_low)<1e-9);
-    assert.ok(Math.abs(row.candidate.ci_high-expected.candidate_ci_high)<1e-9);
+  for(const name of ['slotted-runtime','slotted-multipattern-runtime']) {
+    const fixture=JSON.parse(await readFile(new URL('../benchmarking/tests/figure_statistics.json',import.meta.url),'utf8'));
+    for(const [i,treatment] of figures[name].treatments.entries()) {
+      fixture.inputs[i].treatment=fixture.groups[i].key.treatment=treatment;
+      for(const row of fixture.groups[i].samples)row.treatment=treatment;
+    }
+    const result=await evaluate(name,fixture.inputs,fixture.groups,fixture.rounds);
+    const points=find(result,'slotted_ratio_points');
+    assert.equal(points.length,2);
+    for(const {datum:row} of points) {
+      const expected=fixture.expected[row.metric];
+      for(const field of ['ratio','ratio_low','ratio_high'])assert.ok(Math.abs(row[field]-expected[field])<1e-9,`${row.metric} ${field}`);
+      assert.equal(row.baseline.mean,expected.baseline_mean);
+      assert.equal(row.candidate.mean,expected.candidate_mean);
+      assert.ok(Math.abs(row.candidate.ci_low-expected.candidate_ci_low)<1e-9);
+      assert.ok(Math.abs(row.candidate.ci_high-expected.candidate_ci_high)<1e-9);
+    }
   }
 });
 
@@ -491,7 +567,8 @@ test('Math absolute panels show only native outliers beyond the standard boxes',
 test('capped asymmetric Fieller whiskers retain negative endpoints and align with uniform estimates',async()=>{
   for(const [name,treatments,prefix] of [
     ['math-runtime',['egg','egg-proof-testing','off','proof-testing'],'ratio'],
-    ['slotted-runtime',['slotted-ref-nested','slotted-no-aliasing'],'slotted_ratio']
+    ['slotted-runtime',['slotted-ref-nested','slotted-no-aliasing'],'slotted_ratio'],
+    ['slotted-multipattern-runtime',['slotted-ref-multi','slotted'],'slotted_ratio']
   ]) {
     const inputs=treatments.map(t=>input(t,t,{logical_id:'a',label:'case.egg'}));
     const groups=inputs.map((item,i)=>group(item.file_sha256,item.treatment,i%2?[0,10,20]:[10,11,12]));

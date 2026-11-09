@@ -349,7 +349,7 @@ orchestration remains outside the ordinary runner.
 The [paper figures](figures/README.md) use the checked-in
 `benchmarks/corpus/manifest.json` rather than the default workload list.
 Run `./bench.py figures` from this checkout to build the required release engines,
-reuse compatible observations, collect missing runs, and render all six paper
+reuse compatible observations, collect missing runs, and render all seven paper
 figures and the LMFAO table into the ignored `figures/output/eval/` folder. Each figure has seven
 companions: PDF, SVG, PNG, bound specification, results JSON, numeric TeX macros,
 and a TeX table. LMFAO exports a table, caption, Markdown and results JSON, with

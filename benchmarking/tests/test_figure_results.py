@@ -21,14 +21,23 @@ from .report_fixtures import make_record, make_target, write_report
 from .test_figures import catalog_fixture
 
 
-def test_export_statistics_match_shared_executed_vega_fixture() -> None:
+@pytest.mark.parametrize("name", ["slotted-runtime", "slotted-multipattern-runtime"])
+def test_export_statistics_match_shared_executed_vega_fixture(name: str) -> None:
     fixture = json.loads(Path(__file__).with_name("figure_statistics.json").read_text())
+    treatments = next(
+        figure.treatments for figure in figures.load_config(figures.DEFAULT_CONFIG).figures if figure.name == name
+    )
+    for item, group, treatment in zip(fixture["inputs"], fixture["groups"], treatments, strict=True):
+        item["treatment"] = group["key"]["treatment"] = treatment
+        for row in group["samples"]:
+            row["treatment"] = treatment
     grouped = GroupedReport(
         {"groups": fixture["groups"], "exclusions": {}, "grouped_schema_version": 6, "report_schema_version": 8},
         "fixture",
     )
-    result = figure_results("slotted-runtime", fixture["inputs"], grouped, 3, 4.302652729749462)
+    result = figure_results(name, fixture["inputs"], grouped, 3, 4.302652729749462)
     (comparison,) = result["comparisons"]
+    assert (comparison["baseline"], comparison["candidate"]) == treatments
     for metric, label in (("runtime", "Runtime"), ("memory", "Peak RSS")):
         expected = fixture["expected"][label]
         values = comparison["metrics"][metric]
@@ -42,14 +51,25 @@ def test_export_statistics_match_shared_executed_vega_fixture() -> None:
     assert result["conditions"][1]["selected_row_indices"] == [10, 12, 14]
     macros, table = latex_results(result)
     assert macros.startswith("%% GENERATED FILE") and table.startswith("%% GENERATED FILE")
-    assert "slotted-runtime/batax-1st-44rules/slotted-no-aliasing-over-slotted-ref-nested/runtime/ratio" in macros
+    assert name + r"/rounds\endcsname{3}" in macros
+    assert name + r"/workload-count\endcsname{1}" in macros
+    workload = "batax-1st-44rules"
+    assert f"{name}/{workload}/{treatments[1]}-over-{treatments[0]}/runtime/ratio" in macros
     assert "Kernel/phase" in table and "BATAX / 1st & 3 [" in table
     assert " & 5 [" in table and "Peak RSS" in table
-    assert "slotted-no-aliasing / slotted-ref-nested" not in table
+    assert f"{treatments[1]} / {treatments[0]}" not in table
 
 
-def test_exports_preserve_invalid_missing_and_unbounded_results_and_escape_tex() -> None:
+@pytest.mark.parametrize("name", ["slotted-runtime", "slotted-multipattern-runtime"])
+def test_exports_preserve_invalid_missing_and_unbounded_results_and_escape_tex(name: str) -> None:
     fixture = json.loads(Path(__file__).with_name("figure_statistics.json").read_text())
+    if name != "slotted-runtime":
+        for item, group, treatment in zip(
+            fixture["inputs"], fixture["groups"], ("slotted-ref-multi", "slotted"), strict=True
+        ):
+            item["treatment"] = group["key"]["treatment"] = treatment
+            for row in group["samples"]:
+                row["treatment"] = treatment
     for item in fixture["inputs"]:
         item["label"] = r"case_100% & cost$#{}~^\end"
     fixture["groups"][0]["samples"][0]["max_rss_bytes"] = float("nan")
@@ -57,7 +77,7 @@ def test_exports_preserve_invalid_missing_and_unbounded_results_and_escape_tex()
         {"groups": fixture["groups"], "exclusions": {}, "grouped_schema_version": 6, "report_schema_version": 8},
         "fixture",
     )
-    result = figure_results("slotted-runtime", fixture["inputs"], grouped, 3, 4.302652729749462)
+    result = figure_results(name, fixture["inputs"], grouped, 3, 4.302652729749462)
     memory = result["comparisons"][0]["metrics"]["memory"]
     assert memory["ratio"] is None and memory["ci_low"] is None
     assert memory["issue"] == "measurement unavailable"
@@ -68,7 +88,7 @@ def test_exports_preserve_invalid_missing_and_unbounded_results_and_escape_tex()
     assert r"case\_100\% \& cost\$\#\{\}\textasciitilde{}\textasciicircum{}\textbackslash{}end" in table
     for item in fixture["inputs"]:
         item["selected_row_indices"] = item["selected_row_indices"][:1]
-    one = figure_results("slotted-runtime", fixture["inputs"], grouped, 1, None)
+    one = figure_results(name, fixture["inputs"], grouped, 1, None)
     runtime = one["comparisons"][0]["metrics"]["runtime"]
     assert runtime["ratio"] == 3 and runtime["ci_low"] is None
     assert "n < 2" in runtime["issue"]
@@ -77,10 +97,9 @@ def test_exports_preserve_invalid_missing_and_unbounded_results_and_escape_tex()
     fixture["groups"][0]["samples"][2]["wall_sec"] = 100
     for item in fixture["inputs"]:
         item["selected_row_indices"] = [
-            row["row_index"]
-            for row in fixture["groups"][0 if item["treatment"] == "slotted-ref-nested" else 1]["samples"][:3]
+            row["row_index"] for row in fixture["groups"][0 if "ref-" in item["treatment"] else 1]["samples"][:3]
         ]
-    unbounded = figure_results("slotted-runtime", fixture["inputs"], grouped, 3, 4.302652729749462)
+    unbounded = figure_results(name, fixture["inputs"], grouped, 3, 4.302652729749462)
     runtime = unbounded["comparisons"][0]["metrics"]["runtime"]
     assert runtime["ratio"] is not None and runtime["ci_low"] is None
     assert runtime["issue"] == "Fieller interval undefined"

@@ -1,5 +1,42 @@
 //! Reject conditions without an oracle before registering or executing a trial.
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
+
+/// Apply ordered inclusion and `!` exclusion globs before registering trials.
+pub fn figure_files<'a>(
+    directory: &Path,
+    patterns: impl IntoIterator<Item = &'a str>,
+) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for pattern in patterns {
+        let (exclude, glob_pattern) = pattern
+            .strip_prefix('!')
+            .map_or((false, pattern), |pattern| (true, pattern));
+        assert!(!glob_pattern.is_empty(), "empty catalog file pattern");
+        let mut matches: Vec<_> = glob::glob(directory.join(glob_pattern).to_str().unwrap())
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            !matches.is_empty(),
+            "catalog pattern matched nothing: {pattern}"
+        );
+        matches.sort();
+        for file in matches {
+            assert!(file.is_file(), "not a workload file: {}", file.display());
+            let file = file.canonicalize().unwrap();
+            if exclude {
+                files.retain(|selected| selected != &file);
+            } else if !files.contains(&file) {
+                files.push(file);
+            }
+        }
+    }
+    assert!(!files.is_empty(), "catalog patterns selected no files");
+    files
+}
 
 /// Timed recording/extraction modes inherit strict proof oracles and exclusions.
 /// Normalize before registration so generation-only names cannot bypass a
