@@ -129,7 +129,7 @@ test('all figure designs preserve missing conditions and render without warnings
   for(const name of Object.keys(figures)) {
     const result=await evaluate(name,figures[name].treatments.map(t=>input('case',t)),[]);
     if(name==='disequality-runtime') {
-      assert.equal(find(result,'absolute_status').length,6);
+      assert.equal(find(result,'absolute_status').length,4);
       assert.equal(find(result,'absolute_runs').length,0);
       assert.equal(find(result,'ratio_points').length,0);
     } else if(['slotted-runtime','slotted-multipattern-runtime'].includes(name)) {
@@ -142,24 +142,27 @@ test('all figure designs preserve missing conditions and render without warnings
   }
 });
 
-test('disequality standard boxes show only native 1.5-IQR outliers, retaining all three treatments',async()=>{
-  assert.deepEqual(figures['disequality-runtime'].treatments,['egg-de','egg-nee','off']);
+test('disequality standard boxes show only native 1.5-IQR outliers, retaining DE and extlog',async()=>{
+  assert.deepEqual(figures['disequality-runtime'].treatments,['egg-de','off']);
   assert.ok(['egg-ee','egg-oee'].every(t=>figures['disequality-runtime'].checks.includes(t)));
   const treatments=figures['disequality-runtime'].treatments;
   const groups=treatments.map((t,i)=>group('a',t,[1,1,1,1,1,1,1,1,1,100].map(v=>v*(i+1))));
   const result=await evaluate('disequality-runtime',treatments.map(t=>input('a',t)),groups,10);
   const outliers=result.marks.filter(p=>p.mark.name?.startsWith('absolute_boxplots')&&p.mark.marktype==='symbol');
   assert.equal(find(result,'absolute_runs').length,0,'there must be no all-run overlay');
-  assert.equal(outliers.length,6,'one generated outlier per treatment and metric');
+  assert.equal(outliers.length,4,'one generated outlier per treatment and metric');
   for(const metric of ['Runtime','Peak RSS']) {
-    assert.deepEqual(outliers.filter(p=>p.datum.metric===metric).map(p=>p.datum.value),[100,200,300]);
+    assert.deepEqual(outliers.filter(p=>p.datum.metric===metric).map(p=>p.datum.value),[100,200]);
     for(const p of outliers.filter(p=>p.datum.metric===metric)) {
       assert.ok(p.bounds.x1>=0&&p.bounds.x2<=p.mark.group.width,'outliers must fit the absolute domain');
       assert.ok(p.bounds.y1>=0&&p.bounds.y2<=p.mark.group.height,'outliers must fit their treatment row');
       assert.equal(p.fill,'#111111');
     }
   }
-  assert.equal(result.marks.filter(p=>p.mark.name?.startsWith('absolute_boxplots')&&p.fill==='#d9d9d9').length,6);
+  assert.equal(result.marks.filter(p=>p.mark.name?.startsWith('absolute_boxplots')&&p.fill==='#d9d9d9').length,4);
+  assert.doesNotMatch(result.svg,/NEE/);
+  assert.match(result.svg,/extlog/);
+  assert.match(result.svg,/DE · Disegg/);
   assert.equal(find(result,'ratio_points').length,0);
   assert.equal(find(result,'absolute_means').length,0);
 });

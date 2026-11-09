@@ -40,7 +40,7 @@ before copying it, and remove obsolete artifacts explicitly when needed.
 
 | Figure | Comparison |
 | --- | --- |
-| `disequality-runtime` | Runtime/RSS boxplots with outliers for native DE, native NEE and relation-based Egglog NEE; proofs off |
+| `disequality-runtime` | Runtime/RSS boxplots with outliers for the original DE implementation in Disegg and extlog; proofs off |
 | `math-runtime` | Twelve-round Math; Egg/Egglog off/checked proofs; time, peak RSS and within-engine overhead |
 | `corpus-congruence-cdf` | Congruence-only time and peak-RSS overhead across the application replays |
 | `corpus-proof-recording-cdf` | Recording-only proof time and peak-RSS overhead across the same replays; strict correctness coverage retained |
@@ -308,3 +308,43 @@ the ordinary pre-command graph; strict alternatives use checked source proofs.
 Variant order, costs and actual proof
 right-hand sides remain exact. See [the root workflow](../README.md) for the fixtures
 and filters. The Python suite also checks the public comparison CLI.
+
+### Slotted input list and program sizes
+
+Rendering `slotted-runtime` also writes `slotted-runtime.files.txt` (the ten
+selected `.egg` files and paired native `.ref` files), `slotted-runtime.ast.tex`
+(the four-column program-size table), and JSON, CSV, and Markdown companions.
+The JSON records both input hashes, the compiler executable hash, intermediate
+sizes, and any unsupported composition. `slotted-runtime.ast-programs.json`
+retains the source and generated programs, including the proof-compatible
+Slotted form. The complete-matching figure does not produce these companions.
+
+Sizes count one S-expression AST node per list, atom, or literal across the
+whole program; comments and whitespace do not count. The table compiles the
+**current adapted inputs** for the same ten named workloads. Their bytes differ
+from the historical e8a2a58d-era inputs used by the reused timing figure, so
+these sizes must not be presented as sizes of those timed input/compiler
+identities. The JSON records this distinction and the current source revision.
+The Slotted column uses the current ordinary restricted-aliasing encoding. The
+last column first applies the public source proof profile through
+`Compiler::compile_program` with `ProofMode::Prove`, then lowers accepted
+output through core congruence/proof instrumentation. PR #141 supports this
+pipeline for its documented source profile. The SDQL beta rewrite uses `subst`,
+which that profile explicitly excludes: the table reports **Unsupported** with
+the source diagnostic, rather than counting a partially lowered program.
+The JSON separately retains proof-compatible `Check` intermediate sizes and a
+congruence-only diagnostic; these do not replace the source proof stage.
+These are compiler-size observations, not proof-correctness results.
+
+To regenerate only the list/table without running benchmarks or rendering
+other figures:
+
+```sh
+uv run --locked python -m benchmarking.slotted_ast_cli
+```
+
+This compiles and runs the small `slotted_ast` Rust example. It parses and
+lowers programs without executing schedules, saturation, proof extraction, or
+verification, and does not touch the timing cache. Reuse an already built
+example with `--compiler /path/to/slotted_ast`; use `--output-dir` to choose a
+destination. The AST compiler hash is separate from the timing engine hashes.

@@ -496,6 +496,11 @@ def render_figures(
             outputs.extend(
                 destination / f"{figure.name}.{suffix}" for suffix in ("results.json", "numbers.tex", "table.tex")
             )
+            if figure.name == "slotted-runtime":
+                from .slotted_ast import export_slotted_ast
+
+                console.print("Compiling Slotted AST-size table (no benchmark execution)", markup=False)
+                outputs.extend(destination / path.name for path in export_slotted_ast(resolved.files, Path(temporary)))
             rendered.extend(outputs)
         for output in rendered:
             os.replace(Path(temporary) / output.name, output)
