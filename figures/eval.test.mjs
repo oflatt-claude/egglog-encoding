@@ -222,8 +222,16 @@ test('complete SDQL ratios pair the native multipattern fork with Egglog',async(
   assert.deepEqual(points.filter(p=>p.datum.metric==='Peak RSS').map(p=>p.datum.ratio),[5,6]);
   assert.ok(points.every(p=>p.datum.baseline.input.treatment==='slotted-ref-multi'&&p.datum.candidate.input.treatment==='slotted'));
   assert.equal(find(result,'slotted_ratio_intervals').length,4);
-  const axisLabels=result.marks.filter(p=>p.mark.role==='axis-label').map(p=>p.text);
-  assert.ok(!axisLabels.includes('0.25×')&&!axisLabels.includes('0.5×'),'low ticks must not crowd the 1× guide');
+  const axisLabelMarks=result.marks.filter(p=>p.mark.role==='axis-label');
+  const axisLabels=axisLabelMarks.map(p=>p.text);
+  assert.ok(!axisLabels.includes('0.25×'),'keep the sub-unit scale sparse');
+  const halfTicks=axisLabelMarks.filter(p=>p.text==='0.5×'&&p.opacity!==0);
+  assert.equal(halfTicks.length,2,'both panels need a visible 0.5× reference');
+  for(const half of halfTicks) {
+    const equal=axisLabelMarks.find(p=>p.mark===half.mark&&p.text==='1×');
+    assert.ok(equal&&equal.opacity!==0,'the 1× reference must remain visible');
+    assert.ok(half.bounds.x2+2<=equal.bounds.x1,'the 0.5× label must not crowd 1×');
+  }
   assert.match(result.svg,/Pass \/ reference \(symlog\)/);
   for(const label of ['MMM · 1st','MMM · 2nd'])
     assert.equal(axisLabels.filter(value=>value===label).length,1,'kernel/phase labels must appear once beside aligned panels');
