@@ -58,7 +58,9 @@ import EgglogSemantics.Proofs.Bindings
 import EgglogSemantics.Proofs.Closure
 import EgglogSemantics.Proofs.Completion
 import EgglogSemantics.Proofs.Congruence
+import EgglogSemantics.Proofs.Congruence.Invariant
 import EgglogSemantics.Proofs.Congruence.Properties
+import EgglogSemantics.Proofs.Congruence.Target
 import EgglogSemantics.Proofs.Database
 import EgglogSemantics.Proofs.Diagonal
 import EgglogSemantics.Proofs.DiagonalPreservation
