@@ -79,8 +79,9 @@ def comparison_markdown(report: dict[str, Any]) -> str:
         "",
         "The sample counts show completed egraph and execution runs; collection stops after a resource failure. "
         "Egraph time and peak RSS are medians of separate optimizer processes, including parsing and rewriting "
-        "but excluding extraction. Optimization + generation is one measured LMFAO compiler invocation, "
-        "including translation, rewriting, DAG extraction and code generation. C++ compilation is separate. "
+        "but excluding extraction. Optimization + generation is one measured preparation run, "
+        "including query export, translation, rewriting, DAG extraction and code generation. "
+        "C++ compilation is separate. "
         "Computation is the median of warm runs, excluding loading, sorting and checking, as in the paper's "
         "timing scope. Identical selected plans reuse compilation/execution observations, charged in full; "
         "pipeline.json records those aliases, samples, hashes and all output checks.",

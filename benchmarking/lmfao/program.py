@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import argparse
 import json
-from pathlib import Path
 from typing import Any
 
 from benchmarks.reproduction.slotted import reference
@@ -368,21 +366,3 @@ def program(
     forms += [["let", f"metadata{i}", fact] for i, fact in enumerate(facts)]
     forms += [["run", str(rounds)]]
     return "\n".join(reference.render(f) for f in forms) + "\n"
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=["slotted", "debruijn"], default="slotted")
-    parser.add_argument("--queries", type=int, default=140)
-    parser.add_argument("--root", action="append")
-    parser.add_argument("--rounds", type=int, default=DEFAULT_ROUNDS)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    args.output.write_text(
-        program(
-            args.mode,
-            queries=model.WORKLOAD.queries[: args.queries],
-            roots=args.root,
-            rounds=args.rounds,
-        )
-    )

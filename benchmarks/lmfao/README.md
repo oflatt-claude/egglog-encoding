@@ -1,7 +1,8 @@
 # LMFAO covariance case study
 
 This uses an egraph to optimize all of LMFAO's aggregate queries together. A DAG
-extractor chooses which views to compute and share between queries. The workload is the artifact's 140 covariance queries over six
+extractor chooses which views to compute and share between queries. The workload
+is the artifact's 140 covariance queries over six
 Favorita relations: counts, sums, squares and pairwise products, with categorical
 features as grouping keys. We run the public fragment with 2,000,000 Sales rows.
 This reproduces the workload and compiler pipeline, not the paper's full
@@ -53,9 +54,9 @@ columns and shared producers jointly across all 140 outputs. A producer costs
 The solver reports its objective, bound and optimality status. Optimality refers
 to this structural objective over available alternatives, not execution time.
 
-The serializer validates and writes the selected views and their dependencies. LMFAO's physical grouping, loops and data structures remain
-in its backend. Scalar functions are immutable frontend kernels identified by
-vector position.
+The serializer validates and writes the selected views and their dependencies.
+LMFAO's physical grouping, loops and data structures remain in its backend.
+Scalar functions are immutable frontend kernels identified by vector position.
 
 ## Reproduce
 
@@ -106,11 +107,15 @@ JSONL cache. `--report PATH` selects that cache (default `OUTPUT/optimizer.jsonl
 Successful observations are reused; a resource failure stops repetition at
 unchanged bounds and remains visible. Query executions are fresh, with rotating
 and reversing method order after correctness checking has warmed each program.
+The C++ preparation and execution records are case-specific outputs; they do not
+use the shared egraph cache or its interactive reports.
 
 - **Egraph time/RSS:** separate processes measuring parsing and rewriting,
   excluding DAG extraction.
-- **Optimization + generation:** one LMFAO compiler invocation, including frontend,
-  translation, rewriting, DAG extraction and C++ generation.
+- **Optimization + generation:** the full preparation run. For egraph plans this
+  includes LMFAO query export, translation, rewriting, DAG extraction, and a
+  second LMFAO invocation that imports the plan and generates C++. Both frontend
+  invocations are charged. The controls use one normal LMFAO invocation.
 - **C++ compilation:** one separate observation per distinct program.
 - **Computation:** median of warm executions, excluding loading/sorting and
   checking, matching the paper's computation scope. Whole-process execution is
@@ -149,13 +154,20 @@ Upstream [LMFAO](https://github.com/fdbresearch/LMFAO) is pinned to
 `df6a5f59d597e9d7dd5984f268700223553789d0`. We reuse its query generation,
 schema parsing, view grouping, multi-output loops, data structures and C++
 generator. `features.conf`, `treedecomposition.conf` and `LICENSE` are unchanged
-upstream files; `workload.json` is a frozen frontend export checked against each
-live invocation.
+upstream files. LMFAO reads the configuration in the data directory; our copies
+verify that it matches this experiment. `treedecomposition.conf` gives the table
+schemas and join edges, while `features.conf` selects the model's features.
 
-The [adapter](../reproduction/lmfao/) contains two new headers and two patches:
-`OptimizerBridge.hpp` exports queries/plans, invokes our optimizer and implements
-the paper-root control; `ImportPlan.hpp` validates/imports the selected views.
-`optimizer-bridge.patch` connects them to `QueryCompiler::compile()`.
+`workload.json` records LMFAO's unoptimized queries, function definitions and
+schema. It supplies routine tests without requiring an external LMFAO build or
+dataset. Each live frontend export must match it; selected plans are separate
+`plan.json` outputs.
+
+The [adapter](../reproduction/lmfao/) contains one header and two patches.
+`OptimizerBridge.hpp` exports queries/plans, imports selected views and implements
+the paper-root control. `optimizer-bridge.patch` adds export-only and plan-import
+paths to `QueryCompiler::compile()`. Python runs the Rust optimizer between these
+two LMFAO invocations; C++ does not launch Python or parse optimizer settings.
 `dependent-output.patch` fixes accumulation across terminal output keys and is
 applied to every compared method. The rules, translator, Rust extractor and
 Python evaluation/checking code are new.

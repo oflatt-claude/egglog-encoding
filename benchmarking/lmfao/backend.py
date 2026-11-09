@@ -7,12 +7,13 @@ import math
 import os
 import re
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Any
 
+from benchmarking.native_memory import native_memory_command
 from benchmarking.processes import terminate_process_group, wait4_process
+from benchmarking.targets import sha256_file
 
 from . import model
 from .data import Results
@@ -61,36 +62,34 @@ def generate(
     env = {k: v for k, v in os.environ.items() if not k.startswith("LMFAO_")}
     env["LMFAO_WORKLOAD_FILE"] = str(directory / "workload.json")
     env["LMFAO_PLAN_FILE"] = str(directory / "plan.json")
+    args = [
+        str(compiler),
+        "--path",
+        str(data),
+        "--model",
+        "covar",
+        "--parallel",
+        "none",
+        "--mo",
+        "1",
+        "--compress",
+        "1",
+        "--out",
+        str(directory),
+    ]
+    start = time.perf_counter()
     if root_policy is not None:
         if root_policy != "paper" or optimizer is not None:
             raise ValueError("paper roots require the original LMFAO compiler")
         env["LMFAO_ROOT_POLICY"] = root_policy
     if optimizer is not None:
-        config = directory / "optimizer.json"
-        config.write_text(json.dumps({"command": [sys.executable, "-m", "benchmarking.lmfao.optimize"], **optimizer}))
-        env["LMFAO_OPTIMIZER"] = str(config)
-        env["PYTHONPATH"] = str(model.FIXTURES.parents[1]) + os.pathsep + env.get("PYTHONPATH", "")
-    generated = command(
-        [
-            str(compiler),
-            "--path",
-            str(data),
-            "--model",
-            "covar",
-            "--parallel",
-            "none",
-            "--mo",
-            "1",
-            "--compress",
-            "1",
-            "--out",
-            str(directory),
-        ],
-        directory,
-        "generate.log",
-        env=env,
-        timeout=timeout,
-    )
+        command(args, directory, "export.log", env={**env, "LMFAO_EXPORT_ONLY": "1"}, timeout=timeout)
+        if not (directory / "workload.json").exists():
+            raise ValueError("backend did not export its workload; prepare the pinned adapter")
+        optimize(optimizer, directory / "workload.json", directory / "plan.json")
+        env["LMFAO_IMPORT_PLAN"] = str(directory / "plan.json")
+    command(args, directory, "generate.log", env=env, timeout=timeout)
+    generated = time.perf_counter() - start
     if optimizer is not None and "LMFAO imported selected DAG:" not in (directory / "generate.log").read_text():
         raise ValueError("backend did not acknowledge plan import; install the pinned optimizer bridge")
     if root_policy == "paper" and "LMFAO paper coverage roots:" not in (directory / "generate.log").read_text():
@@ -104,6 +103,37 @@ def generate(
         "compiler_counts": (directory / "compiler-data.out").read_text(),
         "logical_optimizer": f"LMFAO {root_policy or 'configured'} roots" if optimizer is None else "egraph subprocess",
     }
+
+
+def optimize(config: dict[str, Any], source: Path, destination: Path) -> None:
+    out = destination.parent
+    phases = {}
+    start = time.perf_counter()
+    definition = model.Workload.read(source)
+    if definition.document != model.WORKLOAD.document:
+        raise ValueError("LMFAO frontend differs from the frozen benchmark workload; regenerate explicitly")
+    from .program import program
+
+    mode, input_path = config["treatment"], out / "input.egg"
+    input_path.write_text(
+        program("slotted" if mode == "slotted" else "debruijn", definition=definition, rounds=config["rewrite_rounds"])
+    )
+    phases["translation"] = time.perf_counter() - start
+    args, env = native_memory_command(
+        [config["extractor"], mode, str(input_path), str(destination), str(config["dag_timeout"])],
+        os.environ,
+        config["memory_limit_bytes"],
+    )
+    command(args, out, "extract.log", env=env, timeout=config["timeout"])
+    info = json.loads((out / "extraction.json").read_text())
+    phases.update(info["phases_seconds"])
+    info.update(
+        phases_seconds=phases,
+        source_workload_sha256=sha256_file(source),
+        source_input_sha256=sha256_file(input_path),
+        extractor_sha256=sha256_file(Path(config["extractor"])),
+    )
+    (out / "extraction.json").write_text(json.dumps(info, indent=2) + "\n")
 
 
 def compile(directory: Path, *, flags: str = FLAGS, jobs: int = 4, timeout: int = 300) -> dict[str, Any]:

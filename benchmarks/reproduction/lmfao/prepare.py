@@ -12,7 +12,7 @@ from benchmarking.targets import sha256_file
 
 ADAPTER = Path(__file__).resolve().parent
 PATCHES = ("optimizer-bridge.patch", "dependent-output.patch")
-HEADERS = ("ImportPlan.hpp", "OptimizerBridge.hpp")
+HEADERS = ("OptimizerBridge.hpp",)
 
 
 def adapter_hashes() -> dict[str, str]:

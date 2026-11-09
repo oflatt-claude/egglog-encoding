@@ -132,16 +132,72 @@ def test_optimizer_report_keeps_failures_and_timing_scopes() -> None:
     assert result["failures"] == [failure] and result["issue"]
 
 
-def test_backend_requires_explicit_import_acknowledgement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("missing", ["export", "import"])
+def test_backend_rejects_missing_export_or_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
     from benchmarking.lmfao import backend
 
     def fake_command(args: list[str], directory: Path, log: str, **kwargs: Any) -> float:
-        (directory / log).write_text("ordinary compiler; ignored plan environment variable\n")
+        (directory / log).write_text("ordinary compiler; ignored adapter variables\n")
+        if missing != "export":
+            cli.write_json(directory / "workload.json", model.WORKLOAD.document)
         return 0.0
 
     monkeypatch.setattr(backend, "command", fake_command)
-    with pytest.raises(ValueError, match="did not acknowledge"):
+    monkeypatch.setattr(backend, "optimize", lambda config, source, destination: destination.write_text("{}"))
+    with pytest.raises(ValueError, match="did not export" if missing == "export" else "did not acknowledge"):
         backend.generate(tmp_path / "multifaq", tmp_path, tmp_path / "out", {})
+
+
+@pytest.mark.parametrize("mode", ["original", "paper", "egraph"])
+def test_generation_accounts_for_export_optimizer_and_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    from benchmarking.lmfao import backend
+
+    now = 0.0
+    calls = []
+    monkeypatch.setattr(backend, "time", SimpleNamespace(perf_counter=lambda: now))
+    monkeypatch.setenv("LMFAO_STALE_SETTING", "must be removed")
+
+    def command(args: list[str], directory: Path, log: str, *, env: dict[str, str], **kwargs: Any) -> float:
+        nonlocal now
+        assert "LMFAO_STALE_SETTING" not in env
+        calls.append(log)
+        cli.write_json(directory / "workload.json", model.WORKLOAD.document)
+        if log == "export.log":
+            assert env["LMFAO_EXPORT_ONLY"] == "1"
+            now += 2
+        else:
+            assert "LMFAO_EXPORT_ONLY" not in env
+            if mode == "egraph":
+                assert Path(env["LMFAO_IMPORT_PLAN"]).read_text() == "selected plan"
+            cli.write_json(directory / "plan.json", {})
+            (directory / "compiler-data.out").write_text("compiler counts")
+            (directory / log).write_text(
+                "LMFAO imported selected DAG: 1 views\nLMFAO paper coverage roots: 140 queries\n"
+            )
+            now += 3
+        return 0.0  # generate measures the full preparation span, not this return value.
+
+    def optimize(settings: dict[str, Any], source: Path, destination: Path) -> None:
+        nonlocal now
+        assert json.loads(source.read_text()) == model.WORKLOAD.document
+        destination.write_text("selected plan")
+        now += 5
+
+    monkeypatch.setattr(backend, "command", command)
+    monkeypatch.setattr(backend, "optimize", optimize)
+    result = backend.generate(
+        tmp_path / "multifaq",
+        tmp_path,
+        tmp_path / "out",
+        {} if mode == "egraph" else None,
+        root_policy="paper" if mode == "paper" else None,
+    )
+    assert result["generation_seconds"] == (10 if mode == "egraph" else 3)
+    assert calls == (["export.log", "generate.log"] if mode == "egraph" else ["generate.log"])
 
 
 def test_cpp_timing_retains_whole_process_and_upstream_scope(tmp_path: Path) -> None:
@@ -165,39 +221,30 @@ def test_backend_timeout_stops_optimizer_and_compiler_children(tmp_path: Path, n
         "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
         "Path('child.pid').write_text(str(child.pid)); print('started', flush=True); time.sleep(60)"
     )
-    args = [sys.executable, "-c", script]
-    env = {**os.environ, "PYTHONPATH": str(ROOT)}
-    if nested_optimizer:
-        extractor = tmp_path / "extractor"
-        extractor.write_text(
-            f"#!{sys.executable}\nimport os, time\nfrom pathlib import Path\n"
-            f"Path({str(tmp_path / 'child.pid')!r}).write_text(str(os.getpid()))\ntime.sleep(60)\n"
-        )
-        extractor.chmod(0o755)
-        config = tmp_path / "optimizer.json"
-        config.write_text(
-            json.dumps(
+
+    def invoke() -> None:
+        if nested_optimizer:
+            extractor = tmp_path / "extractor"
+            extractor.write_text(f"#!{sys.executable}\n" + script + "\n")
+            extractor.chmod(0o755)
+            backend.optimize(
                 dict(
                     rewrite_rounds=192,
                     treatment="slotted",
                     extractor=str(extractor),
-                    timeout=60,
+                    timeout=2,
                     dag_timeout=5,
                     memory_limit_bytes=None,
-                )
+                ),
+                model.FIXTURES / "workload.json",
+                tmp_path / "plan.json",
             )
-        )
-        args = [
-            sys.executable,
-            "-m",
-            "benchmarking.lmfao.optimize",
-            str(config),
-            str(model.FIXTURES / "workload.json"),
-            str(tmp_path / "plan.json"),
-        ]
+        else:
+            backend.command([sys.executable, "-c", script], tmp_path, "command.log", timeout=2)
+
     try:
         with pytest.raises(RuntimeError, match="failed; see") as error:
-            backend.command(args, tmp_path, "command.log", env=env, timeout=2)
+            invoke()
         assert isinstance(error.value.__cause__, subprocess.TimeoutExpired)
         if not nested_optimizer:
             assert (tmp_path / "command.log").read_text() == "started\n"
@@ -218,7 +265,7 @@ def test_backend_timeout_stops_optimizer_and_compiler_children(tmp_path: Path, n
                 os.kill(int((tmp_path / "child.pid").read_text()), signal.SIGKILL)
 
 
-def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
+def test_pipeline_charges_optimization_once_and_excludes_validation_and_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     now = 0.0
@@ -331,13 +378,13 @@ def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
 
 
 def test_optimizer_rejects_workload_drift_before_rewriting(tmp_path: Path) -> None:
-    from benchmarking.lmfao.optimize import run
+    from benchmarking.lmfao.backend import optimize
 
     source = tmp_path / "workload.json"
     changed = {**model.WORKLOAD.document, "root": "1"}
     source.write_text(json.dumps(changed))
     with pytest.raises(ValueError, match="frontend differs"):
-        run({}, source, tmp_path / "plan.json")
+        optimize({}, source, tmp_path / "plan.json")
     assert not (tmp_path / "plan.json").exists()
 
 

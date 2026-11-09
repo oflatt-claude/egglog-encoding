@@ -86,7 +86,7 @@ def run(args: argparse.Namespace) -> None:
             if label in baselines:
                 raise
             optimizer["optimizer"][label]["pipeline_issue"] = str(error)
-            status(f"  {label}: plan unavailable; see {directory / 'generate.log'}")
+            status(f"  {label}: plan unavailable; {error}")
             continue
         plan = model.read_plan(directory / "plan.json")
         plan_summaries[label] = {
@@ -162,11 +162,11 @@ def run(args: argparse.Namespace) -> None:
             "Execution reports computation time separately from whole-process time including loading/sorting. "
             "accounted_pipeline separates optimization/generation and compilation, "
             "with one observation per preparation phase. Its phase sum is not a measured end-to-end runtime. "
-            "Generation includes the frontend, optimizer subprocess and backend. Identical plans reuse compilation "
+            "Generation includes query export, optimization and code generation. Identical plans reuse compilation "
             "and execution observations, charged in full. "
             "Original logical optimization is included in its code-generation phase. Independent validation, "
             "tool builds are excluded for both. Separate optimizer-only benchmark "
-            "samples are excluded; the hook reruns rewriting for the exported workload."
+            "samples are excluded; preparation reruns rewriting for the exported workload."
         ),
     }
     write_json(out / "pipeline.json", report)
