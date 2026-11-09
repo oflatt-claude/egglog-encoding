@@ -143,7 +143,15 @@ unreachable:
 
 The two lemmas of `Merge.lean` the compiler proof uses were relocated:
 `Conservativity.cong_replay` is `Cong.replay` in `Proofs/SemanticCong.lean`, and
-`Database.mem_terms_of_eqs` is in `Proofs/Database.lean`.
+`Database.mem_terms_of_eqs` is in `Proofs/Database.lean`. The historical names of
+`Proofs/Lookup.lean` were renamed: its lemmas are about the pair
+`e.eval σ = some t ∧ Expr.Matches db σ e`, so `Lookup.exists_cong`, `Lookup.of_eval`,
+`Lookup.of_agreeOn`, `Lookup.mono_live` and `Lookup.transport` are
+`Expr.Matches.eval_cong`, `Expr.Matches.of_eval`, `Expr.Matches.of_agreeOn`,
+`Expr.Matches.mono_live` and `Expr.Matches.transport` (with `Expr.MatchesList.*` for the
+list forms), `Expr.rows_agreeOn` is `Expr.matches_agreeOn`, and the module is
+`Proofs/MatchEval.lean`; `Proofs/InterpLookup.lean`, the executable matcher against
+`Matches`, is `Proofs/InterpMatch.lean`.
 
 Four kinds of use are invisible to the constant closure, and the declarations they
 concern stay: `@[simp]` lemmas proved by `rfl` and `rfl`-lemmas named in `simp only`

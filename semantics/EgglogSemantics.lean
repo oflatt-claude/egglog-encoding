@@ -85,10 +85,10 @@ import EgglogSemantics.Proofs.Finite
 import EgglogSemantics.Proofs.FiniteSaturation
 import EgglogSemantics.Proofs.Interp
 import EgglogSemantics.Proofs.InterpBase
-import EgglogSemantics.Proofs.InterpLookup
+import EgglogSemantics.Proofs.InterpMatch
 import EgglogSemantics.Proofs.InterpRound
 import EgglogSemantics.Proofs.InterpSubsume
-import EgglogSemantics.Proofs.Lookup
+import EgglogSemantics.Proofs.MatchEval
 import EgglogSemantics.Proofs.Match
 import EgglogSemantics.Proofs.MatchMonotone
 import EgglogSemantics.Proofs.MatchValues

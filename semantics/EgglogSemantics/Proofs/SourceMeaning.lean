@@ -103,16 +103,16 @@ theorem matches_transport {d e : Database} (hd : d.WF) (he : e.WF)
   cases hm with
   | atom hl =>
       obtain ⟨t, he⟩ := hl.eval_exists
-      obtain ⟨u, hu, _⟩ := Lookup.transport h hv hn ⟨he, hl⟩
+      obtain ⟨u, hu, _⟩ := Expr.Matches.transport h hv hn ⟨he, hl⟩
       exact .atom hu.2
   | equal hl₁ hl₂ h₁ h₂ hc =>
-      obtain ⟨u, hu, htu⟩ := Lookup.transport h hv hn.1 ⟨h₁, hl₁⟩
-      obtain ⟨v, hv, htv⟩ := Lookup.transport h hv hn.2 ⟨h₂, hl₂⟩
+      obtain ⟨u, hu, htu⟩ := Expr.Matches.transport h hv hn.1 ⟨h₁, hl₁⟩
+      obtain ⟨v, hv, htv⟩ := Expr.Matches.transport h hv hn.2 ⟨h₂, hl₂⟩
       exact .equal hu.2 hv.2 hu.1 hv.1
         (htu.symm.trans (((h.congr _ _).mp hc).trans htv))
   | unequal hl₁ hl₂ h₁ h₂ hne =>
-      obtain ⟨u, hu, htu⟩ := Lookup.transport h hv hn.1 ⟨h₁, hl₁⟩
-      obtain ⟨v, hv, htv⟩ := Lookup.transport h hv hn.2 ⟨h₂, hl₂⟩
+      obtain ⟨u, hu, htu⟩ := Expr.Matches.transport h hv hn.1 ⟨h₁, hl₁⟩
+      obtain ⟨v, hv, htv⟩ := Expr.Matches.transport h hv hn.2 ⟨h₂, hl₂⟩
       exact .unequal hu.2 hv.2 hu.1 hv.1
         (fun hc => hne ((h.congr _ _).mpr (htu.trans (hc.trans htv.symm))))
 

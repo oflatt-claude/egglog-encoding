@@ -48,7 +48,7 @@ private theorem premise_asserted : (premise, premise) ∈ registered.eqs := by
 
 private theorem initial_match : ValidQuerySubst registered derive.query [] := by
   refine ⟨[[]], .cons ⟨⟨List.Perm.refl [], by simp⟩, ?_⟩ .nil, .single []⟩
-  exact .atom (Lookup.of_eval
+  exact .atom (Expr.Matches.of_eval
     (RunRules.subsumed_eq initial_subsumeFree) (by decide) rfl (.direct premise_asserted)).2
 
 private theorem premise_retained : (premise, premise) ∈ reached.eqs := by

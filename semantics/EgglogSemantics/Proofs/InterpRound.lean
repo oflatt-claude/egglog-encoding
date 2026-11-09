@@ -1,4 +1,4 @@
-import EgglogSemantics.Proofs.InterpLookup
+import EgglogSemantics.Proofs.InterpMatch
 
 namespace Egglog
 

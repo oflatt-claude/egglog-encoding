@@ -58,7 +58,7 @@ example : Matches wrapped (.expr (.app "wrapper" [.app "b" []])) [] := by
   have h : Cong wrapped (.app "wrapper" [cnst "a"]) (.app "wrapper" [cnst "b"]) :=
     .congr (.direct (Set.mem_insert _ _))
       (.cons (.direct (Or.inr (Set.mem_insert _ _))) .nil)
-  exact .atom (Lookup.of_eval rfl (by decide) rfl (h.symm.trans h)).2
+  exact .atom (Expr.Matches.of_eval rfl (by decide) rfl (h.symm.trans h)).2
 
 example : ValidEnv ["v1"] (Database.empty.addTerm (num 1)) [("v1", num 1)] := by
   refine ⟨by simp, ?_⟩
@@ -94,7 +94,7 @@ private theorem swap_matches :
         (.arg (by simp [add12]) (.refl _))
   · intro p hp
     obtain rfl := List.mem_singleton.mp hp
-    exact .atom (Lookup.of_eval rfl (by decide) rfl (.direct (Set.mem_insert _ _))).2
+    exact .atom (Expr.Matches.of_eval rfl (by decide) rfl (.direct (Set.mem_insert _ _))).2
 
 example : add21 ∈ (RunRules [swapRule] preRun).terms := by
   rw [RunRules.eq_pair]

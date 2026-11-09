@@ -1,6 +1,6 @@
 import EgglogSemantics.Proofs.Congruence.Target
 import EgglogSemantics.Proofs.Diagonal
-import EgglogSemantics.Proofs.Lookup
+import EgglogSemantics.Proofs.MatchEval
 import EgglogSemantics.Proofs.Bindings
 
 /-! Matching the atoms the compiler emits: an application over variables, a union-find

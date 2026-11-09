@@ -44,7 +44,7 @@ theorem representative_query_transport :
       exact (Database.Contained.addTerm _ _).terms (Database.mem_addTerm _ _)
     · intro p hp
       obtain rfl := List.mem_singleton.mp hp
-      exact .atom (Lookup.of_eval rfl (by decide) rfl (.direct (Set.mem_insert _ _))).2
+      exact .atom (Expr.Matches.of_eval rfl (by decide) rfl (.direct (Set.mem_insert _ _))).2
   have hw : after.WF := ((Database.WF.empty.addTerm b).addTerm (f b)).addEq _ _
     (by simp [a, b, Term.isLit])
   have hf : after.eqs.Finite :=

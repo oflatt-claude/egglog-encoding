@@ -199,7 +199,7 @@ theorem sound_expr_matches (hr : Reads src D) (hX : src.subsumed = ∅) {e : Exp
       Cong src t i ∧ Expr.Matches src σ e := by
   obtain ⟨i, hi⟩ := hx.eval_exists
   obtain ⟨t, ht, hti⟩ := sound_expr hr e n ho hnames hag hσ hm hx hi
-  exact ⟨t, i, ht, hi, hti, (Lookup.of_eval hX ho ht (hti.trans hti.symm)).2⟩
+  exact ⟨t, i, ht, hi, hti, (Expr.Matches.of_eval hX ho ht (hti.trans hti.symm)).2⟩
 
 /-- If a compiled pattern's atoms match, the source pattern matches. -/
 theorem sound_pattern (hr : Reads src D) (hX : src.subsumed = ∅) {p : Pattern} (n : Nat)

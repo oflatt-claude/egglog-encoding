@@ -12,9 +12,9 @@ theorem Matches.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂)
   cases h with
   | atom hr =>
     obtain ⟨t, he⟩ := hr.eval_exists
-    exact .atom (Lookup.mono_live hl ⟨he, hr⟩).2
+    exact .atom (Expr.Matches.mono_live hl ⟨he, hr⟩).2
   | equal hr₁ hr₂ he₁ he₂ hh =>
-    exact .equal (Lookup.mono_live hl ⟨he₁, hr₁⟩).2 (Lookup.mono_live hl ⟨he₂, hr₂⟩).2
+    exact .equal (Expr.Matches.mono_live hl ⟨he₁, hr₁⟩).2 (Expr.Matches.mono_live hl ⟨he₂, hr₂⟩).2
       he₁ he₂ (hh.mono hc)
   | unequal _ _ _ _ _ => simp [Pattern.monotoneB] at hp
 

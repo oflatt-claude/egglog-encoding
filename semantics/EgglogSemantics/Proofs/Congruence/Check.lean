@@ -97,9 +97,9 @@ theorem matches_forget {d : Database} {p : Pattern} {σ : Env} (hp : p.monotoneB
   cases h with
   | atom hr =>
     obtain ⟨t, he⟩ := hr.eval_exists
-    exact .atom (Lookup.mono_live hl ⟨he, hr⟩).2
+    exact .atom (Expr.Matches.mono_live hl ⟨he, hr⟩).2
   | equal hr₁ hr₂ he₁ he₂ hh =>
-    exact .equal (Lookup.mono_live hl ⟨he₁, hr₁⟩).2 (Lookup.mono_live hl ⟨he₂, hr₂⟩).2 he₁ he₂
+    exact .equal (Expr.Matches.mono_live hl ⟨he₁, hr₁⟩).2 (Expr.Matches.mono_live hl ⟨he₂, hr₂⟩).2 he₁ he₂
       ((Cong.iff_of_eqs_eq (d := d) (e := d.forgetSubsumed) rfl).mp hh)
   | unequal => simp [Pattern.monotoneB] at hp
 

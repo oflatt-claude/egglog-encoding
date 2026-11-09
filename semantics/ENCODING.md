@@ -180,7 +180,7 @@ identity out of the data entirely.
   the general interpreter on every case.
 - Proofs: the specification-level proof modules and the certificate soundness proofs are
   ported to the declaration-free specification and then to subsumption
-  (`PROOF-PORT-A.md` … `PROOF-PORT-G.md` record every statement change; `Proofs/Lookup.lean`
+  (`PROOF-PORT-A.md` … `PROOF-PORT-G.md` record every statement change; `Proofs/MatchEval.lean`
   bridges query lookup and evaluation, `Proofs/Subsume.lean` and
   `Proofs/InterpSubsume.lean` replace the deletion theory). `SourceProof.check_infers` and
   `Resugar.sourceProofs_infers` give checked and lifted certificates their meaning in the

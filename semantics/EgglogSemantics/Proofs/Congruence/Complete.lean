@@ -418,7 +418,7 @@ theorem complete_expr (h : Rel src d) (hc : Canon d) (hw : src.WF) :
               rcases this with hv | hv
               · exact Or.inl (hsrc v (by simpa using hv))
               · exact Or.inr hv
-            obtain ⟨hxe', hxm'⟩ := Lookup.of_agreeOn ⟨hxe, hxm⟩ hagx
+            obtain ⟨hxe', hxm'⟩ := Expr.Matches.of_agreeOn ⟨hxe, hxm⟩ hagx
             have hti : Cong src (ts[i]'(by omega)) (ts[i]'(by omega)) :=
               hcong _ (List.getElem_mem _)
             have hedge : Edge d (bs[i]'(by omega)) (srep src (ts[i]'(by omega))) := by
@@ -520,7 +520,7 @@ theorem complete_args (h : Rel src d) (hc : Canon d) (hw : src.WF) :
         · rw [flatArgs_cons h₁ h₂]
           simp only
           refine .cons ?_ ?_
-          · obtain ⟨hxe', hxm'⟩ := Lookup.of_agreeOn ⟨hxe, hx₁⟩
+          · obtain ⟨hxe', hxm'⟩ := Expr.Matches.of_agreeOn ⟨hxe, hx₁⟩
               fun v hv => (hagree₁ v (hxvars v hv)).symm
             exact ⟨hxm', hxe'⟩
           · rw [List.forall₂_iff_get] at hids ⊢
@@ -534,7 +534,7 @@ theorem complete_args (h : Rel src d) (hc : Canon d) (hw : src.WF) :
               rcases this with hv | hv
               · exact Or.inl (hsrces v hv)
               · exact Or.inr hv
-            obtain ⟨hxe', hxm'⟩ := Lookup.of_agreeOn ⟨hxe, hxm⟩
+            obtain ⟨hxe', hxm'⟩ := Expr.Matches.of_agreeOn ⟨hxe, hxm⟩
               fun v hv => (hagree₂ v (hx'vars v hv)).symm
             exact ⟨hxm', hxe'⟩
 

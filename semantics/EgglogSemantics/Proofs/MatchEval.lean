@@ -1,7 +1,8 @@
 import EgglogSemantics.Proofs.Eval
 
-/-! Recursive expression-matching bridges. The `Lookup`/`LookupList` namespaces
-retain historical theorem names; matching is the specification's `Expr.Matches`. -/
+/-! Expression matching and evaluation. A matching expression has a value, and the pair
+`e.eval σ = some t ∧ Expr.Matches db σ e` is stable under environments that agree on the
+expression's variables, under a larger live set, and under equal meaning. -/
 
 namespace Egglog
 
@@ -27,7 +28,7 @@ theorem Expr.MatchesList.eval_exists {db : Database} {σ : Env} {es : List Expr}
     exact ⟨t :: ts, by simp [Expr.evalList, ht, hts]⟩
 
 /-- Variables get existence from their bindings, not from a liveness premise. -/
-theorem Lookup.exists_cong {db : Database} {σ : Env}
+theorem Expr.Matches.eval_cong {db : Database} {σ : Env}
     (hσ : ∀ v t, Env.lookup v σ = some t → Cong db t t) {e : Expr} {t : Term}
     (h : e.eval σ = some t ∧ Expr.Matches db σ e) : Cong db t t := by
   obtain ⟨he, hm⟩ := h
@@ -40,8 +41,8 @@ theorem Lookup.exists_cong {db : Database} {σ : Env}
   | min ha hb =>
     obtain ⟨x, hx, hrest⟩ := Option.bind_eq_some_iff.mp he
     obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hrest
-    have hca := Lookup.exists_cong hσ ⟨hx, ha⟩
-    have hcb := Lookup.exists_cong hσ ⟨hy, hb⟩
+    have hca := Expr.Matches.eval_cong hσ ⟨hx, ha⟩
+    have hcb := Expr.Matches.eval_cong hσ ⟨hy, hb⟩
     rcases Term.least_eq_or x y with he | he <;> rw [he]
     exacts [hca, hcb]
 
@@ -49,7 +50,7 @@ mutual
 
 /-- With no subsumption, an ordering-free instance matches as soon as its result
 exists. `min` needs both operands, including the unchosen one. -/
-theorem Lookup.of_eval {db : Database} {σ : Env} (hX : db.subsumed = ∅) :
+theorem Expr.Matches.of_eval {db : Database} {σ : Env} (hX : db.subsumed = ∅) :
     ∀ {e : Expr} {t : Term}, e.OrderingFree → e.eval σ = some t → Cong db t t →
       e.eval σ = some t ∧ Expr.Matches db σ e
   | .lit l, _, _, he, ht => by
@@ -58,13 +59,13 @@ theorem Lookup.of_eval {db : Database} {σ : Env} (hX : db.subsumed = ∅) :
   | .var v, _, _, he, _ => ⟨he, .var he⟩
   | .app f args, _, ho, he, ht => by
       obtain ⟨ts, hs, rfl⟩ := Option.map_eq_some_iff.mp he
-      have hargs := LookupList.of_eval hX ho hs (fun t hmem =>
+      have hargs := Expr.MatchesList.of_eval hX ho hs (fun t hmem =>
         Cong.subterm ht (.arg hmem (.refl t)))
       exact ⟨by simp [Expr.eval, hs],
         .app hargs.2 hs (by simpa [Database.live, hX] using ht)⟩
   | .min _ _, _, ho, _, _ => by simp [Expr.OrderingFree, Expr.hasMin] at ho
 
-theorem LookupList.of_eval {db : Database} {σ : Env} (hX : db.subsumed = ∅) :
+theorem Expr.MatchesList.of_eval {db : Database} {σ : Env} (hX : db.subsumed = ∅) :
     ∀ {es : List Expr} {ts : List Term}, Expr.OrderingFreeList es →
       Expr.evalList es σ = some ts → (∀ t ∈ ts, Cong db t t) →
       Expr.evalList es σ = some ts ∧ Expr.MatchesList db σ es
@@ -74,16 +75,16 @@ theorem LookupList.of_eval {db : Database} {σ : Env} (hX : db.subsumed = ∅) :
       obtain ⟨ts, hs, rfl⟩ := Option.map_eq_some_iff.mp hrest
       have ho' : e.OrderingFree ∧ Expr.OrderingFreeList es := by
         simpa [Expr.OrderingFreeList, Expr.OrderingFree, Expr.hasMinList] using ho
-      have ha := Lookup.of_eval hX ho'.1 hfirst (ht t (by simp))
-      have hargs := LookupList.of_eval hX ho'.2 hs (fun u hu => ht u (List.mem_cons_of_mem t hu))
+      have ha := Expr.Matches.of_eval hX ho'.1 hfirst (ht t (by simp))
+      have hargs := Expr.MatchesList.of_eval hX ho'.2 hs (fun u hu => ht u (List.mem_cons_of_mem t hu))
       exact ⟨by simp [Expr.evalList, hfirst, hs], .cons ha.2 hargs.2⟩
 
 end
 
 mutual
 
-/-- Matching depends only on the expression's variables; the name predates `Matches`. -/
-theorem Expr.rows_agreeOn {db : Database} {σ τ : Env} (e : Expr)
+/-- Matching depends only on the expression's variables. -/
+theorem Expr.matches_agreeOn {db : Database} {σ τ : Env} (e : Expr)
     (ha : ∀ v ∈ e.vars, Env.lookup v σ = Env.lookup v τ) :
     Expr.Matches db σ e ↔ Expr.Matches db τ e := by
   match e with
@@ -95,7 +96,7 @@ theorem Expr.rows_agreeOn {db : Database} {σ τ : Env} (e : Expr)
     · intro h; cases h with | var hl => exact .var (by simpa only [hv] using hl)
   | .app f args =>
     have he := Expr.evalList_agreeOn args ha
-    have hm := Expr.rowsList_agreeOn (db := db) args ha
+    have hm := Expr.matchesList_agreeOn (db := db) args ha
     constructor
     · intro h
       cases h with
@@ -104,35 +105,35 @@ theorem Expr.rows_agreeOn {db : Database} {σ τ : Env} (e : Expr)
       cases h with
       | app hl hs ht => exact .app (hm.mpr hl) (by simpa only [he] using hs) ht
   | .min a b =>
-    have ha' := Expr.rows_agreeOn (db := db) a (fun v hv => ha v (by simp [hv]))
-    have hb' := Expr.rows_agreeOn (db := db) b (fun v hv => ha v (by simp [hv]))
+    have ha' := Expr.matches_agreeOn (db := db) a (fun v hv => ha v (by simp [hv]))
+    have hb' := Expr.matches_agreeOn (db := db) b (fun v hv => ha v (by simp [hv]))
     constructor
     · intro h; cases h with | min h₁ h₂ => exact .min (ha'.mp h₁) (hb'.mp h₂)
     · intro h; cases h with | min h₁ h₂ => exact .min (ha'.mpr h₁) (hb'.mpr h₂)
 
-theorem Expr.rowsList_agreeOn {db : Database} {σ τ : Env} (es : List Expr)
+theorem Expr.matchesList_agreeOn {db : Database} {σ τ : Env} (es : List Expr)
     (ha : ∀ v ∈ Expr.varsList es, Env.lookup v σ = Env.lookup v τ) :
     Expr.MatchesList db σ es ↔ Expr.MatchesList db τ es := by
   match es with
   | [] => exact ⟨fun _ => .nil, fun _ => .nil⟩
   | e :: es =>
-    have he := Expr.rows_agreeOn (db := db) e (fun v hv => ha v (by simp [hv]))
-    have hes := Expr.rowsList_agreeOn (db := db) es (fun v hv => ha v (by simp [hv]))
+    have he := Expr.matches_agreeOn (db := db) e (fun v hv => ha v (by simp [hv]))
+    have hes := Expr.matchesList_agreeOn (db := db) es (fun v hv => ha v (by simp [hv]))
     constructor
     · intro h; cases h with | cons h₁ h₂ => exact .cons (he.mp h₁) (hes.mp h₂)
     · intro h; cases h with | cons h₁ h₂ => exact .cons (he.mpr h₁) (hes.mpr h₂)
 
 end
 
-theorem Lookup.of_agreeOn {db : Database} {σ τ : Env} {e : Expr} {t : Term}
+theorem Expr.Matches.of_agreeOn {db : Database} {σ τ : Env} {e : Expr} {t : Term}
     (h : e.eval σ = some t ∧ Expr.Matches db σ e)
     (ha : ∀ v ∈ e.vars, Env.lookup v σ = Env.lookup v τ) :
     e.eval τ = some t ∧ Expr.Matches db τ e := by
-  rwa [← e.eval_agreeOn ha, ← e.rows_agreeOn ha]
+  rwa [← e.eval_agreeOn ha, ← e.matches_agreeOn ha]
 
 mutual
 
-theorem Lookup.mono_live {d e : Database} (hl : d.live ⊆ e.live)
+theorem Expr.Matches.mono_live {d e : Database} (hl : d.live ⊆ e.live)
     {σ : Env} {a : Expr} {t : Term}
     (h : a.eval σ = some t ∧ Expr.Matches d σ a) :
     a.eval σ = some t ∧ Expr.Matches e σ a := by
@@ -140,13 +141,13 @@ theorem Lookup.mono_live {d e : Database} (hl : d.live ⊆ e.live)
   cases h.2 with
   | lit ht => exact .lit (hl ht)
   | var hv => exact .var hv
-  | app hm he ht => exact .app (LookupList.mono_live hl ⟨he, hm⟩).2 he (hl ht)
+  | app hm he ht => exact .app (Expr.MatchesList.mono_live hl ⟨he, hm⟩).2 he (hl ht)
   | min ha hb =>
     obtain ⟨a, hea⟩ := ha.eval_exists
     obtain ⟨b, heb⟩ := hb.eval_exists
-    exact .min (Lookup.mono_live hl ⟨hea, ha⟩).2 (Lookup.mono_live hl ⟨heb, hb⟩).2
+    exact .min (Expr.Matches.mono_live hl ⟨hea, ha⟩).2 (Expr.Matches.mono_live hl ⟨heb, hb⟩).2
 
-theorem LookupList.mono_live {d e : Database} (hl : d.live ⊆ e.live)
+theorem Expr.MatchesList.mono_live {d e : Database} (hl : d.live ⊆ e.live)
     {σ : Env} {as : List Expr} {ts : List Term}
     (h : Expr.evalList as σ = some ts ∧ Expr.MatchesList d σ as) :
     Expr.evalList as σ = some ts ∧ Expr.MatchesList e σ as := by
@@ -156,7 +157,7 @@ theorem LookupList.mono_live {d e : Database} (hl : d.live ⊆ e.live)
   | cons ha has =>
     obtain ⟨t, ht⟩ := ha.eval_exists
     obtain ⟨ts, hts⟩ := has.eval_exists
-    exact .cons (Lookup.mono_live hl ⟨ht, ha⟩).2 (LookupList.mono_live hl ⟨hts, has⟩).2
+    exact .cons (Expr.Matches.mono_live hl ⟨ht, ha⟩).2 (Expr.MatchesList.mono_live hl ⟨hts, has⟩).2
 
 end
 
@@ -173,7 +174,7 @@ theorem Database.live_app_congr {db : Database} {f : FnName} {as bs : List Term}
 mutual
 
 /-- Ordering-free matching respects congruent bindings and equal meaning. -/
-theorem Lookup.transport {d e : Database} (hm : d.SameMeaning e) {σ τ : Env}
+theorem Expr.Matches.transport {d e : Database} (hm : d.SameMeaning e) {σ τ : Env}
     (hσ : ∀ v t, Env.lookup v σ = some t →
       ∃ u, Env.lookup v τ = some u ∧ Cong e t u) :
     ∀ {a : Expr} {t : Term}, a.OrderingFree →
@@ -193,13 +194,13 @@ theorem Lookup.transport {d e : Database} (hm : d.SameMeaning e) {σ τ : Env}
       | app hargs hs hl =>
         simp only [Expr.eval, hs, Option.map_some, Option.some.injEq] at he
         subst he
-        obtain ⟨us, hus, hc⟩ := LookupList.transport hm hσ ho ⟨hs, hargs⟩
+        obtain ⟨us, hus, hc⟩ := Expr.MatchesList.transport hm hσ ho ⟨hs, hargs⟩
         have hl' := (hm.live _).mp hl
         exact ⟨_, ⟨by simp [Expr.eval, hus.1],
           .app hus.2 hus.1 (Database.live_app_congr hl' hc)⟩, .congr hl'.1 hc⟩
   | .min _ _, _, ho, _ => by simp [Expr.OrderingFree, Expr.hasMin] at ho
 
-theorem LookupList.transport {d e : Database} (hm : d.SameMeaning e) {σ τ : Env}
+theorem Expr.MatchesList.transport {d e : Database} (hm : d.SameMeaning e) {σ τ : Env}
     (hσ : ∀ v t, Env.lookup v σ = some t →
       ∃ u, Env.lookup v τ = some u ∧ Cong e t u) :
     ∀ {as : List Expr} {ts : List Term}, Expr.OrderingFreeList as →
@@ -215,8 +216,8 @@ theorem LookupList.transport {d e : Database} (hm : d.SameMeaning e) {σ τ : En
         simpa [Expr.OrderingFreeList, Expr.OrderingFree, Expr.hasMinList] using ho
       cases hl with
       | cons ha has =>
-        obtain ⟨u, hu, hc⟩ := Lookup.transport hm hσ ho'.1 ⟨ht, ha⟩
-        obtain ⟨us, hus, hcs⟩ := LookupList.transport hm hσ ho'.2 ⟨hs, has⟩
+        obtain ⟨u, hu, hc⟩ := Expr.Matches.transport hm hσ ho'.1 ⟨ht, ha⟩
+        obtain ⟨us, hus, hcs⟩ := Expr.MatchesList.transport hm hσ ho'.2 ⟨hs, has⟩
         exact ⟨u :: us, ⟨by simp [Expr.evalList, hu.1, hus.1], .cons hu.2 hus.2⟩, .cons hc hcs⟩
 
 end

@@ -1,5 +1,5 @@
 import EgglogSemantics.Spec.Match
-import EgglogSemantics.Proofs.Lookup
+import EgglogSemantics.Proofs.MatchEval
 import EgglogSemantics.Proofs.SameMeaning
 import EgglogSemantics.Proofs.SemanticCong
 
@@ -37,17 +37,17 @@ theorem of_agreeOn {db : Database} {p : Pattern} {σ σ' : Env} (h : Matches db 
   cases h with
   | atom hl =>
     obtain ⟨t, he⟩ := hl.eval_exists
-    exact .atom (Lookup.of_agreeOn ⟨he, hl⟩ hag).2
+    exact .atom (Expr.Matches.of_agreeOn ⟨he, hl⟩ hag).2
   | equal hl₁ hl₂ h₁ h₂ hc =>
-    obtain ⟨he₁, hr₁⟩ := Lookup.of_agreeOn ⟨h₁, hl₁⟩
+    obtain ⟨he₁, hr₁⟩ := Expr.Matches.of_agreeOn ⟨h₁, hl₁⟩
       (fun v hv => hag v (by simp [Pattern.vars, hv]))
-    obtain ⟨he₂, hr₂⟩ := Lookup.of_agreeOn ⟨h₂, hl₂⟩
+    obtain ⟨he₂, hr₂⟩ := Expr.Matches.of_agreeOn ⟨h₂, hl₂⟩
       (fun v hv => hag v (by simp [Pattern.vars, hv]))
     exact .equal hr₁ hr₂ he₁ he₂ hc
   | unequal hl₁ hl₂ h₁ h₂ hc =>
-    obtain ⟨he₁, hr₁⟩ := Lookup.of_agreeOn ⟨h₁, hl₁⟩
+    obtain ⟨he₁, hr₁⟩ := Expr.Matches.of_agreeOn ⟨h₁, hl₁⟩
       (fun v hv => hag v (by simp [Pattern.vars, hv]))
-    obtain ⟨he₂, hr₂⟩ := Lookup.of_agreeOn ⟨h₂, hl₂⟩
+    obtain ⟨he₂, hr₂⟩ := Expr.Matches.of_agreeOn ⟨h₂, hl₂⟩
       (fun v hv => hag v (by simp [Pattern.vars, hv]))
     exact .unequal hr₁ hr₂ he₁ he₂ hc
 

@@ -9,14 +9,14 @@ theorem Matches.sameMeaning {d e : Database} (h : d.SameMeaning e) {p : Pattern}
   cases hm with
   | atom hl =>
     obtain ⟨t, hv⟩ := hl.eval_exists
-    exact .atom (Lookup.mono_live (fun _ ht => (h.live _).mp ht) ⟨hv, hl⟩).2
+    exact .atom (Expr.Matches.mono_live (fun _ ht => (h.live _).mp ht) ⟨hv, hl⟩).2
   | equal hl₁ hl₂ hv hw hc =>
-    exact .equal (Lookup.mono_live (fun _ ht => (h.live _).mp ht) ⟨hv, hl₁⟩).2
-      (Lookup.mono_live (fun _ ht => (h.live _).mp ht) ⟨hw, hl₂⟩).2
+    exact .equal (Expr.Matches.mono_live (fun _ ht => (h.live _).mp ht) ⟨hv, hl₁⟩).2
+      (Expr.Matches.mono_live (fun _ ht => (h.live _).mp ht) ⟨hw, hl₂⟩).2
       hv hw ((h.congr _ _).mp hc)
   | unequal hl₁ hl₂ hv hw hn =>
-    exact .unequal (Lookup.mono_live (fun _ ht => (h.live _).mp ht) ⟨hv, hl₁⟩).2
-      (Lookup.mono_live (fun _ ht => (h.live _).mp ht) ⟨hw, hl₂⟩).2 hv hw
+    exact .unequal (Expr.Matches.mono_live (fun _ ht => (h.live _).mp ht) ⟨hv, hl₁⟩).2
+      (Expr.Matches.mono_live (fun _ ht => (h.live _).mp ht) ⟨hw, hl₂⟩).2 hv hw
       (fun hc => hn ((h.congr _ _).mpr hc))
 
 theorem QueryMatches.sameMeaning {d e : Database} (h : d.SameMeaning e) (ht : d.terms = e.terms)

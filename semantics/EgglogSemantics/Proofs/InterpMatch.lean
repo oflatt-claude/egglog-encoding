@@ -1,5 +1,8 @@
 import EgglogSemantics.Proofs.InterpBase
 
+/-! The executable matcher (`patternHolds`, `matchQuery`) against the specification's
+`Matches` and `ValidQuerySubst`, on closed, indexed finite states. -/
+
 namespace Egglog
 
 namespace FDatabase
@@ -193,7 +196,7 @@ theorem patternHolds_matches {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
     obtain ⟨t, hb⟩ := h₂.eval_exists
     simp only [ha, hb, decide_eq_true_eq] at hc
     exact .equal h₁ h₂ ha hb
-      ((closureWith_pair_iff he (Lookup.exists_cong hσ ⟨ha, h₁⟩)).mp hc)
+      ((closureWith_pair_iff he (Expr.Matches.eval_cong hσ ⟨ha, h₁⟩)).mp hc)
   | ne a b =>
     simp only [patternHolds, patternHoldsWith, Bool.and_eq_true,
       exprHoldsWith_iff he hi hj] at h
@@ -202,7 +205,7 @@ theorem patternHolds_matches {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
     obtain ⟨t, hb⟩ := h₂.eval_exists
     simp only [ha, hb, Bool.not_eq_true', decide_eq_false_iff_not] at hn
     exact .unequal h₁ h₂ ha hb (fun hc =>
-      hn ((closureWith_pair_iff he (Lookup.exists_cong hσ ⟨ha, h₁⟩)).mpr hc))
+      hn ((closureWith_pair_iff he (Expr.Matches.eval_cong hσ ⟨ha, h₁⟩)).mpr hc))
 
 theorem patternHolds_of_matches {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
     (hj : d.IndexCurrent) {p : Pattern} {σ : Env}
@@ -218,7 +221,7 @@ theorem patternHolds_of_matches {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
   | unequal h₁ h₂ ha hb hn =>
     simp only [patternHolds, patternHoldsWith, ha, hb, Bool.and_eq_true,
       exprHoldsWith_iff he hi hj, Bool.not_eq_true', decide_eq_false_iff_not,
-      closureWith_pair_iff he (Lookup.exists_cong hσ ⟨ha, h₁⟩)]
+      closureWith_pair_iff he (Expr.Matches.eval_cong hσ ⟨ha, h₁⟩)]
     exact ⟨⟨h₁, h₂⟩, hn⟩
 
 theorem validEnv_canon {d : FDatabase} (hc : d.SubtermClosed) {q : Query} {σ : Env}

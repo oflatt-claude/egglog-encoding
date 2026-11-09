@@ -105,9 +105,9 @@ theorem complete_pattern (h : Rel src d) (hc : Canon d) (hw : src.WF) {p : Patte
       · rw [h₂] at hx hk₂; simp only at hx hk₂
         rw [hx, Expr.vars_var, List.mem_singleton] at hv
         exact Or.inr ⟨k, hk₁, hk₂, hv⟩
-    obtain ⟨hxe₁', hx₁'⟩ := Lookup.of_agreeOn ⟨hxe₁, hx₁⟩
+    obtain ⟨hxe₁', hx₁'⟩ := Expr.Matches.of_agreeOn ⟨hxe₁, hx₁⟩
       fun v hv => (hagree₁ v (hxvars₁ v hv)).symm
-    obtain ⟨hxe₂', hx₂'⟩ := Lookup.of_agreeOn ⟨hxe₂, hx₂⟩
+    obtain ⟨hxe₂', hx₂'⟩ := Expr.Matches.of_agreeOn ⟨hxe₂, hx₂⟩
       fun v hv => (hagree₂ v (hxvars₂ v hv)).symm
     refine ⟨ρ₁ ++ ρ₂, ?_, ?_, ?_⟩
     · rw [pattern_eq h₁ h₂]
