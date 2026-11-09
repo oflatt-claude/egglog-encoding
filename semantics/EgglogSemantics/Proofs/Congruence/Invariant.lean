@@ -37,6 +37,11 @@ structure Canon (d : Database) : Prop where
     List.Forall₂ (Edge d) as rs → List.Forall₂ (Edge d) bs rs →
     Edge d (.app f as) y → Edge d (.app f bs) z → y = z
 
+/-- The term order as a strict order, for well-founded arguments over finite sets. -/
+instance bltIsStrictOrder : IsStrictOrder Term (fun s t => Term.blt s t = true) where
+  irrefl := fun t => by simp
+  trans := fun a b c => Term.blt_trans a b c
+
 namespace Rel
 
 variable {src d : Database} (h : Rel src d)
@@ -150,9 +155,6 @@ theorem app_mem_src_of_mem_terms {f : FnName} (hf : f ≠ ufName) {ts : List Ter
 theorem least_parent {k : Term} (hk : k ∈ Keys d) :
     ∃ p, Edge d k p ∧ ∀ q, Row d k q → p = q ∨ Term.blt p q = true := by
   classical
-  letI : IsStrictOrder Term (fun s t => Term.blt s t = true) :=
-    { irrefl := fun t => by simp
-      trans := fun a b c => Term.blt_trans a b c }
   let S : Set Term := {p | Row d k p}
   have hS : S.Finite := h.keys_finite.subset fun p hp => h.parent_mem_keys hp
   obtain ⟨p₀, hp₀⟩ := hk

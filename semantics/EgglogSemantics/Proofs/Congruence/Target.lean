@@ -61,6 +61,14 @@ theorem Keys.subset_terms (d : Database) : Keys d ⊆ d.terms :=
 theorem view_mono {d e : Database} (h : d.eqs ⊆ e.eqs) : (view d).eqs ⊆ (view e).eqs :=
   fun _ hq => hq.mono h
 
+/-- A row is an equation of the view. -/
+theorem Row.cong_view {d : Database} {k p : Term} (hr : Row d k p) : Cong (view d) k p :=
+  .direct hr
+
+/-- A live row is an equation of the live view. -/
+theorem Edge.cong_liveView {d : Database} {k p : Term} (he : Edge d k p) :
+    Cong (liveView d) k p := .direct he
+
 /-- A term that is the row's own head is the row: a union-find row never sits inside a
 source-shaped endpoint. -/
 theorem uf_mem_terms_iff {d : Database} (hu : UfOnly d) (hf : EndsFree d) {k p : Term} :
