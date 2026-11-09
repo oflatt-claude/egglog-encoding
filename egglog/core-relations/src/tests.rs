@@ -376,6 +376,44 @@ fn parallel_execution_keeps_split_phase_timing_unavailable() {
 }
 
 #[test]
+fn unconditional_action_plans_execute_once_in_a_large_parallel_database() {
+    egglog_concurrency::ThreadPool::new(4).install(|| {
+        for plans in [1, 2] {
+            let mut db = Database::default();
+            let unrelated = add_set_table(&mut db, 1);
+            let output = add_set_table(&mut db, 1);
+            {
+                let mut buffer = db.new_buffer(unrelated);
+                for value in 0..10_001 {
+                    buffer.stage_insert(&[v(value)]);
+                }
+            }
+            db.merge_all();
+
+            let mut rules = RuleSetBuilder::new(&mut db);
+            for value in 0..plans {
+                let mut action = rules.new_rule().build();
+                action.insert(output, &[v(value).into()]).unwrap();
+                action.build_with_description(format!("action-{value}"));
+            }
+            let rule_set = rules.build();
+            let report = db.run_rule_set(&rule_set, ReportLevel::TimeOnly, None);
+            assert_eq!(
+                table_rows(&db, output),
+                (0..plans).map(|i| vec![v(i)]).collect::<Vec<_>>()
+            );
+            for value in 0..plans {
+                assert_eq!(report.num_matches(&format!("action-{value}")), 1);
+            }
+            assert_eq!(
+                matches!(report.pre_merge, PreMergeTiming::Split { .. }),
+                plans == 1
+            );
+        }
+    });
+}
+
+#[test]
 fn line_graph_1_fj_puresize() {
     run_serial_and_parallel(|| line_graph_1_test(PlanStrategy::PureSize));
 }

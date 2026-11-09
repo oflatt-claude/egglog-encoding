@@ -318,7 +318,14 @@ impl Database {
 
         // let mut rule_reports: HashMap<String, Vec<RuleReport>>;
         let mut rule_reports: HashMap<Arc<str>, Vec<RuleReport>>;
-        let run_in_parallel = parallelize_db_level_op(self.total_size_estimate);
+        // A single atom-free plan has at most one action invocation, regardless
+        // of database size. There is no matching work to distribute.
+        let run_in_parallel = parallelize_db_level_op(self.total_size_estimate)
+            && (rule_set.plans.len() > 1
+                || rule_set
+                    .plans
+                    .values()
+                    .any(|(plan, _, _)| !plan.atoms().is_empty()));
         let mut split_time = None;
         let exec_state = ExecutionState::new(self.read_only_view_with(context), Default::default());
         if run_in_parallel {
