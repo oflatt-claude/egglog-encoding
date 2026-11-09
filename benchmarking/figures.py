@@ -259,7 +259,10 @@ def resolve_figures(config: FigureConfig, names: Sequence[str], invocation_cwd: 
         paths: dict[Path, None] = {}
         for pattern in figure.patterns:
             exclude = pattern.startswith("!")
-            matches = sorted(glob.glob(str(config.path.parent / (pattern[1:] if exclude else pattern)), recursive=True))
+            glob_pattern = pattern[1:] if exclude else pattern
+            if not glob_pattern:
+                raise ValueError(f"{figure.name}: empty file pattern: {pattern!r}")
+            matches = sorted(glob.glob(str(config.path.parent / glob_pattern), recursive=True))
             if not matches:
                 raise ValueError(f"{figure.name}: file pattern matched nothing: {pattern}")
             for match in matches:

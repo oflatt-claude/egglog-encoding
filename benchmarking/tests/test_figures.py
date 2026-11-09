@@ -286,6 +286,7 @@ def test_negative_globs_skip_validation_of_removed_inputs_until_readded(tmp_path
 @pytest.mark.parametrize(
     "patterns, message",
     [
+        (["a.egg", "!"], "empty file pattern"),
         (["a.egg", "!missing.egg"], "matched nothing"),
         (["a.egg", "!directory"], "not a workload file"),
         (["a.egg", "!a.egg"], "selected no workloads"),
