@@ -101,7 +101,7 @@ def export_slotted_ast(
         "rows": rows,
     }
     csv_output = io.StringIO()
-    writer = csv.writer(csv_output)
+    writer = csv.writer(csv_output, lineterminator="\n")
     writer.writerow(COLUMNS)
     markdown = ["| " + " | ".join(COLUMNS) + " |", "| :--- | ---: | ---: | ---: |"]
     latex = [
