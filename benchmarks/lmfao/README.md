@@ -1,7 +1,7 @@
 # LMFAO covariance case study
 
-This replaces LMFAO's logical optimizer with egraph rewriting and joint DAG
-extraction. The workload is the artifact's 140 covariance queries over six
+This uses an egraph to optimize all of LMFAO's aggregate queries together. A DAG
+extractor chooses which views to compute and share between queries. The workload is the artifact's 140 covariance queries over six
 Favorita relations: counts, sums, squares and pairwise products, with categorical
 features as grouping keys. We run the public fragment with 2,000,000 Sales rows.
 This reproduces the workload and compiler pipeline, not the paper's full
@@ -24,13 +24,13 @@ views. Arbitrary join trees are outside the search space.
 The rules optimize those sums and lower them to executable views:
 
 - **Hoisting** moves a factor out of a sum when it does not depend on the bound
-  row. **Loop interchange** exchanges independent sums. These expose aggregate
-  pushdown while preserving duplicates and multiplicities.
-- **Tuple fusion** combines sums over the same relation. Multipatterns find
+  row. **Loop interchange** exchanges independent sums. This lets a query
+  aggregate a child table before joining it, while preserving duplicate rows.
+- **Tuple fusion** combines sums over the same rows. Multipatterns find
   compatible reductions across queries and intermediate results; fused bodies
   derive columns of a common `SharedView`.
 - **Lowering** translates local scalar functions, grouping keys and already
-  derived child views into LMFAO's directional view IR. Schema masks and function
+  derived child views into views that LMFAO can execute. Schema masks and function
   vectors are evaluated by rules too.
 
 For example, the fusion rule matches both reductions in a tuple:
@@ -53,8 +53,7 @@ columns and shared producers jointly across all 140 outputs. A producer costs
 The solver reports its objective, bound and optimality status. Optimality refers
 to this structural objective over available alternatives, not execution time.
 
-The serializer validates and writes the selected DAG; it does not discover
-compatibility groups. LMFAO's physical grouping, loops and data structures remain
+The serializer validates and writes the selected views and their dependencies. LMFAO's physical grouping, loops and data structures remain
 in its backend. Scalar functions are immutable frontend kernels identified by
 vector position.
 
@@ -117,7 +116,7 @@ and reversing method order after correctness checking has warmed each program.
   checking, matching the paper's computation scope. Whole-process execution is
   also retained.
 
-The egraph-only samples are diagnostics, not an additional preparation charge.
+The separate egraph measurements are not added to the preparation time.
 Identical plans share compilation/execution observations, recorded as aliases.
 For repeated use, preparation plus N executions is an amortization estimate.
 
