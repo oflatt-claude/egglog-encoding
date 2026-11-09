@@ -70,6 +70,8 @@ unions neither pair of inputs. No rule propagates output disequality downward,
 and different constructor names imply no disjointness. Unmarked constructors
 generate no structural rules. Native primitive fields use native `!=` as
 positive evidence; containers and nonunionable equality sorts cannot be marked.
+For a marked unary constructor `Num : i64 → Term`, n distinct inputs can generate
+n(n − 1) ordered disequalities. The pass materializes this evidence eagerly.
 
 The pass saturates its private rules after each user run, including runs nested
 in sequences, repetitions, and saturations. It also closes pending top-level
