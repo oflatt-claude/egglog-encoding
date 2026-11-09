@@ -154,6 +154,7 @@ def run(args: argparse.Namespace, *, collected: tuple[dict[str, Any], dict[str, 
         "builds": builds,
         "validation": validation,
         "execution_aliases": aliases,
+        "execution_observations": rows,
         "accounted_pipeline": preparation_costs(plans, builds, aliases),
         "execution": {
             label: {
@@ -166,7 +167,8 @@ def run(args: argparse.Namespace, *, collected: tuple[dict[str, Any], dict[str, 
             "Execution reports computation time separately from whole-process time including loading/sorting. "
             "accounted_pipeline separates optimization/generation and compilation, "
             "with one observation per preparation phase. Its phase sum is not a measured end-to-end runtime. "
-            "Generation includes query export, optimization and code generation. Identical plans reuse compilation "
+            "Generation includes query export, frozen-input validation, optimization and code generation. "
+            "Identical plans reuse compilation "
             "and execution observations, charged in full. "
             "Original logical optimization is included in its code-generation phase. Independent validation, "
             "tool builds are excluded for both. Separate optimizer-only benchmark "

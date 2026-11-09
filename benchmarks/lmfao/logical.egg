@@ -1,7 +1,8 @@
 ;;; Aggregate queries, directional views, and shared aggregate columns.
 ;;; Schema regions are query-independent orientations of a fixed join tree.
 (sort U)
-(constructor Lambda (U U) U :binder 0)
+(constructor V (Var) U)
+(constructor Lambda (Var U) U :binder 0)
 (constructor Mult (U U) U)
 (constructor Get (U U) U)
 (constructor Symbol (String) U)
@@ -56,7 +57,7 @@
 
 ;;; Nested bag sums lower to directional views.
 ;;; The generator supplies unoptimized join traversals, never selected views.
-(constructor Reduce (U U U) U :binder 1)
+(constructor Reduce (U Var U) U :binder 1)
 (constructor Scan (U) U)
 (constructor Lookup (U U U) U) ; region, separator, parent row
 (constructor Product (U U) U)
@@ -94,8 +95,8 @@
 (constructor FunctionInfo (U U U) U) ; relation, function ID, weight vector
 (constructor EmptyParts (U) U)
 (constructor ScopedBody (U U) U)
-(constructor BuildRoot (U U U) U :binder 1)
-(constructor BuildChild (U U U U U) U :binder 3)
+(constructor BuildRoot (U Var U) U :binder 1)
+(constructor BuildChild (U U U Var U) U :binder 3)
 (constructor FinishRoot (U U U U U U) U)
 (constructor FinishChild (U U U U U U U U) U)
 (constructor ShareRoot (U U U U U U) U)
@@ -219,16 +220,16 @@
 ;;; The intermediate constructors retain the sum's meaning while requesting
 ;;; translation and checking that every neighboring aggregate was derived.
 (rewrite (Reduce (Scan region) $row body)
-  (BuildRoot region $row (ScopedBody body (Translate region $row body)))
+  (BuildRoot region $row (ScopedBody body (Translate region (V $row) body)))
   :when ((free-names-are body $row)))
 (rewrite (Reduce (Scan region) $row body)
-  (BuildRoot region $row (ScopedBody body (Translate region $row body)))
+  (BuildRoot region $row (ScopedBody body (Translate region (V $row) body)))
   :when ((free-names-are body)))
 (rewrite (Reduce (Lookup region separator parent) $row body)
-  (BuildChild region separator parent $row (ScopedBody body (Translate region $row body)))
+  (BuildChild region separator parent $row (ScopedBody body (Translate region (V $row) body)))
   :when ((free-names-are body $row)))
 (rewrite (Reduce (Lookup region separator parent) $row body)
-  (BuildChild region separator parent $row (ScopedBody body (Translate region $row body)))
+  (BuildChild region separator parent $row (ScopedBody body (Translate region (V $row) body)))
   :when ((free-names-are body)))
 (rewrite (BuildRoot region $row (ScopedBody body (Parts keys weights local kids)))
   (FinishRoot region keys weights local (Gather children kids) (Ready (Gather children kids)))

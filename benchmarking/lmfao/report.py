@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from scipy import stats
+
+from benchmarking.reports.analysis import _ratio_estimate, _sample_estimate
+
 from . import model
 
 
@@ -23,6 +27,29 @@ def preparation_costs(plans: dict[str, Any], builds: dict[str, Any], aliases: di
     return result
 
 
+def interval(estimate: dict[str, Any], digits: int = 3) -> str:
+    point, low, high = (estimate[k] for k in ("point", "ci_low", "ci_high"))
+    if point is None:
+        return "—"
+    result = f"{point:.{digits}f}"
+    return result if low is None else f"{result} [{low:.{digits}f}, {high:.{digits}f}]"
+
+
+def execution_ratios(report: dict[str, Any]) -> dict[str, Any]:
+    """Use the paper harness's independent Fieller intervals for time ratios."""
+    samples = {label: item["computation_seconds"]["values"] for label, item in report["execution"].items()}
+    result = {"original": {"point": 1.0, "ci_low": None, "ci_high": None}}
+    for label, values in samples.items():
+        if label == "original":
+            continue
+        n = min(len(values), len(samples["original"]))
+        critical = float(stats.t.ppf(0.975, n - 1)) if n > 1 else None
+        baseline = _sample_estimate(samples["original"], None, critical)
+        candidate = _sample_estimate(values, None, critical)
+        result[label] = _ratio_estimate(baseline, candidate, critical).estimate._asdict()
+    return result
+
+
 def comparison_rows(report: dict[str, Any]) -> list[list[str]]:
     rows = []
     names = {
@@ -31,12 +58,13 @@ def comparison_rows(report: dict[str, Any]) -> list[list[str]]:
         "slotted": "Slotted egglog",
         "debruijn": "Ordinary egglog (de Bruijn)",
     }
+    ratios = execution_ratios(report)
     for label, name in names.items():
         optimization = report["optimizer"].get(label, {})
         timing = optimization.get("process_seconds")
-        runtime = f"{timing['median_seconds']:.3f}" if timing else "—"
-        memory = optimization.get("max_rss_bytes")
-        rss = f"{memory / 1024**2:.1f}" if memory is not None else "—"
+        runtime = interval(timing["mean"]) if timing else "—"
+        memory = optimization.get("peak_rss_mib")
+        rss = interval(memory["mean"], 1) if memory else "—"
         if label not in report["accounted_pipeline"]:
             failures = sorted({row["status"] for row in optimization.get("failures", [])})
             reason = (
@@ -50,17 +78,14 @@ def comparison_rows(report: dict[str, Any]) -> list[list[str]]:
                     "—",
                     "—",
                     "—",
-                    "—",
                     f"{optimization.get('completed_samples', 0)} completed, "
                     f"{len(optimization.get('failures', []))} failed",
                 ]
             )
             continue
         preparation = report["accounted_pipeline"][label]
-        timing = report["execution"][preparation["execution_label"]]["computation_seconds"]
-        execution = timing["median_seconds"]
-        egraph_samples = optimization.get("completed_samples", "—")
-        plan = report["plan_summaries"][label]
+        executed = preparation["execution_label"]
+        samples = report["execution"][executed]["computation_seconds"]["samples"]
         rows.append(
             [
                 name,
@@ -68,9 +93,8 @@ def comparison_rows(report: dict[str, Any]) -> list[list[str]]:
                 rss,
                 f"{preparation['optimization_and_generation_seconds']:.3f}",
                 f"{preparation['compilation_seconds']:.3f}",
-                f"{execution:.4f}",
-                f"{plan['views']} / {plan['aggregate_columns']}",
-                f"{egraph_samples} egraph / {timing['samples']} execution",
+                interval(ratios[executed]),
+                f"{optimization.get('completed_samples', '—')} egraph / {samples} execution",
             ]
         )
     return rows
@@ -79,10 +103,12 @@ def comparison_rows(report: dict[str, Any]) -> list[list[str]]:
 def comparison_caption(report: dict[str, Any]) -> str:
     limit = report["optimizer_memory_limit_bytes"]
     bound = f"{limit / 1024**3:g} GiB allocator/address-space cap" if limit is not None else "no memory cap"
+    baseline = interval(report["execution"]["original"]["computation_seconds"]["mean"], 4)
     lines = [
         "The original 140-query Favorita covariance workload on the public 2M-Sales-row fragment, using the "
         "same pinned frontend and corrected C++ backend. This replicates the workload and pipeline, not the "
-        "paper's full 127M-row experiment. The paper-heuristic control uses our implementation of its section 3.3 "
+        "paper's full dataset (127M joined tuples). The paper-heuristic control uses our implementation of "
+        "section 3.3's "
         "coverage heuristic; it is distinct from the roots shipped in the artifact.",
         "",
         "Both egraph modes use hoisting, independent-loop interchange and tuple fusion on the same nested bag sums. "
@@ -92,11 +118,17 @@ def comparison_caption(report: dict[str, Any]) -> str:
         "A resource failure is reported as a failure, never as an execution speedup.",
         "",
         "The sample counts show completed egraph and execution runs; collection stops after a resource failure. "
-        "Egraph time and peak RSS are medians of separate optimizer processes, including parsing and rewriting "
-        "but excluding extraction. Optimization + generation is one measured preparation run, "
-        "including query export, translation, rewriting, DAG extraction and code generation. "
-        "C++ compilation is separate. "
-        "Computation is the median of warm runs, excluding loading, sorting and checking, as in the paper's "
+        "Rewrite time and peak RSS are means with 95% Student-t confidence intervals from separate processes, "
+        "including parsing and rewriting "
+        "but excluding extraction. These optimizer rows have proofs off; proof replay is measured separately. "
+        "Plan + generate is one measured preparation run, "
+        "including query export, input validation, rewriting, DAG extraction and code generation. "
+        "It overlaps the separately sampled rewrite work: these columns must not be added. "
+        "C++ compilation is separate; neither preparation column has repetitions or a confidence interval. "
+        "Query time is the mean warm computation time divided by the configured-roots LMFAO mean (lower is better), "
+        "with independent 95% Fieller intervals. Undefined intervals and single-sample intervals are omitted. "
+        f"The measured baseline is {baseline} seconds. "
+        "Computation excludes loading, sorting and checking, as in the paper's "
         "timing scope. Identical selected plans reuse compilation/execution observations, charged in full; "
         "pipeline.json records those aliases, samples, hashes and all output checks.",
     ]
@@ -105,9 +137,9 @@ def comparison_caption(report: dict[str, Any]) -> str:
 
 def comparison_markdown(report: dict[str, Any]) -> str:
     lines = [
-        "| Method | Egraph (s) | Peak RSS (MiB) | Optimization + generation (s) | "
-        "C++ compilation (s) | Computation (s) | Views / columns | Samples |",
-        "|---|---:|---:|---:|---:|---:|---:|---|",
+        "| Method | Rewrite (s) | Peak RSS (MiB) | Plan + generate (s) | "
+        "C++ compilation (s) | Query time / LMFAO | Samples |",
+        "|---|---:|---:|---:|---:|---:|---|",
         *("| " + " | ".join(row) + " |" for row in comparison_rows(report)),
         "",
         comparison_caption(report),
@@ -141,14 +173,16 @@ def paper_results(report: dict[str, Any]) -> dict[str, str]:
     table = [
         "% GENERATED: ./bench.py figures lmfao; provenance in lmfao.results.json",
         r"\begingroup\scriptsize\setlength{\tabcolsep}{3pt}",
-        r"\begin{tabular}{lrrrrrrl}",
-        r"Method & \shortstack{Egraph\\(s)} & \shortstack{Peak RSS\\(MiB)} & "
-        r"\shortstack{Optimize +\\generate (s)} & \shortstack{C++ compile\\(s)} & "
-        r"\shortstack{Compute\\(s)} & \shortstack{Views /\\columns} & \shortstack{Samples\\egraph / exec.} \\",
+        r"\begin{tabular}{lrrrrrl}",
+        r"Method & \shortstack{Rewrite\\(s)} & \shortstack{Peak RSS\\(MiB)} & "
+        r"\shortstack{Plan +\\generate (s)} & \shortstack{C++ compile\\(s)} & "
+        r"\shortstack{Query time /\\LMFAO} & \shortstack{Samples\\egraph / exec.} \\",
         r"\hline",
     ]
     for row in comparison_rows(report):
         cells = list(map(tex, row))
+        for i in (1, 2, 5):
+            cells[i] = r"\shortstack{" + cells[i].replace(" [", r"\\{}[") + "}"
         cells[0] = r"\shortstack[l]{" + tex(row[0]).replace(" (", r"\\(") + "}"
         cells[-1] = (
             r"\shortstack[l]{"

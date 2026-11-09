@@ -134,6 +134,7 @@ Treatments map directly to engine modes:
 | `egg-proof-testing` | current egg with extraction and explanation checking |
 | `egg-de`, `egg-ee`, `egg-nee`, `egg-oee` | original parameter-analysis drivers with the named encoding, without proofs |
 | `slotted`, `slotted-no-aliasing` | encoded slotted e-graphs with multipattern or nested compatibility matching |
+| `slotted-proof-testing` | generate, translate and check proofs of ground slotted equality claims |
 | `slotted-ref-multi`, `slotted-ref-nested-snapshot` | native slotted driver with matched snapshot substitution policies |
 | `slotted-ref-nested` | native slotted driver with syntactic substitution for the SDQL timing baseline |
 

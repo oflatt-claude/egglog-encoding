@@ -112,13 +112,11 @@ def optimize(config: dict[str, Any], source: Path, destination: Path) -> None:
     definition = model.Workload.read(source)
     if definition.document != model.WORKLOAD.document:
         raise ValueError("LMFAO frontend differs from the frozen benchmark workload; regenerate explicitly")
-    from .program import program
+    from .program import benchmark_input
 
-    mode, input_path = config["treatment"], out / "input.egg"
-    input_path.write_text(
-        program("slotted" if mode == "slotted" else "debruijn", definition=definition, rounds=config["rewrite_rounds"])
-    )
-    phases["translation"] = time.perf_counter() - start
+    mode = config["treatment"]
+    input_path = benchmark_input("slotted" if mode == "slotted" else "debruijn", out, config["rewrite_rounds"])
+    phases["input_preparation"] = time.perf_counter() - start
     args, env = native_memory_command(
         [config["extractor"], mode, str(input_path), str(destination), str(config["dag_timeout"])],
         os.environ,

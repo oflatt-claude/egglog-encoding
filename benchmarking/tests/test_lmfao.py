@@ -125,8 +125,8 @@ def test_optimizer_report_keeps_failures_and_timing_scopes() -> None:
     failure = make_record(1, started_at="2026-11-06T00:00:01Z", status="timed-out", timeout_sec=60)
     result = summarize_optimizer([good, failure], 64, 3, "missing 1 row(s)")
     assert result["rewrite_round_budget"] == 64 and result["completed_samples"] == 1
-    assert result["process_seconds"]["median_seconds"] == 2
-    assert result["ruleset_work_seconds"]["median_seconds"] == 0.8
+    assert result["process_seconds"]["mean"]["point"] == 2
+    assert result["ruleset_work_seconds"]["mean"]["point"] == 0.8
     assert result["failures"] == [failure] and result["issue"]
 
 
@@ -279,7 +279,7 @@ def test_pipeline_charges_optimization_once_and_excludes_validation_and_diagnost
         spend(999)
         return documents, {
             "optimizer": {
-                label: {"process_seconds": {"median_seconds": 999}, "completed_samples": 2} for label in documents
+                label: {"process_seconds": seconds_summary([999, 999]), "completed_samples": 2} for label in documents
             },
             "rewrite_round_budget": 192,
             "optimizer_memory_limit_bytes": 16 * 1024**3,
@@ -371,7 +371,7 @@ def test_pipeline_charges_optimization_once_and_excludes_validation_and_diagnost
     assert "not a measured end-to-end" in report["phase_scope"]
     comparison = (output / "comparison.md").read_text()
     assert "Slotted egglog" in comparison and "Ordinary egglog (de Bruijn)" in comparison
-    assert "27.000 | 40.000 | 0.2750" in comparison
+    assert "27.000 | 40.000 | 0.524 [" in comparison
     assert "2 egraph / 2 execution" in comparison
     from benchmarking.lmfao.report import paper_results
 
@@ -379,7 +379,7 @@ def test_pipeline_charges_optimization_once_and_excludes_validation_and_diagnost
     assert len(published) == 4
     assert json.loads(published["lmfao.results.json"]) == report
     table = published["lmfao.table.tex"]
-    assert "27.000 & 40.000 & 0.2750" in table
+    assert r"27.000 & 40.000 & \shortstack{0.524" in table
     assert published["lmfao.md"] == comparison
     # A failed extraction must stop before publishing any paper artifacts.
     report["optimizer"]["slotted"]["pipeline_issue"] = "extractor failed"
@@ -407,10 +407,51 @@ def test_report_distinguishes_replication_and_resource_failures() -> None:
             "optimizer": {"debruijn": {"failures": [{"status": "memory-limit"}]}},
             "optimizer_memory_limit_bytes": 16 * 1024**3,
             "accounted_pipeline": {},
+            "execution": {"original": {"computation_seconds": seconds_summary([1])}},
         }
     )
     assert "LMFAO configured roots" in result
     assert "LMFAO + paper root heuristic" in result
     assert "Ordinary egglog (de Bruijn) (memory-limit)" in result
-    assert "not the paper's full 127M-row experiment" in result
+    assert "not the paper's full dataset (127M joined tuples)" in result
     assert "our implementation" in result and "allocator/address-space cap" in result
+
+
+def test_frozen_inputs_match_generator_and_collection_does_not_regenerate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from benchmarking.lmfao import program
+    from benchmarking.lmfao.optimizer import optimizer_inputs
+
+    for mode in ("slotted", "debruijn"):
+        assert (program.INPUTS / f"{mode}.egg").read_text() == (
+            ";;; GENERATED: python -m benchmarking.lmfao.program\n" + program.program(mode)
+        )
+    monkeypatch.setattr(program, "program", lambda *a, **kw: pytest.fail("collection regenerated input"))
+    files = optimizer_inputs(tmp_path, program.DEFAULT_ROUNDS)
+    assert {f.absolute_path.parent for f in files.values()} == {program.INPUTS}
+    assert not list(tmp_path.iterdir())
+
+
+def test_lmfao_intervals_use_sample_means_and_fieller_ratios() -> None:
+    from scipy import stats
+
+    from benchmarking.lmfao.report import execution_ratios
+    from benchmarking.reports.analysis import _ratio_estimate, _sample_estimate
+
+    a, b = [1.0, 2.0, 2.5], [0.6, 0.8, 0.9]
+    critical = float(stats.t.ppf(0.975, 2))
+    result = execution_ratios(
+        {
+            "execution": {
+                label: {"computation_seconds": seconds_summary(values)}
+                for label, values in [("original", a), ("slotted", b)]
+            }
+        }
+    )
+    expected = _ratio_estimate(_sample_estimate(a, None, critical), _sample_estimate(b, None, critical), critical)
+    assert result["slotted"] == expected.estimate._asdict()
+    assert result["original"] == {"point": 1, "ci_low": None, "ci_high": None}
+    single = seconds_summary([2])
+    assert single is not None
+    assert single["mean"] == {"point": 2, "ci_low": None, "ci_high": None}

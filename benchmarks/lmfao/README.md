@@ -6,7 +6,10 @@ is the artifact's 140 covariance queries over six
 Favorita relations: counts, sums, squares and pairwise products, with categorical
 features as grouping keys. We run the public fragment with 2,000,000 Sales rows.
 This reproduces the workload and compiler pipeline, not the paper's full
-127M-row experiment or model training.
+dataset (127M joined tuples) or model training. It corresponds to **Favorita / Covar Matrix /
+LMFAO** in Table 3, not the separate Count experiment. We chose it because the
+public artifact supplies its data and compiler pipeline, and the related queries
+exercise aggregate sharing. We have not compared all of the paper's workloads.
 
 ```text
 LMFAO query generation
@@ -21,6 +24,19 @@ LMFAO query generation
 and translates each query into nested bag sums for the six roots of its supplied
 join tree. It supplies schema metadata and unoptimized traversals, never selected
 views. Arbitrary join trees are outside the search space.
+
+The normal harness reads the checked-in [`inputs/slotted.egg`](inputs/slotted.egg)
+and [`inputs/debruijn.egg`](inputs/debruijn.egg). Regenerate them explicitly from
+`workload.json` and `logical.egg` with:
+
+```sh
+uv run --locked python -m benchmarking.lmfao.program
+uv run --locked python -m benchmarking.lmfao.program --check
+```
+
+The live LMFAO bridge checks that its exported workload matches that snapshot
+before using the same static input. Normal collection does not regenerate inputs.
+An explicit nondefault `--rewrite-rounds` still generates an experimental input.
 
 The rules optimize those sums and lower them to executable views:
 
@@ -117,16 +133,23 @@ and reversing method order after correctness checking has warmed each program.
 The C++ preparation and execution records are case-specific outputs; they do not
 use the shared egraph cache or its interactive reports.
 
-- **Egraph time/RSS:** separate processes measuring parsing and rewriting,
+- **Rewrite time/RSS:** separate processes measuring parsing and rewriting,
   excluding DAG extraction.
-- **Optimization + generation:** the full preparation run. For egraph plans this
-  includes LMFAO query export, translation, rewriting, DAG extraction, and a
+- **Plan + generate:** the full preparation run. For egraph plans this
+  includes LMFAO query export, input validation, rewriting, DAG extraction, and a
   second LMFAO invocation that imports the plan and generates C++. Both frontend
-  invocations are charged. The controls use one normal LMFAO invocation.
+  invocations are charged. The controls use one normal LMFAO invocation. This
+  includes another rewrite run; do not add it to the separate rewrite measurement.
 - **C++ compilation:** one separate observation per distinct program.
-- **Computation:** median of warm executions, excluding loading/sorting and
-  checking, matching the paper's computation scope. Whole-process execution is
-  also retained.
+- **Query time / LMFAO:** mean warm computation time divided by the configured-roots
+  LMFAO mean; lower is better. Computation excludes loading/sorting and checking,
+  matching the paper's scope. Absolute times and whole-process execution remain
+  in the results JSON.
+
+Repeated time/RSS measurements use 95% Student-t intervals. Execution ratios use
+independent Fieller intervals, as in the other paper reports. With one sample,
+only the point estimate is shown. Planning/generation and C++ compilation each
+have one observation and no confidence interval.
 
 The separate egraph measurements are not added to the preparation time.
 Identical plans share compilation/execution observations, recorded as aliases.
@@ -191,3 +214,28 @@ both representations with duplicates, fractional/negative weights and empty
 relations. Controls require hoisting for executable lowering and fusion for
 shared producers. Solver tests compare DAG choices with exhaustive enumeration;
 backend tests cover timeout cleanup, patch drift and provenance rejection.
+
+## Proof replay
+
+Slotted proof checking uses the shared `slotted-proof-testing` treatment, which
+passes `--slotted --proofs`. Unlike ordinary egglog's recording-only `--proofs`,
+that combination translates and checks ground source equality claims. An input
+without equality checks does not certify a plan.
+
+After extracting a plan, produce a self-contained replay with one ground equality
+for the entire output batch and run it through the normal harness:
+
+```sh
+uv run --locked python -m benchmarking.lmfao.program \
+  --proof-plan figures/output/eval/lmfao/slotted/plan.json --output /tmp/lmfao-proof.egg
+./bench.py /tmp/lmfao-proof.egg --compare-treatment slotted \
+  --treatment slotted-proof-testing --rounds 3 --report /tmp/lmfao-proof.jsonl
+```
+
+The check equates the original batch with the selected aggregate computations.
+It is appended after rewriting and asserts no new equalities. One batch claim
+avoids copying the full proof context for each query. These proofs
+cover the logical query transformations; backend code generation and physical
+sharing are still checked by executing all outputs against independent answers.
+Proof replay reruns rewriting with proof instrumentation, extracts source proofs,
+and checks them. It is separate from DAG extraction and C++ compilation.

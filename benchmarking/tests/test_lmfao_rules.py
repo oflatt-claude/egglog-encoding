@@ -106,3 +106,27 @@ def test_fusion_derives_a_cheaper_shared_producer(mode: str, extractor_binary: P
             assert any(v["origin"] == oil and len(v["aggregates"]) == 2 for v in plan["views"])
         costs.append(json.loads((directory / "extraction.json").read_text())["estimated_cost"])
     assert costs[1] < costs[0]
+
+
+def test_plan_replay_checks_actual_query_equalities(extractor_binary: Path, tmp_path: Path) -> None:
+    queries = [model.Query(), model.Query((), ("oilprize",))]
+    source, destination = tmp_path / "input.egg", tmp_path / "plan.json"
+    original = program.program(queries=queries)
+    source.write_text(original)
+    command, env = native_memory_command(
+        [str(extractor_binary), "slotted", str(source), str(destination), "10"], os.environ
+    )
+    subprocess.run(command, env=env, check=True, timeout=120)
+    plan = model.read_plan(destination)
+    claims = program.plan_checks(plan, queries)
+    assert claims.count("(check (= input selected_batch))") == 1
+    assert '(Symbol "q0")' in claims and '(Symbol "q1")' in claims
+    assert "(union " not in claims
+    source.write_text(original + claims)
+    subprocess.run(command, env=env, check=True, timeout=120)
+    # A different kernel must not pass merely because witness terms are inserted.
+    source.write_text(
+        original + "(constructor InvalidView (U U U U U) U)\n" + claims.replace("(ComputeView", "(InvalidView")
+    )
+    result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=120)
+    assert result.returncode != 0

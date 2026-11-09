@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import statistics
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -12,10 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+from scipy import stats
 
 from benchmarking.collection import BenchmarkRequest, collect, plan_collection, resolve_requests
 from benchmarking.engines import Treatment
 from benchmarking.models import BenchmarkEndpoint, EndpointRequest, FileSpec, ResolvedTarget, TargetRequest
+from benchmarking.reports.analysis import _sample_estimate
 from benchmarking.reports.store import ReportRecord, ReportStore, select_observations
 from benchmarking.targets import parse_target, sha256_file
 from benchmarking.workloads import resolve_files
@@ -34,14 +35,16 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
-def seconds_summary(values: Iterable[float]) -> dict[str, float | int] | None:
+def seconds_summary(values: Iterable[float]) -> dict[str, Any] | None:
     samples = list(values)
     if not samples:
         return None
+    estimate = _sample_estimate(
+        samples, None, float(stats.t.ppf(0.975, len(samples) - 1)) if len(samples) > 1 else None
+    )
     return {
-        "median_seconds": statistics.median(samples),
-        "min_seconds": min(samples),
-        "max_seconds": max(samples),
+        "values": samples,
+        "mean": estimate.estimate._asdict(),
         "samples": len(samples),
     }
 
@@ -68,16 +71,11 @@ def summarize_optimizer(rows: list[ReportRecord], budget: int, requested: int, i
 
 
 def optimizer_inputs(output: Path, rewrite_rounds: int) -> dict[str, FileSpec]:
-    """Translate the same frontend workload for both benchmark treatments."""
-    from .program import program
+    """Resolve the checked-in inputs through the normal workload harness."""
+    from .program import benchmark_input
 
     output.mkdir(parents=True, exist_ok=True)
-    files = {}
-    for mode in MODES:
-        path = output / f"{mode}.egg"
-        path.write_text(program(mode, rounds=rewrite_rounds))
-        files[mode] = resolve_files([str(path)], ROOT)[0]
-    return files
+    return {mode: resolve_files([str(benchmark_input(mode, output, rewrite_rounds))], ROOT)[0] for mode in MODES}
 
 
 def optimizer_requests(
@@ -151,7 +149,7 @@ def optimizer_report(
         memory = [r["max_rss_bytes"] for r in rows if r["status"] == "success" and r["max_rss_bytes"] is not None]
         result.update(
             input_sha256=files[mode].sha256,
-            max_rss_bytes=statistics.median(memory) if memory else None,
+            peak_rss_mib=seconds_summary(v / 1024**2 for v in memory),
         )
         report["optimizer"][label] = result
         if selection.issue is None and all(r["status"] == "success" for r in rows) and len(rows) == samples:

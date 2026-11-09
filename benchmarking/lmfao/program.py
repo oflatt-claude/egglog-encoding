@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+from pathlib import Path
 from typing import Any
 
 from benchmarks.reproduction.slotted import reference
@@ -11,6 +13,7 @@ from . import model
 
 RULES = model.FIXTURES / "logical.egg"
 DEFAULT_ROUNDS = 192
+INPUTS = model.FIXTURES / "inputs"
 SOURCE_FIELDS = {
     "Reduce": [0, 1],
     "Scan": [],
@@ -119,7 +122,7 @@ def input_terms(
                 continue
             name, power = functions[j]
             row = f"$q{i}_function{j}"
-            value: Any = ["Get", row, symbol(name)]
+            value: Any = ["Get", ["V", row], symbol(name)]
             if power == 2:
                 value = ["Mult", value, value]
             weights.append(["Scalar", symbol(owner[name]), ["Lambda", row, value]])
@@ -130,7 +133,9 @@ def input_terms(
 
 def debruijn(term: Any, scope: tuple[str, ...] = ()) -> Any:
     if isinstance(term, str):
-        return ["Var", str(scope[::-1].index(term))] if term.startswith("$") else term
+        return term
+    if term[0] == "V":
+        return ["Var", str(scope[::-1].index(term[1]))]
     if term[0] in ("Reduce", "Lambda"):
         index = 2 if term[0] == "Reduce" else 1
         return [term[0], *[debruijn(v, scope) for v in term[1:index]], debruijn(term[-1], (*scope, term[index]))]
@@ -146,6 +151,8 @@ def ordinary_rules(forms: list[Any]) -> list[Any]:
     result = []
     for form in forms:
         if form[0] == "constructor":
+            if form[1] == "V":
+                continue
             if ":binder" in form:
                 if form[1] in BINDERS:
                     form = form.copy()
@@ -162,7 +169,10 @@ def ordinary_rules(forms: list[Any]) -> list[Any]:
 
             def erase(t: Any) -> Any:
                 if isinstance(t, str):
-                    return ["Var", "0"] if t == "$row" else t
+                    return t
+                if t and t[0] == "V":
+                    assert t[1] == "$row"
+                    return ["Var", "0"]
                 if t and t[0] == "free-names-are":
                     return ["=", ["Within", erase(t[1]), "1" if len(t) == 3 else "0"], "true"]
                 if t and isinstance(t[0], str) and t[0] in BINDERS:
@@ -289,7 +299,7 @@ def program(
         )
     for i, (attr, power) in enumerate(definition.functions):
         row = "$kernel"
-        body: Any = ["Get", row, symbol(attr)]
+        body: Any = ["Get", ["V", row], symbol(attr)]
         if power == 2:
             body = ["Mult", body, body]
         weights = [
@@ -327,16 +337,16 @@ def program(
                 domain = (
                     ["Scan", region_global(region)]
                     if parent is None
-                    else ["Lookup", region_global(region), separator, variables[parent]]
+                    else ["Lookup", region_global(region), separator, ["V", variables[parent]]]
                 )
                 traversal.append((domain, row))
                 for child, sep in children(region):
                     visit(child, table, sep)
 
             visit(orientation[2])
-            factors = [["GroupKey", variables[owner[a]], symbol(a)] for a in query.groups]
+            factors = [["GroupKey", ["V", variables[owner[a]]], symbol(a)] for a in query.groups]
             factors += [
-                ["FunctionValue", variables[owner[a]], symbol(f"f{i}")]
+                ["FunctionValue", ["V", variables[owner[a]]], symbol(f"f{i}")]
                 for i, (a, p) in enumerate(definition.functions)
                 if (a, p) in requested
             ]
@@ -366,3 +376,104 @@ def program(
     forms += [["let", f"metadata{i}", fact] for i, fact in enumerate(facts)]
     forms += [["run", str(rounds)]]
     return "\n".join(reference.render(f) for f in forms) + "\n"
+
+
+def plan_checks(plan: dict[str, Any], queries: list[model.Query] | None = None) -> str:
+    """One ground batch equality for the selected aggregate computations.
+
+    Append after rewriting. These declarations construct terms, never assert
+    equalities. The proof checker must justify the query-to-view connections.
+    Backend code generation and physical sharing are outside these claims.
+    """
+    definition = model.WORKLOAD
+    queries = definition.queries if queries is None else queries
+    _, orientations = input_terms(queries)
+    tables, attrs = list(definition.relations), [a for a, _ in definition.attributes]
+    aw, fw = 1 << (len(attrs) - 1).bit_length(), 1 << (len(definition.functions) - 1).bit_length()
+    regions: dict[tuple[str, str], Any] = {}
+
+    def visit(region: Any) -> None:
+        regions[json.loads(region[1][1]), json.loads(region[2][1])] = region
+        children = region[-1]
+        while children[0] == "Cons":
+            visit(children[1][1])
+            children = children[2]
+
+    for orientation in orientations:
+        visit(orientation[2])
+
+    def vector(indices: set[int]) -> Any:
+        values: list[Any] = [["WeightOne"] for _ in range(fw)]
+        for i in indices:
+            attr, power = definition.functions[i]
+            owner = next(t for t in tables if attr in definition.relations[t])
+            value: Any = ["Get", ["V", "$row"], symbol(attr)]
+            if power == 2:
+                value = ["Mult", value, value]
+            values[i] = ["Scalar", symbol(owner), ["Lambda", "$row", value]]
+        return tree("Weights", values)
+
+    weights: dict[tuple[int, int], set[int]] = {}
+    forms = []
+    for i, view in enumerate(plan["views"]):
+        region = regions[tables[view["origin"]], tables[view["destination"]]]
+        for j, aggregate in enumerate(view["aggregates"]):
+            local = set(aggregate["functions"])
+            requested = local.union(*(weights[x, y] for x, y in aggregate["incoming"]))
+            weights[i, j] = requested
+            term = [
+                "ComputeView",
+                region,
+                mask(set(view["keys"]), aw),
+                vector(requested),
+                vector(local),
+                linked([f"witness_{x}_{y}" for x, y in aggregate["incoming"]]),
+            ]
+            forms.append(["let", f"witness_{i}_{j}", term])
+    outputs = [
+        ["Output", symbol(f"q{i}"), f"witness_{output['view']}_{output['aggregate']}"]
+        for i, (_, output) in enumerate(zip(queries, plan["outputs"], strict=True))
+    ]
+    forms.append(["let", "selected_batch", ["Program", balanced("Pair", outputs)]])
+    forms.append(["check", ["=", "input", "selected_batch"]])
+    return "\n".join(reference.render(f) for f in forms) + "\n"
+
+
+def benchmark_input(mode: str, directory: Path, rounds: int = DEFAULT_ROUNDS) -> Path:
+    """Use the frozen paper input; explicitly different budgets are experiments."""
+    if rounds == DEFAULT_ROUNDS:
+        return INPUTS / f"{mode}.egg"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{mode}.egg"
+    path.write_text(program(mode, rounds=rounds))
+    return path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Regenerate the frozen LMFAO benchmark inputs")
+    parser.add_argument("--check", action="store_true", help="fail if checked-in inputs need regeneration")
+    parser.add_argument(
+        "--proof-plan", type=Path, help="emit a slotted replay with equality checks for this selected plan"
+    )
+    parser.add_argument("--output", type=Path, help="destination for --proof-plan")
+    args = parser.parse_args()
+    if args.proof_plan is not None:
+        if args.output is None or args.check:
+            parser.error("--proof-plan requires --output and cannot be combined with --check")
+        args.output.write_text((INPUTS / "slotted.egg").read_text() + plan_checks(model.read_plan(args.proof_plan)))
+        return
+    if args.output is not None:
+        parser.error("--output requires --proof-plan")
+    for mode in ("slotted", "debruijn"):
+        path = INPUTS / f"{mode}.egg"
+        source = ";;; GENERATED: python -m benchmarking.lmfao.program\n" + program(mode)
+        if args.check:
+            if path.read_text() != source:
+                raise SystemExit(f"stale generated input: {path}")
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source)
+
+
+if __name__ == "__main__":
+    main()
