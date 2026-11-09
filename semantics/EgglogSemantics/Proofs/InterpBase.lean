@@ -101,13 +101,6 @@ theorem mem_toDatabase_eqs_of_closed {d : FDatabase} (he : d.Closed)
 @[simp] theorem toDatabase_empty : empty.toDatabase = Database.empty := by
   ext <;> simp [empty, toDatabase, Database.empty]
 
-theorem Closed.addTerms {d : FDatabase} (he : d.Closed) :
-    ∀ ts : List Term, (d.addTerms ts).Closed := by
-  intro ts
-  induction ts generalizing d with
-  | nil => exact he
-  | cons t ts ih => exact ih (he.addTerm t)
-
 theorem congr_of_assertions {d e : Database}
     (h : ∀ p ∈ d.eqs, Cong e p.1 p.2) {a b : Term} (hc : Cong d a b) : Cong e a b := by
   induction hc using Cong.rec (motive_2 := fun as bs _ => CongList e as bs) with
@@ -159,19 +152,6 @@ theorem meaning_addTerm {d e : Database} (h : d.SameMeaning e) (t : Term) (hX : 
     · exact .direct (Set.mem_insert _ _)
     · exact ((h.congr _ _).mpr (.direct hp)).mono (Database.Contained.addTerm t d)
 
-theorem meaning_addTerms {d e : Database} (h : d.SameMeaning e) (ts : List Term) (hX : d.subsumed = e.subsumed) :
-    (d.addTerms ts).SameMeaning (e.addTerms ts) := by
-  induction ts generalizing d e with
-  | nil => exact h
-  | cons t ts ih => exact ih (meaning_addTerm h t hX) hX
-
-theorem toDatabase_addTerms {d : FDatabase} (he : d.Closed) {ts : List Term} :
-    (d.addTerms ts).toDatabase.SameMeaning (d.toDatabase.addTerms ts) := by
-  induction ts generalizing d with
-  | nil => exact .refl _
-  | cons t ts ih =>
-    exact (ih (he.addTerm t)).trans (meaning_addTerms (toDatabase_addTerm he) ts rfl)
-
 theorem toDatabase_addEq {d : FDatabase} (he : d.Closed) {a b : Term} :
     (d.addEq a b).toDatabase.SameMeaning (d.toDatabase.addEq a b) := by
   refine Database.SameMeaning.of_congr (fun x y => ⟨congr_of_assertions ?_, congr_of_assertions ?_⟩) rfl
@@ -204,46 +184,7 @@ theorem wf_of_sameMeaning {d e : Database} (h : d.SameMeaning e) (he : e.WF) : d
   exact InferredFacts.infers_eq_of_isLit he
     (InferredFacts.congr_iff_infers.mp ((h.congr _ _).mp (.direct hp))) hl
 
-theorem WF.addTerm {d : FDatabase} (h : d.WF) (he : d.Closed) (t : Term) :
-    (d.addTerm t).WF := wf_of_sameMeaning (toDatabase_addTerm he) (Database.WF.addTerm h t)
-
-theorem WF.addEq {d : FDatabase} (h : d.WF) (he : d.Closed) (a b : Term)
-    (hl : a.isLit ∨ b.isLit → a = b) : (d.addEq a b).WF :=
-  wf_of_sameMeaning (toDatabase_addEq he) (Database.WF.addEq h a b hl)
-
-theorem WF.addTerms {d : FDatabase} (h : d.WF) (he : d.Closed) (ts : List Term) :
-    (d.addTerms ts).WF := wf_of_sameMeaning (toDatabase_addTerms he) (Database.WF.addTerms h ts)
-
 theorem empty_wf : empty.WF := by rw [WF, toDatabase_empty]; exact Database.WF.empty
-
-theorem toDatabase_consEq {d : FDatabase} {a b : Term} (ha : a ∈ d.terms) (hb : b ∈ d.terms) :
-    ({ d with eqs := ((a, b) :: d.eqs).dedup } : FDatabase).toDatabase
-      = { d.toDatabase with eqs := insert (a, b) d.toDatabase.eqs } := by
-  refine Database.ext ?_ rfl
-  ext p
-  simp only [toDatabase, Set.mem_union, Set.mem_setOf_eq, Set.mem_insert_iff, List.mem_dedup,
-    List.mem_cons]
-  constructor
-  · rintro (⟨heq, hm⟩ | ⟨rfl | hp, h₁, h₂⟩)
-    · exact Or.inr (Or.inl ⟨heq, hm⟩)
-    · exact Or.inl rfl
-    · exact Or.inr (Or.inr ⟨hp, h₁, h₂⟩)
-  · rintro (rfl | (⟨heq, hm⟩ | ⟨hp, h₁, h₂⟩))
-    · exact Or.inr ⟨Or.inl rfl, ha, hb⟩
-    · exact Or.inl ⟨heq, hm⟩
-    · exact Or.inr ⟨Or.inr hp, h₁, h₂⟩
-
-@[simp] theorem mem_terms_union {d₁ d₂ : FDatabase} {t : Term} :
-    t ∈ (d₁.union d₂).terms ↔ t ∈ d₁.terms ∨ t ∈ d₂.terms := by
-  simp [FDatabase.union, List.mem_dedup]
-
-@[simp] theorem mem_rows_union {d₁ d₂ : FDatabase} {r : Row} :
-    r ∈ (d₁.union d₂).rows ↔ r ∈ d₁.rows ∨ r ∈ d₂.rows := by
-  simp [FDatabase.union, List.mem_dedup]
-
-@[simp] theorem mem_eqs_union {d₁ d₂ : FDatabase} {p : Term × Term} :
-    p ∈ (d₁.union d₂).eqs ↔ p ∈ d₁.eqs ∨ p ∈ d₂.eqs := by
-  simp [FDatabase.union, List.mem_dedup]
 
 theorem coe_termsF {d : FDatabase} (hc : d.SubtermClosed) :
     ↑d.termsF = d.toDatabase.terms := by
@@ -366,17 +307,6 @@ theorem Env.lookup_canon {vars : List Var} {σ : Env} (hnd : vars.Nodup) {v : Va
       · simp [hlk]
       · rw [if_neg (fun hc : v = w => hnd.1 (hc ▸ hv)), ih hnd.2 hv]
 
-/-- Canonicalizing a substitution whose domain is a duplicate-free permutation of `vars`
-changes no lookup. This is what lets the enumerator emit one representative per
-`Env.Agree` class where the spec admits the whole class. -/
-theorem Env.agree_canon {vars : List Var} {σ : Env} (hnd : vars.Nodup)
-    (hperm : (Env.dom σ).Perm vars) : Env.Agree σ (Env.canon vars σ) := by
-  intro v
-  by_cases hv : v ∈ vars
-  · exact (Env.lookup_canon hnd hv).symm
-  · rw [Env.lookup_eq_none_iff.mpr fun hc => hv (hperm.mem_iff.mp hc),
-      Env.lookup_eq_none_iff.mpr fun hc => hv (Env.dom_canon_subset hc)]
-
 @[simp] theorem Query.freeVars_nil {σ : Env} : Query.freeVars [] σ = [] := rfl
 
 @[simp] theorem Query.freeVars_cons {p : Pattern} {ps : Query} {σ : Env} :
@@ -423,33 +353,6 @@ theorem Env.canon_canon {vars vars' : List Var} {σ : Env} (hsub : vars ⊆ vars
     | some t =>
       rw [Env.canon_cons_some (by rw [hl, hlk]), Env.canon_cons_some hlk, ih hs]
 
-mutual
-
-theorem Expr.eval_bound {σ : Env} {v : Var} : ∀ {e : Expr} {t : Term},
-    e.eval σ = some t → v ∈ e.vars → (Env.lookup v σ).isSome = true
-  | .lit _, _, _, hv => by simp [Expr.vars] at hv
-  | .var w, _, he, hv => by
-    obtain rfl : v = w := by simpa [Expr.vars] using hv
-    simp only [Expr.eval] at he
-    rw [he]; rfl
-  | .app f as, _, he, hv => by
-    obtain ⟨ts, ht, _⟩ := Option.map_eq_some_iff.mp he
-    exact Expr.evalList_bound ht hv
-  | .min a b, _, he, hv => by
-    obtain ⟨t, ht, he⟩ := Option.bind_eq_some_iff.mp he
-    obtain ⟨u, hu, _⟩ := Option.map_eq_some_iff.mp he
-    exact (List.mem_union_iff.mp hv).elim (Expr.eval_bound ht) (Expr.eval_bound hu)
-
-theorem Expr.evalList_bound {σ : Env} {v : Var} : ∀ {es : List Expr} {ts : List Term},
-    Expr.evalList es σ = some ts → v ∈ Expr.varsList es → (Env.lookup v σ).isSome = true
-  | [], _, _, hv => by simp [Expr.varsList] at hv
-  | e :: es, _, he, hv => by
-    obtain ⟨t, ht, he⟩ := Option.bind_eq_some_iff.mp he
-    obtain ⟨us, hus, _⟩ := Option.map_eq_some_iff.mp he
-    exact (List.mem_union_iff.mp hv).elim (Expr.eval_bound ht) (Expr.evalList_bound hus)
-
-end
-
 /-- The row index contains only applications held in the finite term list. -/
 structure FDatabase.IndexOk (d : FDatabase) : Prop where
   ctor : ∀ r ∈ d.rows, Term.app r.fn r.args ∈ d.terms
@@ -484,101 +387,8 @@ theorem witness_addTerm {d : FDatabase} (he : d.Closed) {w t : Term}
   exact InferredFacts.congr_iff_infers.mpr
     (InferredFacts.infers_of_congOn_core (InferredFacts.infers_of_held hw') hs)
 
-theorem witness_addTerm₂ {d : FDatabase} (he : d.Closed) {w t u v : Term}
-    (hw : w ∈ d.terms) (hv : v = t ∨ v = u)
-    (h : (w,v) ∈ ((d.addTerm t).addTerm u).closureF) : Cong d.toDatabase w v := by
-  have hw' := (FDatabase.mem_toDatabase_terms he.subterms).mpr hw
-  have hvm : v ∈ ((d.addTerm t).addTerm u).terms := by
-    rcases hv with rfl | rfl
-    · exact FDatabase.mem_addTerm_of_mem (FDatabase.self_mem_addTerm d _)
-    · exact FDatabase.self_mem_addTerm _ _
-  have hc := (FDatabase.mem_closureF_addTerm₂ he
-    (FDatabase.mem_addTerm_of_mem (FDatabase.mem_addTerm_of_mem hw)) hvm).mp h
-  have hs : StoredCongOn d.toDatabase [t,u] w v := hc.toStored
-    ((Database.Contained.addTerms [t,u] d.toDatabase).terms hw')
-    (Database.mem_addTerms (db := d.toDatabase) (ts := [t,u]) (by simpa using hv))
-  exact InferredFacts.congr_iff_infers.mpr
-    (InferredFacts.infers_of_congOn_core (InferredFacts.infers_of_held hw') hs)
-
-theorem mem_terms_foldl {g : FDatabase → α → FDatabase} {C : α → Term → Prop}
-    (hg : ∀ acc a t, t ∈ (g acc a).terms ↔ t ∈ acc.terms ∨ C a t)
-    (l : List α) (init : FDatabase) (t : Term) :
-    t ∈ (l.foldl g init).terms ↔ t ∈ init.terms ∨ ∃ a ∈ l, C a t := by
-  induction l generalizing init with
-  | nil => simp
-  | cons a l ih => rw [List.foldl_cons, ih, hg]; aesop
-
-theorem mem_eqs_foldl {g : FDatabase → α → FDatabase} {C : α → Term × Term → Prop}
-    (hg : ∀ acc a p, p ∈ (g acc a).eqs ↔ p ∈ acc.eqs ∨ C a p)
-    (l : List α) (init : FDatabase) (p : Term × Term) :
-    p ∈ (l.foldl g init).eqs ↔ p ∈ init.eqs ∨ ∃ a ∈ l, C a p := by
-  induction l generalizing init with
-  | nil => simp
-  | cons a l ih => rw [List.foldl_cons, ih, hg]; aesop
-
-theorem mem_rows_foldl {g : FDatabase → α → FDatabase} {C : α → Row → Prop}
-    (hg : ∀ acc a q, q ∈ (g acc a).rows ↔ q ∈ acc.rows ∨ C a q)
-    (l : List α) (init : FDatabase) (r : Row) :
-    r ∈ (l.foldl g init).rows ↔ r ∈ init.rows ∨ ∃ a ∈ l, C a r := by
-  induction l generalizing init with
-  | nil => simp
-  | cons a l ih => rw [List.foldl_cons, ih, hg]; aesop
-
-theorem closed_foldl {g : FDatabase → α → FDatabase}
-    (hg : ∀ acc a, acc.Closed → (g acc a).Closed)
-    (l : List α) {init : FDatabase} (h : init.Closed) :
-    (l.foldl g init).Closed := by
-  induction l generalizing init with
-  | nil => exact h
-  | cons a l ih => exact ih (hg init a h)
-
-theorem runSaturateF_sameData {R : List Rule} : ∀ (n : Nat) {d e : FDatabase},
-    d.runSaturateF R n = some e → e.sameData (execRunRules R e) = true := by
-  intro n
-  induction n with
-  | zero =>
-    intro d e h
-    rw [FDatabase.runSaturateF] at h
-    split at h
-    · rename_i hs; rw [Option.some.injEq] at h; exact h ▸ hs
-    · exact absurd h (by simp)
-  | succ n ih =>
-    intro d e h
-    rw [FDatabase.runSaturateF] at h
-    split at h
-    · rename_i hs; rw [Option.some.injEq] at h; exact h ▸ hs
-    · exact ih h
-
-/-- **And what it returns is an iterate of the round**, so the specification can follow it
-one `RunRules` round at a time. -/
-theorem runSaturateF_iterate {R : List Rule} : ∀ (n : Nat) {d e : FDatabase},
-    d.runSaturateF R n = some e → ∃ k, (execRunRules R)^[k] d = e := by
-  intro n
-  induction n with
-  | zero =>
-    intro d e h
-    rw [FDatabase.runSaturateF] at h
-    split at h
-    · rw [Option.some.injEq] at h; exact ⟨0, h⟩
-    · exact absurd h (by simp)
-  | succ n ih =>
-    intro d e h
-    rw [FDatabase.runSaturateF] at h
-    split at h
-    · rw [Option.some.injEq] at h; exact ⟨0, h⟩
-    · obtain ⟨k, hk⟩ := ih h
-      exact ⟨k + 1, by rw [Function.iterate_succ_apply]; exact hk⟩
-
-theorem toDatabase_eq_of_fields {d e : FDatabase} (ht : d.terms = e.terms)
-    (hq : d.eqs = e.eqs) (hX : d.subsumed = e.subsumed) : d.toDatabase = e.toDatabase := by
-  unfold FDatabase.toDatabase
-  rw [ht, hq, hX]
-
 theorem Env.refines_canon {vars : List Var} {σ : Env} : Env.Refines (Env.canon vars σ) σ :=
   fun _ hb => (Env.mem_canon hb).2
-
-theorem FDatabase.SubtermClosed.addEq {d : FDatabase} (hc : d.SubtermClosed) (a b : Term) :
-    (d.addEq a b).SubtermClosed := (hc.addTerm a).addTerm b
 
 /-- The whole action result, including insertion and marking of a subsumed row. -/
 theorem execAction_eq_some {σ : Env} {d e : FDatabase} {a : Action}
@@ -684,12 +494,6 @@ namespace FDatabase
 @[simp] theorem addEq_subsumed (d : FDatabase) (a b : Term) :
     (d.addEq a b).subsumed = d.subsumed := rfl
 
-@[simp] theorem addTerms_subsumed (d : FDatabase) (ts : List Term) :
-    (d.addTerms ts).subsumed = d.subsumed := by
-  induction ts generalizing d with
-  | nil => rfl
-  | cons t ts ih => exact ih (d.addTerm t)
-
 @[simp] theorem mem_subsume_subsumed (d : FDatabase) (s t : Term) :
     s ∈ (d.subsume t).subsumed ↔ s = t ∨ s ∈ d.subsumed := by
   simp only [subsume, addTerm_subsumed]
@@ -701,9 +505,6 @@ namespace FDatabase
 
 theorem Closed.subsume {d : FDatabase} (h : d.Closed) (t : Term) :
     (d.subsume t).Closed := ⟨(h.addTerm t).eqs, (h.addTerm t).subterms⟩
-
-theorem SubtermClosed.subsume {d : FDatabase} (h : d.SubtermClosed) (t : Term) :
-    (d.subsume t).SubtermClosed := h.addTerm t
 
 theorem IndexOk.subsume {d : FDatabase} (h : d.IndexOk) (t : Term) :
     (d.subsume t).IndexOk := by

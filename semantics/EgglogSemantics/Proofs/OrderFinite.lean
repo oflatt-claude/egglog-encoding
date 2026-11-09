@@ -80,40 +80,6 @@ theorem finite_predecessors {names : Set FnName} {literals : Set Lit}
   (finite_nodeSize_le hn hl t.nodeSize).subset
     fun _ hs => ⟨hs.1, nodeSize_le_of_blt hs.2⟩
 
-/-- Both the strict and inclusive initial segments are finite. -/
-theorem finite_initialSegment {names : Set FnName} {literals : Set Lit}
-    (hn : names.Finite) (hl : literals.Finite) (t : Term) :
-    {s : Term | UsesVocabulary names literals s ∧ (s = t ∨ blt s t = true)}.Finite := by
-  apply (finite_nodeSize_le hn hl t.nodeSize).subset
-  rintro s ⟨hs, rfl | hlt⟩
-  · exact ⟨hs, Nat.le_refl _⟩
-  · exact ⟨hs, nodeSize_le_of_blt hlt⟩
-
-/-- Counting predecessors supplies a natural-number rank for strict descent. -/
-theorem predecessor_count_lt {names : Set FnName} {literals : Set Lit}
-    (hn : names.Finite) (hl : literals.Finite) {s t : Term}
-    (hs : UsesVocabulary names literals s) (hst : blt s t = true) :
-    {a : Term | UsesVocabulary names literals a ∧ blt a s = true}.ncard <
-      {a : Term | UsesVocabulary names literals a ∧ blt a t = true}.ncard := by
-  apply Set.ncard_lt_ncard ?_ (finite_predecessors hn hl t)
-  refine ⟨?_, ?_⟩
-  · intro a ha
-    exact ⟨ha.1, blt_trans a s t ha.2 hst⟩
-  · intro h
-    have := (h ⟨hs, hst⟩).2
-    simp at this
-
-/-- Size-first comparison is well founded on terms over a fixed finite vocabulary. -/
-theorem blt_wellFounded_on_vocabulary {names : Set FnName} {literals : Set Lit}
-    (hn : names.Finite) (hl : literals.Finite) :
-    WellFounded (fun s t : {a : Term // UsesVocabulary names literals a} =>
-      blt s.val t.val = true) := by
-  let rank (t : {a : Term // UsesVocabulary names literals a}) : Nat :=
-    {a : Term | UsesVocabulary names literals a ∧ blt a t.val = true}.ncard
-  apply (measure rank).wf.mono
-  intro s t hst
-  exact predecessor_count_lt hn hl s.property hst
-
 /-- The implementation's size-first order satisfies the paper's order requirements. -/
 @[blueprint "thm:order"
   (title := /-- Concrete order -/)

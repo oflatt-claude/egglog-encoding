@@ -15,10 +15,6 @@ structure Database.NoUnions (db : Database) : Prop where
 
 namespace Database
 
-/-- A subset of a diagonal is diagonal. -/
-theorem Diag.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (hd : d₂.Diag) : d₁.Diag :=
-  fun p hp => hd p (h.eqs hp)
-
 theorem Diag.addTerm {db : Database} (h : db.Diag) (t : Term) : (db.addTerm t).Diag := by
   rintro p (rfl | hp)
   · rfl
@@ -33,9 +29,6 @@ theorem Diag.addTerms {db : Database} (h : db.Diag) (ts : List Term) :
 /-- `withOperands` posits its operands reflexively, so it cannot break diagonality. -/
 theorem Diag.withOperands {db : Database} (h : db.Diag) (ts : List Term) :
     (db.withOperands ts).Diag := h.addTerms ts
-
-theorem Diag.addSubsumed {db : Database} (h : db.Diag) (X : Set Term) :
-    (db.addSubsumed X).Diag := h
 
 theorem Diag.forgetSubsumed {db : Database} (h : db.Diag) : db.forgetSubsumed.Diag := h
 
@@ -80,13 +73,6 @@ theorem Database.Diag.reps_eq_terms {d : Database} (hd : d.Diag) : d.reps = d.te
   refine ⟨ht, fun s _ hc => ?_⟩
   simp [hc.eq_of_diag hd]
 
-theorem Database.Diag.hasReps {d : Database} (hd : d.Diag) : d.HasReps := by
-  intro t ht
-  obtain ⟨w, hw, hwt, _⟩ := InferredFacts.congr_iff_infers.mp ht
-  have hc : Cong d w t := InferredFacts.congr_iff_infers.mpr
-    (InferredFacts.infers_of_congOn_core (InferredFacts.infers_of_held hw) hwt)
-  exact ⟨w, hd.reps_eq_terms.symm ▸ hw, hc.symm⟩
-
 theorem congOn_eq_of_diag {E : Database} (h : E.Diag) {ts : List Term} {a b : Term}
     (hc : StoredCongOn E ts a b) : a = b := StoredCong.eq_of_diag (h.withOperands ts) hc
 
@@ -102,14 +88,6 @@ theorem Database.SameMeaning.terms_eq_of_diag {d e : Database} (h : d.SameMeanin
   exact Set.Subset.antisymm
     (incl he (fun a b => (h.inferred a b).mp))
     (incl hd (fun a b => (h.inferred a b).mpr))
-
-theorem StoredCongList.eq_of_diag {d : Database} (h : d.Diag) {as bs : List Term}
-    (hc : StoredCongList d as bs) : as = bs := by
-  have hpair := StoredCongList.forall₂.mp hc
-  clear hc
-  induction hpair with
-  | nil => rfl
-  | cons hc _ ih => exact congrArg₂ List.cons (StoredCong.eq_of_diag h hc) ih
 
 /-- `Expr.OrderingFree`, read off an application: its arguments are. -/
 theorem Expr.orderingFree_app {f : FnName} {args : List Expr}

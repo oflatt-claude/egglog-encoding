@@ -115,12 +115,6 @@ theorem liveWith_iff {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
 
 end FDatabase
 
-/-- The executable row test is exactly semantic liveness, for any row list. -/
-theorem FDatabase.all_liveWith_iff {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
-    (hj : d.IndexCurrent) (ts : List Term) :
-    ts.all (d.liveWith d.closureF) = true ↔ ∀ t ∈ ts, t ∈ d.toDatabase.live := by
-  simp only [List.all_eq_true, FDatabase.liveWith_iff he hi hj]
-
 mutual
 
 /-- The recursive executable expression test computes the matching judgement. -/
@@ -166,37 +160,6 @@ theorem exprsHoldWith_iff {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
     exact ⟨fun ⟨ha, hs⟩ => .cons ha hs, fun h => by cases h with | cons ha hs => exact ⟨ha, hs⟩⟩
 
 end
-
-/-- Historical lookup bridge, now using recursive semantic and executable matching. -/
-theorem Lookup.lookupWith {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
-    (hj : d.IndexCurrent) {σ : Env} {e : Expr} {t : Term}
-    (h : e.eval σ = some t ∧ Expr.Matches d.toDatabase σ e) :
-    e.eval σ = some t ∧ exprHoldsWith d.closureF d σ e = true :=
-  ⟨h.1, (exprHoldsWith_iff he hi hj _).mpr h.2⟩
-
-theorem LookupList.lookupListWith {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
-    (hj : d.IndexCurrent) {σ : Env} {es : List Expr} {ts : List Term}
-    (h : Expr.evalList es σ = some ts ∧ Expr.MatchesList d.toDatabase σ es) :
-    Expr.evalList es σ = some ts ∧ exprsHoldWith d.closureF d σ es = true :=
-  ⟨h.1, (exprsHoldWith_iff he hi hj _).mpr h.2⟩
-
-theorem lookupWith_lookup {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
-    (hj : d.IndexCurrent) {σ : Env} (e : Expr) {t : Term}
-    (h : e.eval σ = some t ∧ exprHoldsWith d.closureF d σ e = true) :
-    e.eval σ = some t ∧ Expr.Matches d.toDatabase σ e :=
-  ⟨h.1, (exprHoldsWith_iff he hi hj _).mp h.2⟩
-
-theorem lookupListWith_lookup {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
-    (hj : d.IndexCurrent) {σ : Env} (es : List Expr) {ts : List Term}
-    (h : Expr.evalList es σ = some ts ∧ exprsHoldWith d.closureF d σ es = true) :
-    Expr.evalList es σ = some ts ∧ Expr.MatchesList d.toDatabase σ es :=
-  ⟨h.1, (exprsHoldWith_iff he hi hj _).mp h.2⟩
-
-theorem lookupWith_iff {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
-    (hj : d.IndexCurrent) {σ : Env} {e : Expr} {t : Term} :
-    (e.eval σ = some t ∧ exprHoldsWith d.closureF d σ e = true) ↔
-      (e.eval σ = some t ∧ Expr.Matches d.toDatabase σ e) :=
-  ⟨lookupWith_lookup he hi hj e, Lookup.lookupWith he hi hj⟩
 
 /-- Operand closure is conservative when the first operand is represented. -/
 theorem closureWith_pair_iff {d : FDatabase} (he : d.Closed) {s t : Term}
@@ -257,13 +220,6 @@ theorem patternHolds_of_matches {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
       exprHoldsWith_iff he hi hj, Bool.not_eq_true', decide_eq_false_iff_not,
       closureWith_pair_iff he (Lookup.exists_cong hσ ⟨ha, h₁⟩)]
     exact ⟨⟨h₁, h₂⟩, hn⟩
-
-theorem FDatabase.patternHolds_validSubst {d : FDatabase} (he : d.Closed) (hi : d.IndexOk)
-    (hj : d.IndexCurrent)
-    {p : Pattern} {σ : Env} (hv : ValidEnv (p.freeVars []) d.toDatabase σ)
-    (h : patternHolds d p σ = true) : ValidSubst d.toDatabase p σ :=
-  ⟨hv, patternHolds_matches he hi hj
-    (fun _ _ ht => Database.toCong (hv.mem_terms _ (Env.mem_of_lookup ht))) h⟩
 
 theorem validEnv_canon {d : FDatabase} (hc : d.SubtermClosed) {q : Query} {σ : Env}
     {p : Pattern} (hp : p ∈ q) (hd : Env.dom σ = Query.freeVars q [])
@@ -360,7 +316,6 @@ theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (he : d.Closed)
     · rw [Env.lookup_eq_none_iff.mpr fun hc => hv ((ValidSubst.validEnv hvs).1.mem_iff.mp hc),
         Env.lookup_eq_none_iff.mpr fun hc => hv (hpdom ▸ hc)]
 
-
 theorem queryHolds_iff_matchQuery {d : FDatabase} (he : d.Closed)
     (hi : d.IndexOk) (hj : d.IndexCurrent) (q : Query) :
     QueryHolds d.toDatabase q ↔ (matchQuery d q).isEmpty = false := by
@@ -371,7 +326,5 @@ theorem queryHolds_iff_matchQuery {d : FDatabase} (he : d.Closed)
   · rintro ⟨σ, hσ⟩
     obtain ⟨τ, hτ, _⟩ := validQuerySubst_of_mem_matchQuery he hi hj hσ
     exact ⟨τ, hτ⟩
-
-
 
 end Egglog

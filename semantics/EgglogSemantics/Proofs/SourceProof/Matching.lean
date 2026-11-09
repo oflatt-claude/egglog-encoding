@@ -117,10 +117,4 @@ theorem premisesMatch_values {db : Database} (hw : db.WF) {σ : Env}
   exact hvar b.1 (hdom.mem_iff.mp (Env.mem_dom_of_mem hb)) b.2
     ((Env.lookup_eq_some_iff_mem (hdom.symm.nodup q.vars_nodup)).mpr hb)
 
-theorem querySubst_of_matches {db : Database} {q : Query} {σ : Env}
-    (hdom : (Env.dom σ).Perm q.vars) (hval : ∀ b ∈ σ, b.2 ∈ db.reps)
-    (hm : ∀ p ∈ q, Matches db p σ) :
-    ∃ τ, ValidQuerySubst db q τ ∧ Env.Agree τ σ :=
-  Egglog.querySubst_of_matches_terms hdom hval hm
-
 end Egglog.SourceProof

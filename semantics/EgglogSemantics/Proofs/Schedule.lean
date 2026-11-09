@@ -5,12 +5,6 @@ import EgglogSemantics.Impl.Interp
 
 namespace Egglog
 
-theorem Database.SameMeaning.congr_eq {d e : Database} (h : d.SameMeaning e) :
-    Cong d = Cong e := funext fun a => funext fun b => propext (h.congr a b)
-
-theorem Database.SameMeaning.of_congr_eq {d e : Database} (h : Cong d = Cong e) (hX : d.subsumed = e.subsumed) :
-    d.SameMeaning e := .of_congr (fun a b => by rw [h]) hX
-
 /-- Lift a round invariant through every finite schedule. -/
 theorem Reach.preserves {I : Database → Prop} {good : Rule → Prop}
     (hrun : ∀ rs d, (∀ r ∈ rs, good r) → I d → I (RunRules rs d))

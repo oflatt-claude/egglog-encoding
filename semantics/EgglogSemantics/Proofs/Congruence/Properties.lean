@@ -35,9 +35,6 @@ theorem encodeBuildArgsWith_unionFree (o : Options) :
 
 end
 
-theorem encodeBuild_unionFree (e : Expr) : Actions.UnionFree (encodeBuild e) :=
-  encodeBuildWith_unionFree {} e
-
 /-- This includes compilation of a source union. -/
 theorem encodeActionWith_unionFree (o : Options) (a : Action) :
     Actions.UnionFree (encodeActionWith o a) := by

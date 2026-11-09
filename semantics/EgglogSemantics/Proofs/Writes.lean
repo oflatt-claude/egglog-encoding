@@ -30,48 +30,10 @@ theorem Action.marks_agree {σ τ : Env} (h : Env.Agree σ τ) (as : List Action
   | nil => rfl
   | cons a as ih => simp only [Action.marks, Action.mark_agree h, ih]
 
-
 @[simp] theorem Database.addEqs_eqs {db : Database} {ps : Set (Term × Term)} :
     (db.addEqs ps).eqs = db.eqs ∪ ps := rfl
 
 /-! ### Actions -/
-
-/-- Running a subsume-free action adds the equations it writes. -/
-theorem evalAction_eq_write (σ : Env) (db : Database) (a : Action) (hdf : a.SubsumeFree) :
-    evalAction σ db a = (a.write σ).map db.addEqs := by
-  cases a with
-  | expr e =>
-    simp only [evalAction, Action.write, Option.map_map]
-    congr 1
-    funext t
-    simp [Function.comp, Database.addEqs, Database.addTerm, Set.union_singleton]
-  | union e₁ e₂ =>
-    simp only [evalAction, Action.write]
-    cases e₁.eval σ <;> cases e₂.eval σ <;>
-      simp only [Option.bind_none, Option.bind_some, Option.map_none]
-    split <;> simp [Database.addEqs, Database.addEq, Set.union_singleton]
-  | subsume e => simp [Action.SubsumeFree, Action.monotoneB] at hdf
-
-/-- Running subsume-free actions in order adds exactly their writes. -/
-theorem evalActions_eq_writes (σ : Env) (db : Database) (as : List Action)
-    (hdf : Actions.SubsumeFree as) :
-    evalActions σ db as = (Action.writes σ as).map db.addEqs := by
-  induction as generalizing db with
-  | nil =>
-    simp only [evalActions, Action.writes, Option.map_some, Option.some.injEq]
-    cases db
-    simp [Database.addEqs]
-  | cons a as ih =>
-    obtain ⟨ha, has⟩ := Actions.subsumeFree_cons.mp hdf
-    rw [evalActions, evalAction_eq_write σ db a ha]
-    cases hw : a.write σ with
-    | none => simp [Action.writes, hw]
-    | some W =>
-      simp only [Option.map_some, Option.bind_some, Action.writes, hw,
-        ih _ has, Option.map_map]
-      congr 1
-      funext V
-      simp [Function.comp, Database.addEqs, Set.union_assoc]
 
 /-- Marks and writes are defined for exactly the same actions. -/
 theorem Action.mark_isSome (σ : Env) (a : Action) :
@@ -117,17 +79,6 @@ theorem RunMarks.eq_empty {R : List Rule} {db : Database} (hdf : ∀ r ∈ R, r.
   rintro ⟨X, ⟨r, hr, σ, _, hx⟩, ht⟩
   rw [Action.marks_eq_empty (hdf r hr) hx] at ht
   exact ht
-
-theorem mem_ruleResults_iff_writes {db d : Database} {r : Rule} (hdf : r.SubsumeFree) :
-    d ∈ RuleResults db r ↔ ∃ σ W, QueryMatches db r.query σ ∧
-      Action.writes σ r.actions = some W ∧ d = db.addEqs W := by
-  rw [mem_ruleResults_iff_queryMatches]
-  simp only [evalActions_eq_writes _ _ _ hdf, Option.map_eq_some_iff]
-  constructor
-  · rintro ⟨σ, hq, W, hW, rfl⟩
-    exact ⟨σ, W, hq, hW, rfl⟩
-  · rintro ⟨σ, W, hq, hW, rfl⟩
-    exact ⟨σ, hq, W, hW, rfl⟩
 
 /-- Every head has the same sequential and union reading, including subsumption. -/
 theorem evalAction_eq_write_mark (σ : Env) (db : Database) (a : Action) :

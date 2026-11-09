@@ -16,8 +16,8 @@ proof-encoding theorems are eventually *about*; using it here would put the thin
 under study inside the thing doing the studying.
 
 Termination is by well-founded recursion on how much of the candidate universe is
-still missing. Stopping only at a fixpoint is what makes `Cong.le` applicable in
-`mem_closure_iff`'s completeness direction.
+still missing. Stopping only at a fixpoint is what makes `Cong.le` applicable in the
+completeness direction of the closure's correctness.
 -/
 
 namespace Egglog

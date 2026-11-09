@@ -119,12 +119,45 @@ key goes to the representative of its source class (`Rel.edge_iff_rep`).
 
 ## Cleanup
 
-Leftovers of the former merge-function encoding are removed by declaration use: the
-constant-dependency closure of the paper roots (`EgglogPaper.lean`, the blueprint nodes of
-`PAPER_MODULES`), `DiffTest.lean` and `EgglogSemantics/Tests/*` is computed by
-`Lean.Expr.getUsedConstants`, and every declaration of `EgglogSemantics.Proofs.*` and
-`EgglogSemantics.Congruence.*` outside the closure is deleted. The removed modules and
-declarations are listed in the final section.
+The leftovers of the former merge-function encoding were removed by declaration use. A
+Lean script, run with `lake env lean` against the built library, computed the closure of
+the roots under `Lean.Expr.getUsedConstants`: every declaration of a project module
+outside `EgglogSemantics.Proofs.*` and `EgglogSemantics.Congruence.*` (the specification,
+the interpreter, the source fragment, provenance, resugaring, `Tests/*`, `DiffTest.lean`,
+`EgglogPaper.lean`), every `@[blueprint]` node with its explicit `uses`, and every
+`assert_no_sorry` name of `EgglogPaper.lean`. Every primary declaration of the two
+namespaces outside the closure was deleted, whole modules where every declaration was
+unreachable:
+
+- 13 modules, 936 lines: `Proofs/Merge.lean`, `Proofs/Entries.lean`,
+  `Proofs/Assignments.lean`, `Proofs/Execution.lean`, `Proofs/MatchingCounterexamples.lean`,
+  `Proofs/ActionMonotone.lean`, `Proofs/ActionProgram.lean`, `Proofs/Behavior.lean`,
+  `Proofs/LiveTables.lean`, `Proofs/Setup.lean`, `Proofs/Source/FreshEnv.lean`,
+  `Proofs/Source/Termination.lean`, `Proofs/SourceProof/Ledger.lean`;
+- 435 declarations in 71 modules, including the option-free wrappers of
+  `Congruence/Encode.lean` (`encodeRule`, `encodeSchedule`, `rebuild`, ...), the
+  alternative statements `PreservesBehaviors`, `PreservesObservations` and
+  `PreservesTermination` of `Congruence/Correctness.lean`, `Id` and `SameClass` of
+  `Congruence/Read.lean`, and the helper lemmas of the new proof modules that the final
+  proof did not use.
+
+The two lemmas of `Merge.lean` the compiler proof uses were relocated:
+`Conservativity.cong_replay` is `Cong.replay` in `Proofs/SemanticCong.lean`, and
+`Database.mem_terms_of_eqs` is in `Proofs/Database.lean`.
+
+Four kinds of use are invisible to the constant closure, and the declarations they
+concern stay: `@[simp]` lemmas proved by `rfl` and `rfl`-lemmas named in `simp only`
+lists, which `simp` rewrites with definitionally and which therefore leave no trace in a
+proof term (53 lemmas, such as `Database.addSubsumed_subsumed`, `Term.subtermList_app`,
+`Expr.fns_app`); declarations used only by `example` and `#guard` commands in the tests
+(`Congruence.encodeQuery`, `Relational.exec`, `StoredCong.mem_right`); the two `Coe`
+instances of `Proofs/StoredCong.lean`, which elaboration unfolds; and the dead member of a
+`mutual` block whose partner is used (39 lemmas, such as `Expr.MatchesList.mono_live`),
+since the partner's source recurses through it. `Proofs/Provenance/Counterexamples.lean`
+and `Proofs/SourceProof/Counterexamples.lean` are outside the closure as well; they document
+the current provenance and source-proof checkers through `#guard` commands and stay.
+Derived `Repr` and `DecidableEq` instances of `Congruence/Encode.lean` are kept with their
+types.
 
 ## Validation
 

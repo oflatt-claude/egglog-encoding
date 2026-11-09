@@ -198,7 +198,6 @@ def encodeQueryWith (o : Options) : Query → Nat → Query × Nat
           match encodeQueryWith o ps next with
           | (rest, last) => (qs ++ rest, last)
 
-def encodePattern : Pattern → Nat → Query × Nat := encodePatternWith {}
 def encodeQuery : Query → Nat → Query × Nat := encodeQueryWith {}
 
 mutual
@@ -220,9 +219,6 @@ def encodeBuildArgsWith (o : Options) : List Expr → List Action
   | e :: es => encodeBuildWith o e ++ encodeBuildArgsWith o es
 
 end
-
-def encodeBuild : Expr → List Action := encodeBuildWith {}
-def encodeBuildArgs : List Expr → List Action := encodeBuildArgsWith {}
 
 /-- A source union links both ids to the smaller one; for the smaller one that is a
 self-loop. A bare action `e` is the paper's shorthand for `union(e, e)`, whose extra edge
@@ -247,21 +243,15 @@ def encodeActionWith (o : Options) : Action → List Action
       [.expr (ufRow a (.min a b)), .expr (ufRow b (.min a b))]
   | .subsume _ _ => []
 
-def encodeAction : Action → List Action := encodeActionWith {}
-
 /-- No justification argument is needed for compiling a head. -/
 def encodeActionsWith (o : Options) (as : List Action) : List Action :=
   as.flatMap (encodeActionWith o)
-
-def encodeActions (as : List Action) : List Action := encodeActionsWith {} as
 
 /-- Variable supplies are local to a rule; source names cannot use the `@` namespace.
 Query variables are bound to parents through union-find edges, which are roots once
 rebuilding has completed, so the head needs no leader lookup. -/
 def encodeRuleWith (o : Options) (r : Rule) : Rule :=
   { query := (encodeQueryWith o r.query 0).1, actions := encodeActionsWith o r.actions }
-
-def encodeRule (r : Rule) : Rule := encodeRuleWith {} r
 
 /-- Replace a parent edge by the edge to the parent's own parent. With `@a = @b` this
 removes the stale self-loop of a value that acquired a parent. -/
@@ -477,9 +467,6 @@ def maintenanceRules (P : Program) : List (Rule × RuleOrigin) :=
 def encodeRulesWith (o : Options) (index : Nat) (rs : List Rule) : List (Rule × RuleOrigin) :=
   rs.zipIdx.map fun ri => (encodeRuleWith o ri.1, .source (index + ri.2))
 
-def encodeRules (index : Nat) (rs : List Rule) : List (Rule × RuleOrigin) :=
-  encodeRulesWith {} index rs
-
 /-- The maintenance saturation, with its origins. A phased rebuild saturates each group
 but the last before the next, inside an outer saturation: the union-find settles before
 the term rules read it, and the view settles before congruences are looked for. -/
@@ -502,8 +489,6 @@ def rebuildWith (o : Options) (P : Program) : Schedule × List RuleOrigin :=
         (.saturate (Schedule.seqAll (runs.dropLast.map Schedule.saturate ++ [last])), origins)
     | none => (.saturate (.run []), origins)
   else (.saturate (.run (groups.flatten.map Prod.fst)), origins)
-
-def rebuild (P : Program) : Schedule × List RuleOrigin := rebuildWith {} P
 
 /-- Compile a schedule, numbering source rules from `index` in `Program.rules`. Every run
 is followed by a rebuild, so a compiled saturation's body ends at a rebuild fixpoint and
@@ -537,9 +522,6 @@ def encodeScheduleWith (o : Options) (P : Program) :
       let (T₁, o₁, next) := encodeScheduleWith o P S₁ index
       let (T₂, o₂, last) := encodeScheduleWith o P S₂ next
       (.seq T₁ T₂, o₁ ++ o₂, last)
-
-def encodeSchedule (P : Program) : Schedule → Nat → Schedule × List RuleOrigin × Nat :=
-  encodeScheduleWith {} P
 
 /-- The congruence pass with origins for later proof resugaring, under the options. -/
 def compileWith (o : Options) (P : Program) : Compiled :=

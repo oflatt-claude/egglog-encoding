@@ -50,10 +50,6 @@ import EgglogSemantics.Resugar.Lift
 import EgglogSemantics.Resugar.Query
 
 -- Proofs
-import EgglogSemantics.Proofs.ActionMonotone
-import EgglogSemantics.Proofs.ActionProgram
-import EgglogSemantics.Proofs.Assignments
-import EgglogSemantics.Proofs.Behavior
 import EgglogSemantics.Proofs.Bindings
 import EgglogSemantics.Proofs.Closure
 import EgglogSemantics.Proofs.Completion
@@ -83,10 +79,8 @@ import EgglogSemantics.Proofs.Diagonal
 import EgglogSemantics.Proofs.DiagonalPreservation
 import EgglogSemantics.Proofs.DiagonalRound
 import EgglogSemantics.Proofs.Divergence
-import EgglogSemantics.Proofs.Entries
 import EgglogSemantics.Proofs.EnvTransform
 import EgglogSemantics.Proofs.Eval
-import EgglogSemantics.Proofs.Execution
 import EgglogSemantics.Proofs.Finite
 import EgglogSemantics.Proofs.FiniteSaturation
 import EgglogSemantics.Proofs.Interp
@@ -94,13 +88,10 @@ import EgglogSemantics.Proofs.InterpBase
 import EgglogSemantics.Proofs.InterpLookup
 import EgglogSemantics.Proofs.InterpRound
 import EgglogSemantics.Proofs.InterpSubsume
-import EgglogSemantics.Proofs.LiveTables
 import EgglogSemantics.Proofs.Lookup
 import EgglogSemantics.Proofs.Match
 import EgglogSemantics.Proofs.MatchMonotone
 import EgglogSemantics.Proofs.MatchValues
-import EgglogSemantics.Proofs.MatchingCounterexamples
-import EgglogSemantics.Proofs.Merge
 import EgglogSemantics.Proofs.NoUnions
 import EgglogSemantics.Proofs.Operands
 import EgglogSemantics.Proofs.Order
@@ -118,20 +109,16 @@ import EgglogSemantics.Proofs.SameMeaning
 import EgglogSemantics.Proofs.Schedule
 import EgglogSemantics.Proofs.Scope
 import EgglogSemantics.Proofs.SemanticCong
-import EgglogSemantics.Proofs.Setup
 import EgglogSemantics.Proofs.Source.Arity
 import EgglogSemantics.Proofs.Source.Ctors
 import EgglogSemantics.Proofs.Source.Domain
 import EgglogSemantics.Proofs.Source.Execution
 import EgglogSemantics.Proofs.Source.FreshBindings
-import EgglogSemantics.Proofs.Source.FreshEnv
 import EgglogSemantics.Proofs.Source.RebuildVars
-import EgglogSemantics.Proofs.Source.Termination
 import EgglogSemantics.Proofs.SourceMeaning
 import EgglogSemantics.Proofs.SourceModel
 import EgglogSemantics.Proofs.SourceProof.Actions
 import EgglogSemantics.Proofs.SourceProof.Counterexamples
-import EgglogSemantics.Proofs.SourceProof.Ledger
 import EgglogSemantics.Proofs.SourceProof.Matching
 import EgglogSemantics.Proofs.SourceProof.Rules
 import EgglogSemantics.Proofs.SourceProof.Soundness

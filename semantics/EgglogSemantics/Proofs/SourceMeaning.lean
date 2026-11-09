@@ -116,7 +116,6 @@ theorem matches_transport {d e : Database} (hd : d.WF) (he : e.WF)
       exact .unequal hu.2 hv.2 hu.1 hv.1
         (fun hc => hne ((h.congr _ _).mpr (htu.trans (hc.trans htv.symm))))
 
-
 open Classical in
 /-- Choose the least held spelling when the represented class has one. -/
 noncomputable def representative (d : Database) (_hw : d.WF) (t : Term) : Term :=

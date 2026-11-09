@@ -26,26 +26,6 @@ theorem execActions_preserves {P : FDatabase → Prop}
     obtain ⟨m, hm, he⟩ := Option.bind_eq_some_iff.mp h
     exact ih (execAction_preserves ht hu hx hd hm) he
 
-theorem execAction_closed {σ : Env} {d e : FDatabase} (he : d.Closed)
-    {a : Action} (h : execAction σ d a = some e) : e.Closed :=
-  execAction_preserves (fun _ t h => h.addTerm t) (fun _ a b h _ => h.addEq a b)
-    (fun _ t h => h.subsume t) he h
-
-theorem execActions_closed {σ : Env} {d e : FDatabase} (he : d.Closed)
-    {as : List Action} (h : execActions σ d as = some e) : e.Closed :=
-  execActions_preserves (fun _ t h => h.addTerm t) (fun _ a b h _ => h.addEq a b)
-    (fun _ t h => h.subsume t) he h
-
-theorem execAction_subtermClosed {σ : Env} {d e : FDatabase} (he : d.SubtermClosed)
-    {a : Action} (h : execAction σ d a = some e) : e.SubtermClosed :=
-  execAction_preserves (fun _ t h => h.addTerm t) (fun _ a b h _ => h.addEq a b)
-    (fun _ t h => h.subsume t) he h
-
-theorem execActions_subtermClosed {σ : Env} {d e : FDatabase} (he : d.SubtermClosed)
-    {as : List Action} (h : execActions σ d as = some e) : e.SubtermClosed :=
-  execActions_preserves (fun _ t h => h.addTerm t) (fun _ a b h _ => h.addEq a b)
-    (fun _ t h => h.subsume t) he h
-
 /-- All successful actions implement the same writes and marks. -/
 theorem execAction_spec {σ : Env} {d : FDatabase} (he : d.Closed) (a : Action) :
     match a.write σ, a.mark σ, execAction σ d a with
@@ -113,25 +93,6 @@ theorem execActions_spec {σ : Env} {d : FDatabase} (he : d.Closed) (as : List A
         · simpa only [Database.addEqs, Database.addSubsumed, Set.union_assoc] using
             ht.2.1.trans ((FDatabase.meaning_addEqs ha.2.1 V ha.2.2).addSubsumed Y)
         · exact ht.2.2.trans (by rw [ha.2.2, Set.union_assoc])
-
-theorem execAction_toDatabase {σ : Env} {d e : FDatabase} (he : d.Closed)
-    {a : Action} (h : execAction σ d a = some e) :
-    ∃ out, evalAction σ d.toDatabase a = some out ∧ e.toDatabase.SameMeaning out := by
-  have hs := execAction_spec (σ := σ) he a
-  rw [h] at hs
-  cases hw : a.write σ <;> cases hx : a.mark σ <;> simp only [hw, hx] at hs
-  rename_i W X
-  exact ⟨_, by simp [evalAction_eq_write_mark, hw, hx], hs.2.1⟩
-
-theorem execActions_toDatabase {σ : Env} {d e : FDatabase} (he : d.Closed)
-    {as : List Action} (h : execActions σ d as = some e) :
-    ∃ out, evalActions σ d.toDatabase as = some out ∧ e.toDatabase.SameMeaning out := by
-  have hs := execActions_spec (σ := σ) he as
-  rw [h] at hs
-  cases hw : Action.writes σ as <;> cases hx : Action.marks σ as <;> simp only [hw, hx] at hs
-  rename_i W X
-  exact ⟨_, by simp [evalActions_eq_writes_marks, hw, hx], hs.2.1⟩
-
 
 theorem execRunRules_induction_ruleset {R : List Rule} {d : FDatabase}
     {P : FDatabase → Prop}
@@ -229,17 +190,6 @@ private theorem fold_firings_spec {d : FDatabase} (he : d.Closed)
 private def roundFirings (R : List Rule) (d : FDatabase) : List (Rule × Env) :=
   R.flatMap fun r => (matchQuery d r.query).map (r, ·)
 
-/-- Firings are collected in the pre-state, then applied in sequence. -/
-theorem execRunRules_eq_fold {d : FDatabase} (R : List Rule) : execRunRules R d =
-    (R.map fun r => (r, matchQuery d r.query)).foldl
-      (fun acc rs => rs.2.foldl (fireInto rs.1) acc) d := by
-  simp only [execRunRules, execRunRulesWith, matchQueryWith_eq]
-
-theorem execRunRules_eq_fold_of_subsumeFree {d : FDatabase} (R : List Rule)
-    (_hd : ∀ r ∈ R, r.SubsumeFree) : execRunRules R d =
-    (R.map fun r => (r, matchQuery d r.query)).foldl
-      (fun acc rs => rs.2.foldl (fireInto rs.1) acc) d := execRunRules_eq_fold R
-
 private theorem execRunRules_eq_firings {d : FDatabase} (R : List Rule) :
     execRunRules R d = (roundFirings R d).foldl (fun acc rs => fireInto rs.1 acc rs.2) d := by
   simp only [execRunRules, execRunRulesWith, matchQueryWith_eq, roundFirings,
@@ -283,7 +233,6 @@ private theorem firingWritesAll_eq {R : List Rule} {d : FDatabase} (he : d.Close
     refine ⟨(r, _), mem_roundFirings.mpr ⟨hr, hmem⟩, mem_firingWrites.mpr ?_⟩
     exact ⟨W, (Action.writes_agree hag'' _).trans hW, hp⟩
 
-
 private theorem firingMarksAll_eq {R : List Rule} {d : FDatabase} (he : d.Closed)
     (hi : d.IndexOk) (hj : d.IndexCurrent) :
     firingMarksAll (roundFirings R d) = RunMarks R d.toDatabase := by
@@ -306,7 +255,6 @@ private theorem firingMarksAll_eq {R : List Rule} {d : FDatabase} (he : d.Closed
     apply mem_firingMarksAll.mpr
     refine ⟨(r, _), mem_roundFirings.mpr ⟨hr, hmem⟩, mem_firingMarks.mpr ?_⟩
     exact ⟨W, (Action.marks_agree hag'' _).trans hW, hp⟩
-
 
 /-- Every action adds data, so every round preserves closure. -/
 theorem closed_execRunRules {R : List Rule} {d : FDatabase} (he : d.Closed) :

@@ -596,14 +596,14 @@ theorem run_rel (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
     intro a b
     constructor
     · intro hab
-      refine Conservativity.cong_replay (D := src') (E := view d') (fun q hq => ?_) hab
+      refine Cong.replay (D := src') (E := view d') (fun q hq => ?_) hab
       have : q ∈ src.eqs ∪ RunWrites R src := hseqs ▸ hq
       rcases this with hq | hq
       · exact Cong.mono_eqs (view_mono hdmono) ((h.cong q.1 q.2).mp (.direct hq))
       · obtain ⟨r, σ, V, V', hf, hqV⟩ := firing_of_source h hc hw hR hfire hq
         exact hf.head.derivable q hqV (view d') fun k p hkp => hdW (hf.tgt_sub hkp)
     · intro hab
-      refine Conservativity.cong_replay (D := view d') (E := src') (fun q hq => ?_) hab
+      refine Cong.replay (D := view d') (E := src') (fun q hq => ?_) hab
       rcases hrow q.1 q.2 hq with hr | ⟨r, σ, V, V', hf, hkp⟩
       · exact Cong.mono_eqs hsmono ((h.cong q.1 q.2).mpr hr.cong_view)
       · exact hf.head.cong q.1 q.2 hkp src' (hf.src_sub.trans hsrcW)

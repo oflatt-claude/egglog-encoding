@@ -1,7 +1,7 @@
 import EgglogSemantics.Proofs.Congruence.Target
 import EgglogSemantics.Proofs.Finite
 import EgglogSemantics.Proofs.Representatives
-import EgglogSemantics.Proofs.Merge
+import EgglogSemantics.Proofs.SemanticCong
 import EgglogSemantics.Proofs.SourceMeaning
 
 /-! The simulation relation between a source state and its compiled state, the canonical
@@ -98,7 +98,7 @@ theorem cong_self_of_key {k : Term} (hk : k ∈ Keys d) : Cong src k k :=
 theorem liveCong_iff (a b : Term) : Cong src a b ↔ Cong (liveView d) a b := by
   rw [h.cong]
   constructor
-  · exact fun hab => Conservativity.cong_replay (D := view d) (E := liveView d)
+  · exact fun hab => Cong.replay (D := view d) (E := liveView d)
       (fun q hq => h.liveCong q.1 q.2 hq) hab
   · exact Cong.mono_eqs (liveView_subset_view h.diag h.ufOnly h.endsFree)
 
@@ -226,9 +226,6 @@ theorem edge_root_root {k : Term} (hk : k ∈ Keys d) :
 theorem root_root {k : Term} (hk : k ∈ Keys d) : root d (root d k) = root d k :=
   h.root_eq hc (h.edge_root_root hc hk)
 
-theorem root_eq_self_of_edge_self {k : Term} (he : Edge d k k) : root d k = k :=
-  h.root_eq hc he
-
 omit hc in
 theorem root_lit (hw : src.WF) (l : Lit) (hk : Term.lit l ∈ Keys d) :
     root d (.lit l) = .lit l :=
@@ -250,12 +247,6 @@ theorem repr_root (hw : src.WF) : ∀ {k : Term}, k ∈ Keys d → Repr d k (roo
     refine .app (reprList_root_of_keys fun a ha => ih a ha (hargs a ha))
       (Keys.subset_terms d hk) ?_ (h.edge_root hk)
     exact List.forall₂_map_self fun a ha => h.edge_root (hargs a ha)
-
-theorem forall₂_edge_root {bs rs : List Term} (hr : List.Forall₂ (Edge d) bs rs) :
-    rs = bs.map (root d) := by
-  induction hr with
-  | nil => rfl
-  | cons he _ ih => rw [List.map_cons, ← ih, h.root_eq hc he]
 
 /-- Readings are unique at a canonical state. -/
 theorem repr_unique : ∀ {t e : Term}, Repr d t e → ∀ e', Repr d t e' → e = e' := by
@@ -365,46 +356,6 @@ theorem edge_iff_rep (hw : src.WF) {k p : Term} (hk : k ∈ Keys d) :
       · rw [heq] at hlt; simp at hlt
       · rw [Term.blt_asymm _ _ hps] at hlt
         exact Bool.false_ne_true hlt
-
-theorem root_mem_reps (hw : src.WF) {k : Term} (hk : k ∈ Keys d) : root d k ∈ src.reps :=
-  ((h.edge_iff_rep hc hw hk).mp (h.edge_root hk)).1
-
-/-- A read id is a source representative congruent to the term. -/
-theorem repr_cong (hw : src.WF) : ∀ {t e : Term}, Repr d t e → e ∈ src.terms →
-    Cong src t e ∧ e ∈ src.reps := by
-  intro t e ht
-  induction ht using Repr.rec (motive_2 := fun as rs _ => (∀ r ∈ rs, r ∈ src.terms) →
-      CongList src as rs ∧ ∀ r ∈ rs, r ∈ src.reps) with
-  | @lit l =>
-    intro he
-    refine ⟨Database.toCong he, ⟨he, fun s _ hs hlt => ?_⟩⟩
-    rw [InferredFacts.infers_eq_of_isLit hw (InferredFacts.congr_iff_infers.mp hs)
-      (Or.inr rfl)] at hlt
-    simp at hlt
-  | @app f as bs rs e hl hb hedges he ih =>
-    intro _
-    have hrs : ∀ r ∈ rs, r ∈ src.terms := by
-      intro r hr
-      obtain ⟨b, _, hbr⟩ := hedges.exists_left hr
-      exact h.key_mem_src (h.parent_of_edge hbr)
-    obtain ⟨hcl, _⟩ := ih hrs
-    have hbs : CongList src bs rs := by
-      rw [CongList.forall₂]
-      exact hedges.imp fun _ _ hbr => h.edge_cong hbr
-    have hkey : Term.app f bs ∈ Keys d := h.key_of_edge he
-    have hself : Cong src (.app f bs) (.app f bs) := h.cong_self_of_key hkey
-    refine ⟨((Cong.congr hself (hbs.trans hcl.symm)).symm.trans (h.edge_cong he)),
-      ((h.edge_iff_rep hc hw hkey).mp he).1⟩
-  | nil => exact ⟨.nil, by simp⟩
-  | @cons a e as es _ _ ih ihs =>
-    rename_i hmem
-    obtain ⟨h₁, h₂⟩ := ih (hmem e (by simp))
-    obtain ⟨hs₁, hs₂⟩ := ihs fun r hr => hmem r (by simp [hr])
-    exact ⟨.cons h₁ hs₁, by
-      intro r hr
-      rcases List.mem_cons.mp hr with rfl | hr
-      · exact h₂
-      · exact hs₂ r hr⟩
 
 end Rel
 

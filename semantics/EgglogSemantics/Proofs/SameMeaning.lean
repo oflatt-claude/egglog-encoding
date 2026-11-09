@@ -287,19 +287,6 @@ theorem infers_mono {d e : Database} (h : d.Contained e) {a b : Term}
   have hg := Database.Contained.addTerms_mono h [a, b]
   exact ⟨w, h.terms hw, hwa.mono hg, hab.mono hg⟩
 
-theorem infers_iff_of_eqs_eq {d e : Database} (h : d.eqs = e.eqs) {a b : Term} :
-    d.Infers a b ↔ e.Infers a b := by
-  have forward : ∀ {d e : Database}, d.eqs = e.eqs → d.Infers a b → e.Infers a b := by
-    intro d e h ⟨w, hw, hwa, hab⟩
-    have ht := Database.terms_eq_of_eqs_eq h
-    have ha : ∀ p ∈ (d.withOperands [a, b]).eqs,
-        StoredCong (e.withOperands [a, b]) p.1 p.2 := by
-      intro p hp
-      apply StoredCong.direct
-      simpa [Database.withOperands, Database.addTerms_eqs, h] using hp
-    exact ⟨w, ht ▸ hw, hwa.of_assertions ha, hab.of_assertions ha⟩
-  exact ⟨forward h, forward h.symm⟩
-
 theorem infers_of_held {d : Database} {t : Term} (ht : t ∈ d.terms) : d.Infers t t := by
   have h := (Database.toStored ht).mono (Database.Contained.addTerms [t, t] d)
   exact ⟨t, ht, h, h⟩
@@ -446,9 +433,6 @@ namespace InferredFacts
 
 abbrev interpret_of_held {d : Database} (_hw : d.WF) := @interpret_of_held_core d
 abbrev interpret_assert {d : Database} (_hw : d.WF) := @interpret_assert_core d
-abbrev interpret_congOn {d : Database} (_hw : d.WF) := @interpret_congOn_core d
-abbrev congOn_of_interpret {d : Database} (_hw : d.WF) := @congOn_of_interpret_core d
-abbrev congListOn_of_interpret {d : Database} (_hw : d.WF) := @congListOn_of_interpret_core d
 abbrev infers_iff_interpret {d : Database} (_hw : d.WF) := @infers_iff_interpret_core d
 abbrev infers_self_iff_supported {d : Database} (_hw : d.WF) := @infers_self_iff_supported_core d
 abbrev supported_subterm {d : Database} (_hw : d.WF) := @supported_subterm_core d
@@ -459,7 +443,6 @@ abbrev infers_left {d : Database} (_hw : d.WF) := @infers_left_core d
 abbrev infers_right {d : Database} (_hw : d.WF) := @infers_right_core d
 abbrev infers_of_congOn {d : Database} (_hw : d.WF) := @infers_of_congOn_core d
 abbrev infers_iff_cong_of_held {d : Database} (_hw : d.WF) := @infers_iff_cong_of_held_core d
-abbrev infers_congr {d : Database} (_hw : d.WF) := @infers_congr_core d
 
 /-- Inferred facts of an extension reflect back when its assertions are valid in
 the partial interpretation and every recorded term remains represented. -/
@@ -493,30 +476,6 @@ theorem sameMeaning_addTerm {d : Database} (hw : d.WF) {t : Term}
     rcases hs with hs | hs
     · exact ⟨s, hs, interpret_of_held hw s hs⟩
     · exact supported_subterm hw hs ((infers_self_iff_supported hw).mp ht)
-
-/-- The semantic no-change test for a constructor write is exactly prior inference. -/
-theorem sameMeaning_addTerm_iff {d : Database} (hw : d.WF) {t : Term} :
-    d.SameMeaning (d.addTerm t) ↔ d.Infers t t := by
-  refine ⟨fun h => ?_, sameMeaning_addTerm hw⟩
-  exact (h.inferred t t).mpr (infers_of_held (Database.mem_addTerm t d))
-
-/-- An already inferred union, including its endpoint constructions, also changes
-no inferred fact. The premise includes existence, even for `a = a`. -/
-theorem sameMeaning_addEq {d : Database} (hw : d.WF) {a b : Term}
-    (hab : d.Infers a b) : d.SameMeaning (d.addEq a b) := by
-  obtain ⟨w, hw', ha, hb⟩ := (infers_iff_interpret hw).mp hab
-  refine Database.SameMeaning.of_inferred rfl (fun x y => ⟨infers_mono
-    (Database.Contained.addEq a b d), ?_⟩)
-  apply infers_of_interpreted_extension hw
-  · rintro p (rfl | hp)
-    · exact ha.trans hb.symm
-    · exact interpret_assert hw hp
-  · intro s hs
-    rw [Database.addEq_terms] at hs
-    rcases hs with (hs | hs) | hs
-    · exact ⟨s, hs, interpret_of_held hw s hs⟩
-    · exact supported_subterm hw hs ⟨w, hw', ha⟩
-    · exact supported_subterm hw hs ⟨w, hw', hb⟩
 
 /-- Hypothetically congruent spellings give equivalent constructor writes,
 including when neither spelling has been materialized yet. -/
@@ -589,7 +548,6 @@ theorem sameMeaning_addEq_congr {d : Database} (hw : d.WF)
     · exact infers_mono hg (infers_of_cong (.direct hp))
   exact Database.SameMeaning.of_inferred rfl fun x y =>
     ⟨forward ha hb hlit', forward ha.symm hb.symm hlit⟩
-
 
 end InferredFacts
 

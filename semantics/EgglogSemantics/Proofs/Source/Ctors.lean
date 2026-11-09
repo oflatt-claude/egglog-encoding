@@ -123,35 +123,8 @@ theorem Action.evalTerms_ctorsIn {P : Program} {σ : Env} {a : Action} (ha : a.C
       fun t ht => Expr.eval_ctorsIn hs b
       (fun fk hk => ha fk (List.mem_append_right _ hk)) ht⟩
 
-theorem evalAction_ctorsIn {σ : Env} {db db' : Database} {P : Program}
-    (hw : db.WF) (h : db.CtorsIn P)
-    (hs : ∀ v t, Env.lookup v σ = some t → t.CtorsIn P)
-    {a : Action} (ha : a.CtorsIn P) (hv : evalAction σ db a = some db') : db'.CtorsIn P := by
-  have hh := evalAction_preserves (P := Term.CtorsIn P)
-    (fun _ ht _ hsub => ht.subterm hsub) (fun _ ht => h.term hw ht)
-    (Action.evalTerms_ctorsIn ha hs) hv
-  exact fun f as ht => hh _ ht f as (.refl _)
-
-theorem evalActions_ctorsIn {σ : Env} {db db' : Database} {P : Program}
-    (hw : db.WF) (h : db.CtorsIn P)
-    (hs : ∀ v t, Env.lookup v σ = some t → t.CtorsIn P)
-    {as : List Action} (ha : ∀ a ∈ as, a.CtorsIn P) (hv : evalActions σ db as = some db') :
-    db'.CtorsIn P := by
-  have hh := evalActions_preserves (P := Term.CtorsIn P)
-    (fun _ ht _ hsub => ht.subterm hsub) (fun _ ht => h.term hw ht)
-    (fun a ha' => Action.evalTerms_ctorsIn (ha a ha') hs) hv
-  exact fun f as ht => hh _ ht f as (.refl _)
-
-theorem evalLocalActions_ctorsIn {db db' : Database} {P : Program} (hw : db.WF)
-    (h : db.CtorsIn P) {as : List Action} (hl : ∀ a ∈ as, a.CtorsIn P) {σ : Env}
-    (hs : ∀ b ∈ σ, b.2 ∈ db.terms) (hv : evalActions σ db as = some db') : db'.CtorsIn P :=
-  evalActions_ctorsIn hw h (h.lookup hw hs) hl hv
-
 structure Database.CtorsInState (db : Database) (P : Program) : Prop where
   terms : db.CtorsIn P
-
-theorem Database.empty_ctorsInState {P : Program} : Database.empty.CtorsInState P :=
-  ⟨Database.empty_ctorsIn⟩
 
 theorem Database.CtorsInState.runRules {R : List Rule} {db : Database} {P : Program}
     (hw : db.WF) (h : db.CtorsInState P) (hn : ∀ r ∈ R, ∀ a ∈ r.actions, a.CtorsIn P) :
@@ -162,27 +135,5 @@ theorem Database.CtorsInState.runRules {R : List Rule} {db : Database} {P : Prog
     (fun r hr σ hσ a ha => Action.evalTerms_ctorsIn (hn r hr a ha)
       (h.terms.lookup hw hσ.1.mem_terms))
   exact fun f as ht => hh _ ht f as (.refl _)
-
-theorem cmdStep_ctorsIn {db db' : Database} {P : Program} (hw : db.WF)
-    (h : db.CtorsInState P) {S : Schedule} (hn : S.CtorsIn P)
-    (hs : Reach db S db') : db'.CtorsInState P := by
-  induction hs with
-  | run => exact h.runRules hw hn
-  | seq h₁ _ ih₁ ih₂ =>
-    exact ih₂ (h₁.wf hw) (ih₁ hw h (fun r hr => hn r (List.mem_append_left _ hr)))
-      (fun r hr => hn r (List.mem_append_right _ hr))
-  | fixpoint _ _ ih => exact ih hw h hn
-  | again h₁ _ _ ih₁ ih₂ => exact ih₂ (h₁.wf hw) (ih₁ hw h hn) hn
-
-theorem programStep_ctorsIn {db db' : Database} {P : Program} (hw : db.WF)
-    (h : db.CtorsInState P) {S : Schedule} (hn : S.CtorsIn P)
-    (hs : Reach db S db') : db'.CtorsInState P :=
-  cmdStep_ctorsIn hw h hn hs
-
-theorem ctorsIn_of_prefixStep {P : Program} (hdom : P.Fragment) {S : Schedule}
-    (hsub : S.rules ⊆ P.rules) {sd : Database} (hs : Reach Database.empty S sd) :
-    sd.CtorsIn P :=
-  (programStep_ctorsIn Database.WF.empty Database.empty_ctorsInState
-    (Schedule.CtorsIn.of_domain hdom hsub) hs).terms
 
 end Egglog

@@ -79,13 +79,13 @@ def Program.names (P : Program) : List String :=
 
 /-! ### What the query flattening drops
 
-`encodeQueryExpr` flattens an *application* and returns a leaf unchanged, so `encodePattern`
+`encodeQueryExprWith` flattens an *application* and returns a leaf unchanged, so `encodePatternWith`
 emits **no atom** for a source pattern whose expression is a bare literal or a bare variable.
 Both are conditions on the source program's **text**, decidable, and both are folded into
 `Program.Fragment` below. -/
 /-- **The pattern has a witness position.** `Matches` asks for a term the source *holds*
 congruent to the instance, and a bare literal has none: the source may never have built it,
-and `encodePattern` emits no atom that would say it did. -/
+and `encodePatternWith` emits no atom that would say it did. -/
 def Pattern.Grounded : Pattern → Prop
   | .expr e => ∀ l, e ≠ .lit l
   | .eq e₁ e₂ => (∀ l, e₁ ≠ .lit l) ∨ (∀ l, e₂ ≠ .lit l)

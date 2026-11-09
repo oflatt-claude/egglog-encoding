@@ -11,8 +11,6 @@ def ambient (db : Database) : Database :=
 theorem ambient_refl (db : Database) (t : Term) : StoredCong (ambient db) t t :=
   .direct (Or.inr rfl)
 
-theorem ambient_contains (db : Database) : db.Contained (ambient db) := ⟨fun _ hp => Or.inl hp, subset_rfl⟩
-
 /-- Every subterm has a representative that actually exists in the source. -/
 def Supports (db : Database) (t : Term) : Prop :=
   ∀ s ∈ t.subterms, ∃ u ∈ db.terms, StoredCong (ambient db) s u
@@ -21,15 +19,6 @@ structure Claim.Supported (db : Database) (c : Claim) : Prop where
   equality : c.Holds (ambient db)
   lhs : Supports db c.lhs
   rhs : Supports db c.rhs
-
-theorem supports_of_mem {db : Database} (hw : db.WF) {t : Term} (ht : t ∈ db.terms) :
-    Supports db t := fun s hs =>
-  ⟨s, hw.subtermClosed t ht hs, ambient_refl db s⟩
-
-theorem Claim.Holds.supported {db : Database} (hw : db.WF) {c : Claim}
-    (h : c.Holds db) : c.Supported db :=
-  ⟨h.mono (ambient_contains db), supports_of_mem hw (eqsInTerms_free h).1,
-    supports_of_mem hw (eqsInTerms_free h).2⟩
 
 private theorem ambient_interpret {db : Database} (hw : db.WF) {a b : Term}
     (hc : StoredCong (ambient db) a b) :

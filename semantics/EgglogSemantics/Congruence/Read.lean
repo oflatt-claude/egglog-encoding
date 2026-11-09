@@ -32,17 +32,4 @@ inductive ReprList (d : Database) : List Term → List Term → Prop where
 
 end
 
-/-- The id of a term: its one reading. Rebuilding compresses every edge to a root and
-merges the roots of applications with the same child parents, so at a rebuild fixpoint
-every held term has an id and the reading needs no UF walk. -/
-def Id (d : Database) (t e : Term) : Prop :=
-  Repr d t e ∧ ∀ e', Repr d t e' → e' = e
-
-/-- Two terms with the same id. -/
-def SameClass (d : Database) (a b : Term) : Prop :=
-  ∃ e, Id d a e ∧ Id d b e
-
-theorem SameClass.symm {d : Database} {a b : Term} (h : SameClass d a b) :
-    SameClass d b a := ⟨h.choose, h.choose_spec.2, h.choose_spec.1⟩
-
 end Egglog.Congruence

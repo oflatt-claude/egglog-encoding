@@ -21,16 +21,6 @@ theorem Cong.iff_eq_and_mem_of_diag {db : Database} (hd : db.Diag) {a b : Term} 
   · rintro ⟨rfl, ha⟩
     exact Database.toCong ha
 
-/-- Marking rows leaves congruence unchanged. -/
-theorem Database.cong_addSubsumed_iff (db : Database) (X : Set Term) (a b : Term) :
-    Cong (db.addSubsumed X) a b ↔ Cong db a b :=
-  Cong.iff_of_eqs_eq (d := db.addSubsumed X) (e := db) rfl
-
-/-- An asserted subsume retains the row and all its columns. -/
-theorem Database.mem_subsume_terms (db : Database) (t s : Term) (hs : s ∈ t.subterms) :
-    s ∈ ((db.addTerm t).addSubsumed {t}).terms := by
-  exact Database.addTerm_terms ▸ Or.inr hs
-
 /-- Marks only hide rows from lookups; forgetting them restores semantic existence. -/
 theorem Database.live_forgetSubsumed (db : Database) :
     db.forgetSubsumed.live = {t | Cong db t t} := by
@@ -41,9 +31,6 @@ theorem Database.live_forgetSubsumed (db : Database) :
 /-- Every mark names a term that semantically exists. -/
 def Database.MarksExist (db : Database) : Prop :=
   ∀ t ∈ db.subsumed, Cong db t t
-
-theorem Database.MarksExist.empty : Database.empty.MarksExist := by
-  simp [Database.MarksExist, Database.empty]
 
 theorem Action.mark_mem_write {σ : Env} {a : Action} {W : Set (Term × Term)}
     {X : Set Term} (hw : a.write σ = some W) (hx : a.mark σ = some X)

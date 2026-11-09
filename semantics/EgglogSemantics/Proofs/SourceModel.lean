@@ -79,24 +79,4 @@ theorem completion_closed_of_saturated {d : Database} (hw : d.WF) (hrd : d.HasRe
     (hfixed : RunSaturated R d) : RunRules R d.completion = d.completion :=
   completion_closed hw hrd hdf hn hfixed
 
-/-- The returned state of source saturation is closed, including its last round. -/
-theorem saturation_completion_closed {d e : Database} (hw : d.WF)
-    (hf : d.eqs.Finite)
-    {R : List Rule} (hdf : ∀ r ∈ R, r.SubsumeFree)
-    (hn : ∀ r ∈ R, r.OrderingFree)
-    (hr : Reach d (.saturate (.run R)) e) : RunRules R e.completion = e.completion := by
-  generalize hS : Schedule.saturate (.run R) = S at hr
-  induction hr with
-  | run => cases hS
-  | seq => cases hS
-  | @fixpoint d out S hp heq _ =>
-    cases hS
-    cases hp
-    have hh : d.SameMeaning (RunRules R d) := heq
-    rw [← hh.completion_eq (RunRules.subsumed_eq hdf).symm]
-    exact completion_closed hw (Database.hasReps_of_finite hf) hdf hn hh
-  | again hp _ _ _ ih =>
-    cases hS
-    exact ih (hp.wf hw) (hp.finite hf) rfl
-
 end Egglog.SourceMeaning

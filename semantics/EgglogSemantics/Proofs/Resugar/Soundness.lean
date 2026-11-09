@@ -75,28 +75,6 @@ theorem certificates_checked {exec : Program → Option FDatabase} {P : Program}
   obtain ⟨_, _, h⟩ := Option.bind_eq_some_iff.mp h
   exact sourceProofs_checked h
 
-/-- Lifting establishes the mapped claim in the reached, saturated source state. -/
-theorem lift_supported {P : Program} {db : Database}
-    {input : SourceProof.Proof} {output : SourceProof.Proof}
-    {fact : Term} {claim : SourceProof.Claim}
-    (hs : Reach Database.empty P.schedule db) (hw : db.WF)
-    (hclosed : ∀ rs ∈ P.runs, RunSaturated rs db)
-    (hf : Provenance.check (Congruence.encode P) input = some fact)
-    (hc : factClaim P fact = some claim) (h : lift P input = some output) :
-    claim.Supported db :=
-  SourceProof.check_supported hs hw hclosed (lift_checked hf hc h)
-
-theorem lift_sound {P : Program} {db : Database}
-    {input : SourceProof.Proof} {output : SourceProof.Proof}
-    {fact : Term} {claim : SourceProof.Claim}
-    (hs : Reach Database.empty P.schedule db) (hw : db.WF)
-    (hclosed : ∀ rs ∈ P.runs, RunSaturated rs db)
-    (hf : Provenance.check (Congruence.encode P) input = some fact)
-    (hc : factClaim P fact = some claim) (h : lift P input = some output)
-    (hl : claim.lhs ∈ db.terms) (hr : claim.rhs ∈ db.terms) :
-    StoredCong db claim.lhs claim.rhs :=
-  (lift_supported hs hw hclosed hf hc h).holds hw hl hr
-
 /-- Lifted claims have represented existence even at spellings absent from the store. -/
 theorem lift_infers {P : Program} {db : Database}
     {input : SourceProof.Proof} {output : SourceProof.Proof}

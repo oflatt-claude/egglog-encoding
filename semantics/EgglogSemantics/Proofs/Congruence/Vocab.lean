@@ -67,12 +67,6 @@ abbrev Term.VocabIn (P : Program) (t : Term) : Prop := Term.UsesVocabulary P.cto
 theorem Term.VocabIn.subterm {P : Program} {s t : Term} (ht : t.VocabIn P) (hs : s ∈ t.subterms) :
     s.VocabIn P := Term.UsesVocabulary.subterm ht hs
 
-theorem Term.vocabIn_app_iff {P : Program} {f : FnName} {args : List Term} :
-    Term.VocabIn P (.app f args) ↔ f ∈ P.ctorSet ∧ ∀ a ∈ args, Term.VocabIn P a := by
-  constructor
-  · intro h; cases h with | app hf hargs => exact ⟨hf, hargs⟩
-  · rintro ⟨hf, hargs⟩; exact .app hf hargs
-
 mutual
 
 /-- Evaluation stays inside the program's vocabulary. -/

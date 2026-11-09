@@ -32,10 +32,6 @@ theorem congrPair_elim {rel : Finset (Term × Term)} {a b : Term}
 theorem subset_congStep {terms : Finset Term} {rel : Finset (Term × Term)} :
     rel ⊆ congStep terms rel := Finset.subset_union_left
 
-theorem congStep_subset {terms : Finset Term} {rel : Finset (Term × Term)}
-    (h : rel ⊆ candidates terms) : congStep terms rel ⊆ candidates terms :=
-  Finset.union_subset h (Finset.filter_subset _ _)
-
 theorem mem_congStep {terms : Finset Term} {rel : Finset (Term × Term)} {p : Term × Term} :
     p ∈ congStep terms rel ↔
       p ∈ rel ∨ (p ∈ candidates terms ∧ stepAdds terms rel p = true) := by
@@ -97,60 +93,5 @@ theorem closure_sound {db : Database} {terms : Finset Term}
     intro hrel
     rw [closure, dif_neg hfix]
     exact ih (congStep_sound hterms hrel)
-
-/-- The procedure decides `Cong` between held terms when the store is finite.
-Semantic congruence can also relate spellings outside this finite universe. -/
-theorem mem_closure_iff {db : Database} {terms : Finset Term} {rel : Finset (Term × Term)}
-    (hterms : db.terms = ↑terms) (heqs : db.eqs = ↑rel) (h : rel ⊆ candidates terms)
-    {a b : Term} (ha : a ∈ db.terms) (hb : b ∈ db.terms) :
-    (a, b) ∈ closure terms rel h ↔ Cong db a b := by
-  have hassert : ∀ p ∈ rel, Cong db p.1 p.2 := fun p hp =>
-    Cong.direct (by rw [heqs]; exact hp)
-  refine ⟨fun hp => closure_sound hterms rel h hassert (a, b) hp, fun hc => ?_⟩
-  have hs : StoredCong db a b := InferredFacts.infers_iff_cong_of_held_core ha hb |>.mp
-    (InferredFacts.congr_iff_infers.mp hc)
-  refine hs.le (R := fun x y => (x, y) ∈ closure terms rel h) ?_ ?_ ?_ ?_ ?_
-  · exact fun x y hxy => subset_closure h (by rw [heqs] at hxy; exact hxy)
-  · intro x y hxy
-    have hcand := mem_candidates.mp (closure_subset h hxy)
-    rw [← closure_fixpoint h]
-    refine mem_congStep.mpr (Or.inr ⟨mem_candidates.mpr ⟨hcand.2, hcand.1⟩, ?_⟩)
-    simp only [stepAdds, Bool.or_eq_true, decide_eq_true_eq]
-    exact Or.inl (Or.inl (Or.inr hxy))
-  · intro x y z hxy hyz
-    have hx := mem_candidates.mp (closure_subset h hxy)
-    have hz := mem_candidates.mp (closure_subset h hyz)
-    rw [← closure_fixpoint h]
-    refine mem_congStep.mpr (Or.inr ⟨mem_candidates.mpr ⟨hx.1, hz.2⟩, ?_⟩)
-    simp only [stepAdds, Bool.or_eq_true, decide_eq_true_eq]
-    exact Or.inl (Or.inr ⟨y, hx.2, hxy, hyz⟩)
-  · intro f as bs ha hb hz
-    rw [← closure_fixpoint h]
-    refine mem_congStep.mpr (Or.inr ⟨mem_candidates.mpr ?_, ?_⟩)
-    · rw [hterms] at ha hb; exact ⟨ha, hb⟩
-    · simp only [stepAdds, Bool.or_eq_true]
-      exact Or.inr (congrPair_app_iff.mpr ⟨rfl, hz⟩)
-  · intro t s ht hst
-    have hst' : s ∈ db.terms := by
-      have ht' : t ∈ db.terms := by
-        rw [hterms]
-        exact (mem_candidates.mp (closure_subset h ht)).1
-      exact (StoredCong.subterm (Database.toStored ht') hst).toHeld
-    rw [← closure_fixpoint h]
-    refine mem_congStep.mpr (Or.inr ⟨mem_candidates.mpr ?_, ?_⟩)
-    · rw [hterms] at hst'
-      exact ⟨hst', hst'⟩
-    · simp [stepAdds]
-
-
-theorem mem_closureTotal_iff {db : Database} {terms : Finset Term}
-    {rel : Finset (Term × Term)} (hterms : db.terms = ↑terms) (heqs : db.eqs = ↑rel)
-    (h : rel ⊆ candidates terms) {a b : Term} (ha : a ∈ db.terms) (hb : b ∈ db.terms) :
-    (a, b) ∈ closureTotal terms rel ↔ Cong db a b := by
-  have hfil : (candidates terms).filter (· ∈ rel) = rel := by
-    ext p
-    simp only [Finset.mem_filter]
-    exact ⟨fun hp => hp.2, fun hp => ⟨h hp, hp⟩⟩
-  exact mem_closure_iff hterms (by rw [hfil]; exact heqs) (Finset.filter_subset _ _) ha hb
 
 end Egglog

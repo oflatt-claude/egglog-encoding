@@ -26,13 +26,6 @@ theorem Expr.MatchesList.eval_exists {db : Database} {σ : Env} {es : List Expr}
     obtain ⟨ts, hts⟩ := hes.eval_exists
     exact ⟨t :: ts, by simp [Expr.evalList, ht, hts]⟩
 
-theorem Lookup.eval {db : Database} {σ : Env} {e : Expr} {t : Term}
-    (h : e.eval σ = some t ∧ Expr.Matches db σ e) : e.eval σ = some t := h.1
-
-theorem LookupList.eval {db : Database} {σ : Env} {es : List Expr} {ts : List Term}
-    (h : Expr.evalList es σ = some ts ∧ Expr.MatchesList db σ es) :
-    Expr.evalList es σ = some ts := h.1
-
 /-- Variables get existence from their bindings, not from a liveness premise. -/
 theorem Lookup.exists_cong {db : Database} {σ : Env}
     (hσ : ∀ v t, Env.lookup v σ = some t → Cong db t t) {e : Expr} {t : Term}
@@ -136,12 +129,6 @@ theorem Lookup.of_agreeOn {db : Database} {σ τ : Env} {e : Expr} {t : Term}
     (ha : ∀ v ∈ e.vars, Env.lookup v σ = Env.lookup v τ) :
     e.eval τ = some t ∧ Expr.Matches db τ e := by
   rwa [← e.eval_agreeOn ha, ← e.rows_agreeOn ha]
-
-theorem LookupList.of_agreeOn {db : Database} {σ τ : Env} {es : List Expr} {ts : List Term}
-    (h : Expr.evalList es σ = some ts ∧ Expr.MatchesList db σ es)
-    (ha : ∀ v ∈ Expr.varsList es, Env.lookup v σ = Env.lookup v τ) :
-    Expr.evalList es τ = some ts ∧ Expr.MatchesList db τ es := by
-  rwa [← Expr.evalList_agreeOn es ha, ← Expr.rowsList_agreeOn es ha]
 
 mutual
 

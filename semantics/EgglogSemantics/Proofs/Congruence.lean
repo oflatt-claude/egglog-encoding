@@ -2,35 +2,9 @@ import EgglogSemantics.Spec.Congruence
 import EgglogSemantics.Proofs.Database
 
 namespace Egglog
-/-- **Every equation `d₁` records `d₂` records up to congruence.** The witness `q` is one
-of `d₂`'s own equations, or the clause says nothing: `withOperands` alone makes `p` hold. -/
-structure Database.Recorded (d₁ d₂ : Database) : Prop where
-  eqs : ∀ p ∈ d₁.eqs, ∃ q ∈ d₂.eqs,
-    StoredCongOn d₂ [p.1, p.2] p.1 q.1 ∧ StoredCongOn d₂ [p.1, p.2] p.2 q.2
-
-/-- `StoredCongList` is `List.Forall₂ (StoredCong db)`. Recursion over a mutual inductive has
-to go through `match`; the `induction` tactic does not support it. -/
-theorem StoredCongList.toForall₂ {db : Database} {as bs : List Term} (h : StoredCongList db as bs) :
-    List.Forall₂ (StoredCong db) as bs := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl => exact .cons hab (StoredCongList.toForall₂ hl)
-
-theorem StoredCongList.ofForall₂ {db : Database} {as bs : List Term}
-    (h : List.Forall₂ (StoredCong db) as bs) : StoredCongList db as bs := by
-  induction h with
-  | nil => exact .nil
-  | cons hab _ ih => exact .cons hab ih
 
 namespace StoredCongList
 variable {db : Database}
-
-theorem forall₂ {as bs : List Term} :
-    StoredCongList db as bs ↔ List.Forall₂ (StoredCong db) as bs :=
-  ⟨toForall₂, ofForall₂⟩
-
-theorem length_eq {as bs : List Term} (h : StoredCongList db as bs) : as.length = bs.length :=
-  h.toForall₂.length_eq
 
 /-- Pointwise self-congruence. There is no reflexivity rule, so this is exactly the
 hypothesis that the database holds every element: membership in `terms` *is* the
@@ -40,25 +14,7 @@ theorem refl {as : List Term} (h : ∀ a ∈ as, a ∈ db.terms) : StoredCongLis
   | nil => exact .nil
   | cons a as ih => exact .cons (h a (by simp)) (ih fun b hb => h b (by simp [hb]))
 
-/-- Symmetry, pointwise. -/
-theorem symm {as bs : List Term} (h : StoredCongList db as bs) : StoredCongList db bs as := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl => exact .cons hab.symm (StoredCongList.symm hl)
-
-/-- Transitivity, pointwise. -/
-theorem trans {as bs cs : List Term} (h₁ : StoredCongList db as bs) (h₂ : StoredCongList db bs cs) :
-    StoredCongList db as cs := by
-  match h₁, h₂ with
-  | .nil, .nil => exact .nil
-  | .cons hab hl₁, .cons hbc hl₂ => exact .cons (hab.trans hbc) (StoredCongList.trans hl₁ hl₂)
-
 end StoredCongList
-/-- `StoredCong.congr` stated over `List.Forall₂`. -/
-theorem StoredCong.congr' {db : Database} {f : FnName} {as bs : List Term}
-    (ha : Term.app f as ∈ db.terms) (hb : Term.app f bs ∈ db.terms)
-    (h : List.Forall₂ (StoredCong db) as bs) : StoredCong db (.app f as) (.app f bs) :=
-  .congr ha hb (StoredCongList.forall₂.mpr h)
 
 mutual
 
@@ -117,19 +73,6 @@ is itself an equation. -/
 theorem StoredCong.mem_of {db : Database} {a b : Term} (hc : StoredCong db a b) :
     a ∈ db.terms ∧ b ∈ db.terms := eqsInTerms_free hc
 
-theorem StoredCongList.mem_of {db : Database} {as bs : List Term} (hc : StoredCongList db as bs) :
-    (∀ a ∈ as, a ∈ db.terms) ∧ (∀ b ∈ bs, b ∈ db.terms) := by
-  match hc with
-  | .nil => exact ⟨by simp, by simp⟩
-  | .cons hab hl =>
-    refine ⟨fun a ha => ?_, fun b hb => ?_⟩
-    · rcases List.mem_cons.mp ha with rfl | ha
-      · exact hab.mem_of.1
-      · exact (StoredCongList.mem_of hl).1 a ha
-    · rcases List.mem_cons.mp hb with rfl | hb
-      · exact hab.mem_of.2
-      · exact (StoredCongList.mem_of hl).2 b hb
-
 mutual
 
 /-- The least relation closed under assertions, subterm existence, and congruence. -/
@@ -167,22 +110,6 @@ theorem StoredCongList.le {db : Database} {R : Term → Term → Prop}
 
 end
 
-/-- Reasserting a held term derives nothing new. -/
-theorem StoredCong.of_addTerm {db : Database} (hw : db.WF) {t : Term} (ht : t ∈ db.terms)
-    {a b : Term} (hc : StoredCong (db.addTerm t) a b) : StoredCong db a b := by
-  have hmem : ∀ {s : Term}, s ∈ (db.addTerm t).terms → s ∈ db.terms := by
-    intro s hs
-    rcases Database.addTerm_terms ▸ hs with hs | hs
-    · exact hs
-    · exact hw.subtermClosed t ht hs
-  refine StoredCong.le (R := StoredCong db) (fun a b hm => ?_) (fun _ _ => StoredCong.symm)
-    (fun _ _ _ => StoredCong.trans) (fun _ _ _ ha hb hl => StoredCong.congr' (hmem ha) (hmem hb) hl)
-    (fun t s ht hs => hw.subtermClosed t ht hs) hc
-  rcases Set.mem_insert_iff.mp hm with heq | hm
-  · obtain ⟨rfl, rfl⟩ := Prod.mk.inj heq
-    exact Database.toStored ht
-  · exact .direct hm
-
 /-! ### A literal's class is a singleton
 
 `Database.LitsIsolated` constrains the *asserted* equations. That the derived ones are
@@ -209,31 +136,12 @@ theorem StoredCong.eq_of_isLit {db : Database} (hl : db.LitsIsolated) {a b : Ter
   | nil => trivial
   | cons => trivial
 
-/-- The list form: an operand list of literals has no congruent neighbours either. -/
-theorem StoredCongList.eq_of_isLit {db : Database} (hl : db.LitsIsolated) :
-    ∀ {as bs : List Term}, StoredCongList db as bs → (∀ a ∈ as, a.isLit) → as = bs
-  | _, _, .nil, _ => rfl
-  | a :: _, _, .cons hab hrest, hlit => by
-    rw [StoredCong.eq_of_isLit hl hab (Or.inl (hlit a (by simp))),
-      StoredCongList.eq_of_isLit hl hrest fun x hx => hlit x (by simp [hx])]
-
 namespace StoredCong
 variable {db : Database}
 
 theorem mem_left {a b : Term} (hc : StoredCong db a b) : a ∈ db.terms := hc.mem_of.1
 
 theorem mem_right {a b : Term} (hc : StoredCong db a b) : b ∈ db.terms := hc.mem_of.2
-
-/-- Nothing is derivable in the empty database. -/
-theorem not_of_empty {a b : Term} (hc : StoredCong Database.empty a b) : False := by
-  simpa using hc.mem_left
-
-/-- `StoredCong db` is an equivalence on the subtype of `db.terms`. This is the e-graph viewed
-as a set of e-classes: the `Quotient` of this setoid is `db`'s e-classes. Reflexivity is
-the subtype's own property. -/
-def setoid (db : Database) : Setoid {t : Term // t ∈ db.terms} where
-  r a b := StoredCong db a.val b.val
-  iseqv := ⟨fun a => a.property, .symm, .trans⟩
 
 end StoredCong
 

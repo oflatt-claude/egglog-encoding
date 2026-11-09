@@ -316,30 +316,6 @@ theorem blt_iff {s t : Term} : blt s t = true ↔
 @[simp] theorem blt_lit_lit {l m : Lit} : Term.blt (.lit l) (.lit m) = Lit.blt l m := by
   simp [blt]
 
-@[simp] theorem blt_lit_app {l : Lit} {f : FnName} {as : List Term} :
-    Term.blt (.lit l) (.app f as) = true := by
-  rw [blt_iff]
-  by_cases h : nodeSizeList as = 0
-  · exact Or.inr ⟨by simp [h], rfl⟩
-  · exact Or.inl (by simp; omega)
-
-@[simp] theorem blt_app_lit {f : FnName} {as : List Term} {l : Lit} :
-    Term.blt (.app f as) (.lit l) = false := by
-  apply Bool.eq_false_iff.mpr
-  intro h
-  rcases blt_iff.mp h with hs | ⟨_, hs⟩
-  · simp only [nodeSize_app, nodeSize_lit] at hs
-    omega
-  · simp at hs
-
-theorem blt_app_app {f g : FnName} {as bs : List Term} :
-    Term.blt (.app f as) (.app g bs) =
-      (if nodeSizeList as ≠ nodeSizeList bs then
-        decide (nodeSizeList as < nodeSizeList bs)
-       else if as.length ≠ bs.length then decide (as.length < bs.length)
-       else if f ≠ g then decide (f < g) else structuralBltList as bs) := by
-  simp [blt, structuralBlt_app_app]
-
 theorem blt_asymm (s t : Term) (h : Term.blt s t = true) : Term.blt t s = false := by
   apply Bool.eq_false_iff.mpr
   intro hrev
@@ -384,13 +360,6 @@ theorem IsSubterm.blt {s t : Term} (h : IsSubterm s t) (hne : s ≠ t) :
     blt s t = true := blt_of_nodeSize_lt (h.nodeSize_lt hne)
 
 end Term
-
-/-- `Term.blt` is a strict linear order. Needed for `min` to be a deterministic choice, and
-for "keep the smaller side" to descend. -/
-theorem Term.blt_linear : (∀ s t : Term, Term.blt s t = true → Term.blt t s = false) ∧
-    (∀ s t : Term, s ≠ t → Term.blt s t = true ∨ Term.blt t s = true) ∧
-    (∀ s t u : Term, Term.blt s t = true → Term.blt t u = true → Term.blt s u = true) :=
-  ⟨Term.blt_asymm, Term.blt_total, Term.blt_trans⟩
 
 /-! ### `min`, against what it replaces
 

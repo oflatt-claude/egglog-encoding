@@ -9,11 +9,6 @@ namespace Egglog.SourceProof
 theorem sourceOk_fragment {P : Program} (h : sourceOk P = true) : P.Fragment :=
   of_decide_eq_true h
 
-/-- The fragment computes with no `min`, so neither does any of its rules. -/
-theorem sourceOk_rule {P : Program} (h : sourceOk P = true) {r : Rule}
-    (hr : r ∈ P.rules) : r.OrderingFree :=
-  (sourceOk_fragment h).noMin.1 r hr
-
 /-- A checked head fact follows from a valid source rule firing, up to supported terms. -/
 theorem ruleFacts_supported {P : Program} {db : Database}
     (hs : Reach Database.empty P.schedule db) (hw : db.WF)

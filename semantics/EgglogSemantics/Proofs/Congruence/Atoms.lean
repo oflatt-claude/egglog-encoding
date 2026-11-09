@@ -26,8 +26,6 @@ theorem Expr.matchesList_cons_iff {d : Database} {σ : Env} {e : Expr} {es : Lis
   · intro h; cases h with | cons he hes => exact ⟨he, hes⟩
   · rintro ⟨he, hes⟩; exact .cons he hes
 
-theorem Expr.matchesList_nil {d : Database} {σ : Env} : Expr.MatchesList d σ [] := .nil
-
 /-- A list of bound variables matches. -/
 theorem matchesList_map_var {d : Database} {σ : Env} : ∀ {vs : List Var},
     (∀ v ∈ vs, (Env.lookup v σ).isSome) → Expr.MatchesList d σ (vs.map Expr.var)

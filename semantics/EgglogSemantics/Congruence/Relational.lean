@@ -147,12 +147,6 @@ def runRules (rs : List Rule) (d : FDatabase) : FDatabase :=
   let firings := rs.map fun r => (r, matchQuery d r.query)
   firings.foldl (fun acc rs => rs.2.foldl (fireInto rs.1) acc) d
 
-def runSaturate (rs : List Rule) : Nat → FDatabase → Option FDatabase
-  | 0, d => if d.sameData (runRules rs d) then some d else none
-  | n + 1, d =>
-    let e := runRules rs d
-    if d.sameData e then some d else runSaturate rs n e
-
 mutual
 
 /-- `Reach` at identity, with `fuel` passes allowed per saturation. -/

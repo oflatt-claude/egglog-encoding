@@ -442,7 +442,7 @@ private def genProgram (s : Nat) : List Src :=
   let (r₂, s) := genRule g₃ s
   let (rounds, s) := pick 3 s
   -- **Sometimes a source `saturate`**, drawn after everything else so that the rest of a
-  -- seed's program is what it was. `encodeSchedule` compiles a `saturate` structurally,
+  -- seed's program is what it was. `encodeScheduleWith` compiles a `saturate` structurally,
   -- and nothing else in the corpus but the `sat-*` cases reaches it.
   let (wantSat, s) := pick 2 s
   let sat := match wantSat, genCollapseRules g₂ with
@@ -517,8 +517,8 @@ private def litZeroCase : List Src := [.global (.expr (add (.lit (.int 0)) (.lit
 
 /-! ### The union-find probes
 
-`Read.lean`'s `SameClass` is the **flat** relation: each term reads, through the live
-edges of its children, to exactly one root, and the two roots are the same. A rebuild the
+`Reader.lean`'s `sameClassF` is the **flat** relation: each term reads, through the live
+edges of its children, to exactly one root (`idF`), and the two roots are the same. A rebuild the
 target did not finish leaves a key with two live edges or two applications with one child
 tuple and two roots, and then a term has no id at all.
 
@@ -539,7 +539,7 @@ private def wrap : Nat → Expr → Expr
   | n + 1, e => .app "Wrapper" [wrap n e]
 
 /-- A three-link union chain under two wrappers, with **no** `run`: the only rebuild is the
-one `encodeSchedule` appends to each action. `Term.blt` orders nullary constructors by name, so
+one `encodeScheduleWith` appends to each action. `Term.blt` orders nullary constructors by name, so
 `A` is the representative and the edges the `union`s write are `D → C`, `C → B`, `B → A`,
 each landing above the standing representative, the order that makes the walk longest. -/
 private def chainCase : List Src :=

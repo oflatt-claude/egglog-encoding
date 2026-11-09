@@ -8,22 +8,12 @@ namespace Egglog
 abbrev Action.SubsumeFree (a : Action) : Prop := a.monotoneB = true
 
 def Actions.SubsumeFree (as : List Action) : Prop := ∀ a ∈ as, a.SubsumeFree
-@[simp] theorem Actions.subsumeFree_nil : Actions.SubsumeFree [] := by simp [Actions.SubsumeFree]
 @[simp] theorem Actions.subsumeFree_cons {a : Action} {as : List Action} :
     Actions.SubsumeFree (a :: as) ↔ a.SubsumeFree ∧ Actions.SubsumeFree as := by
   simp [Actions.SubsumeFree]
 theorem Actions.subsumeFree_of_all {as : List Action} (h : as.all Action.monotoneB = true) :
     Actions.SubsumeFree as := List.all_eq_true.mp h
 def Rule.SubsumeFree (r : Rule) : Prop := Actions.SubsumeFree r.actions
-
-theorem Database.WF.congr {d₁ d₂ : Database} (hw : d₁.WF) (heqs : d₁.eqs = d₂.eqs) :
-    d₂.WF := ⟨by simpa [Database.LitsIsolated, ← heqs] using hw.litsIsolated⟩
-
-theorem Database.mem_terms_of_arg {db : Database} (hwf : db.WF) {f : FnName}
-    {args : List Term} (h : Term.app f args ∈ db.terms) {t : Term} (ht : t ∈ args) :
-    t ∈ db.terms :=
-  hwf.subtermClosed _ h
-    (Term.mem_subterms.mpr (Term.IsSubterm.arg ht (Term.IsSubterm.refl t)))
 
 /-- `Term.least` answers with one of its operands. -/
 theorem Term.least_eq_or (s t : Term) : Term.least s t = s ∨ Term.least s t = t := by
@@ -170,65 +160,9 @@ theorem Expr.evalList_isSome {σ : Env} (es : List Expr)
 
 end
 
-mutual
-
-/-- **Extending the environment on the right keeps a value.** `Env.lookup` is left-biased, so
-a variable the prefix already binds reads the same either way. -/
-theorem Expr.eval_append_env {σ τ : Env} :
-    ∀ (e : Expr) {t : Term}, e.eval σ = some t → e.eval (σ ++ τ) = some t
-  | .lit _, _, h => h
-  | .var _, _, h => Env.lookup_append_of_some h
-  | .app f args, t, h => by
-      rw [Expr.eval_app_ctor] at h ⊢
-      obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
-      rw [Expr.evalList_append_env args hts, Option.map_some]
-      exact congrArg some hap
-  | .min a b, t, h => by
-      rw [Expr.eval_min] at h ⊢
-      obtain ⟨x, hx, hmap⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
-      rw [Expr.eval_append_env a hx, Option.bind_some, Expr.eval_append_env b hy,
-        Option.map_some]
-@[inherit_doc Expr.eval_append_env]
-theorem Expr.evalList_append_env {σ τ : Env} :
-    ∀ (es : List Expr) {ts : List Term},
-      Expr.evalList es σ = some ts → Expr.evalList es (σ ++ τ) = some ts
-  | [], _, h => h
-  | e :: es, _, h => by
-      rw [Expr.evalList] at h ⊢
-      obtain ⟨t, ht, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨ts, hts, hcons⟩ := Option.map_eq_some_iff.mp hrest
-      rw [Expr.eval_append_env e ht, Option.bind_some,
-        Expr.evalList_append_env es hts, Option.map_some]
-      exact congrArg some hcons
-
-end
-
-theorem Expr.evalList_append {σ : Env} :
-    ∀ {es fs : List Expr} {ts : List Term}, Expr.evalList (es ++ fs) σ = some ts →
-      ∃ as bs, Expr.evalList es σ = some as ∧ Expr.evalList fs σ = some bs ∧
-        ts = as ++ bs := by
-  intro es
-  induction es with
-  | nil => intro fs ts h; exact ⟨[], ts, rfl, h, rfl⟩
-  | cons e es ih =>
-    intro fs ts h
-    rw [List.cons_append, Expr.evalList] at h
-    obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
-    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h
-    obtain ⟨as, bs, has, hbs, rfl⟩ := ih hus
-    exact ⟨t :: as, bs, by rw [Expr.evalList, ht, Option.bind_some, has, Option.map_some],
-      hbs, rfl⟩
-
-
-
 @[simp] theorem evalActions_nil {σ : Env} {db : Database} : evalActions σ db [] = some db := rfl
 @[simp] theorem evalActions_cons {σ : Env} {db : Database} {a : Action} {as : List Action} :
     evalActions σ db (a :: as) = (evalAction σ db a).bind fun d => evalActions σ d as := rfl
-
-theorem evalAction_expr_of_eval {σ : Env} {db : Database} {e : Expr} {t : Term}
-    (h : e.eval σ = some t) : evalAction σ db (.expr e) = some (db.addTerm t) := by
-  simp [evalAction, h]
 
 theorem evalAction_eq_some {σ : Env} {db db' : Database} {a : Action}
     (h : evalAction σ db a = some db') :
@@ -261,7 +195,6 @@ theorem evalAction_contained {σ : Env} {db db' : Database} {a : Action}
   · exact .addEq t₁ t₂ db
   · simp [Action.SubsumeFree, Action.monotoneB] at hdf
 
-
 theorem evalAction_wf {σ : Env} {db db' : Database} (hw : db.WF) {a : Action}
     (h : evalAction σ db a = some db') : db'.WF := by
   rcases evalAction_eq_some h with ⟨_, t, _, _, rfl⟩ |
@@ -269,16 +202,6 @@ theorem evalAction_wf {σ : Env} {db db' : Database} (hw : db.WF) {a : Action}
   · exact hw.addTerm t
   · exact hw.addEq t₁ t₂ fun hl => absurd hl hlit
   · exact (hw.addTerm (.app f ts)).addSubsumed {.app f ts}
-
-theorem evalActions_contained {σ : Env} {db db' : Database} {as : List Action}
-    (hdf : Actions.SubsumeFree as) (h : evalActions σ db as = some db') : db.Contained db' := by
-  induction as generalizing db with
-  | nil => cases Option.some.inj h; exact .refl _
-  | cons a as ih =>
-    obtain ⟨d, ha, has⟩ := Option.bind_eq_some_iff.mp h
-    exact (evalAction_contained (Actions.subsumeFree_cons.mp hdf).1 ha).trans
-      (ih (Actions.subsumeFree_cons.mp hdf).2 has)
-
 
 theorem evalActions_wf {σ : Env} {db db' : Database} (hw : db.WF) {as : List Action}
     (h : evalActions σ db as = some db') : db'.WF := by

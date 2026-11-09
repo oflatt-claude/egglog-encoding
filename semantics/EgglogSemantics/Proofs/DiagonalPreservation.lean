@@ -2,27 +2,6 @@ import EgglogSemantics.Proofs.Diagonal
 
 namespace Egglog
 
-theorem evalAction_diag {σ : Env} {db db' : Database} {a : Action} (hu : a.UnionFree)
-    (hd : db.Diag) (h : evalAction σ db a = some db') : db'.Diag := by
-  rcases evalAction_eq_some h with ⟨_, t, _, _, rfl⟩ |
-    ⟨_, _, _, _, rfl, _⟩ | ⟨f, _, ts, _, _, rfl⟩
-  · exact hd.addTerm t
-  · exact hu.elim
-  · exact (hd.addTerm (.app f ts)).addSubsumed {.app f ts}
-
-theorem evalActions_diag {σ : Env} {db db' : Database} {as : List Action}
-    (hu : Actions.UnionFree as) (hd : db.Diag)
-    (h : evalActions σ db as = some db') : db'.Diag := by
-  induction as generalizing db with
-  | nil => cases Option.some.inj h; exact hd
-  | cons a as ih =>
-    obtain ⟨mid, ha, ht⟩ := Option.bind_eq_some_iff.mp h
-    exact ih hu.2 (evalAction_diag hu.1 hd ha) ht
-
-theorem evalLocalActions_diag {σ : Env} {db db' : Database} {as : List Action}
-    (hu : Actions.UnionFree as) (hd : db.Diag)
-    (h : evalActions σ db as = some db') : db'.Diag := evalActions_diag hu hd h
-
 theorem Action.write_diag {σ : Env} {a : Action} (hu : a.UnionFree)
     {W : Set (Term × Term)} (h : a.write σ = some W) : ∀ p ∈ W, p.1 = p.2 := by
   cases a with

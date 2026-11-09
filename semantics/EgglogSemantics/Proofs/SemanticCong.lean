@@ -46,9 +46,6 @@ theorem forall₂ {db : Database} {as bs : List Term} :
     | nil => exact .nil
     | cons h _ ih => exact .cons h ih
 
-theorem refl {db : Database} {as : List Term} (h : ∀ a ∈ as, a ∈ db.terms) :
-    CongList db as as := (StoredCongList.refl h).toCong
-
 theorem symm {db : Database} {as bs : List Term} (h : CongList db as bs) :
     CongList db bs as := by
   match h with
@@ -103,6 +100,18 @@ theorem CongList.of_assertions {d e : Database}
 
 end
 
+/-- Congruence replays in any state where every equation of the first state holds. -/
+theorem Cong.replay {D E : Database} (h : ∀ p ∈ D.eqs, Cong E p.1 p.2) {a b : Term}
+    (hc : Cong D a b) : Cong E a b := by
+  induction hc using Cong.rec (motive_2 := fun as bs _ => CongList E as bs) with
+  | direct hp => exact h _ hp
+  | child _ hs ih => exact .child ih hs
+  | symm _ ih => exact ih.symm
+  | trans _ _ ih ih' => exact ih.trans ih'
+  | congr _ _ ih ih' => exact .congr ih ih'
+  | nil => exact .nil
+  | cons _ _ ih ih' => exact .cons ih ih'
+
 theorem Cong.mono_eqs {d e : Database} (h : d.eqs ⊆ e.eqs) {a b : Term}
     (hc : Cong d a b) : Cong e a b := hc.of_assertions (fun _ hp => .direct (h hp))
 
@@ -132,13 +141,6 @@ theorem Database.SameMeaning.of_congr_empty {d e : Database}
     (hd : d.subsumed = ∅) (he : e.subsumed = ∅)
     (h : ∀ a b, Cong d a b ↔ Cong e a b) : d.SameMeaning e :=
   .of_congr h (hd.trans he.symm)
-
-theorem Database.sameMeaning_iff_congr_of_empty {d e : Database}
-    (hd : d.subsumed = ∅) (he : e.subsumed = ∅) :
-    d.SameMeaning e ↔ Cong d = Cong e := by
-  constructor
-  · intro h; funext a b; exact propext (h.congr a b)
-  · intro h; exact .of_congr_empty hd he (fun a b => by rw [h])
 
 theorem Database.live_addSubsumed {db : Database} {X : Set Term} {t : Term} :
     t ∈ (db.addSubsumed X).live ↔

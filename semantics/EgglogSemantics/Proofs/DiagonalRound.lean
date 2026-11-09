@@ -43,17 +43,4 @@ theorem RunMarks.eq_of_sameMeaning_terms {d e : Database} (h : d.SameMeaning e)
   · rintro ⟨X, ⟨r, hr, σ, hσ, hx⟩, htX⟩
     exact ⟨X, ⟨r, hr, σ, QueryMatches.sameMeaning h.symm ht.symm hσ, hx⟩, htX⟩
 
-/-- After a semantically unchanged diagonal round, the next round changes no assertions. -/
-theorem RunRules.self_of_sameMeaning {d e : Database} {R : List Rule}
-    (hn : d.NoUnions) (hu : ∀ r ∈ R, r.UnionFree) (hdf : ∀ r ∈ R, r.SubsumeFree)
-    (hr : e = RunRules R d)
-    (heq : d.SameMeaning e) : RunRules R e = e := by
-  subst e
-  have ht := heq.terms_eq_of_diag hn.diag (RunRules.noUnions hn hu).diag
-  have hw := RunWrites.eq_of_sameMeaning_terms heq ht R
-  rw [RunRules.eq_addEqs hdf, ← hw, RunRules.eq_addEqs hdf]
-  apply Database.ext
-  · simp [Database.addEqs, Set.union_assoc]
-  · rfl
-
 end Egglog

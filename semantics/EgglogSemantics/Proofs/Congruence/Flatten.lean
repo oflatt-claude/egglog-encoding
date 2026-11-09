@@ -30,9 +30,6 @@ theorem notFresh_of_not_at {v : Var} (h : ¬ "@".isPrefixOf v) : NotFresh v := b
   rw [hk] at h
   exact h (atPrefix_freshVar k)
 
-theorem freshIn_not_notFresh {n m : Nat} {v : Var} (h : FreshIn n m v) : ¬ NotFresh v :=
-  fun hn => let ⟨k, _, _, hk⟩ := h; hn k hk
-
 /-! ### Equations of the flattening -/
 
 theorem flat_lit (l : Lit) (n : Nat) : encodeQueryExprWith {} (.lit l) n = (.lit l, [], n) := rfl

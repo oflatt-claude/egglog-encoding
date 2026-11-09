@@ -1,6 +1,5 @@
 import EgglogSemantics.Congruence.Encode
 import EgglogSemantics.Source.WellFormed
-import EgglogSemantics.Spec.Behavior
 import EgglogSemantics.Proofs.Congruence.Main
 import Architect
 
@@ -11,19 +10,6 @@ to source meaning (`Proofs/Congruence/`); the executable gates in `DiffTest.lean
 statement on the corpus as well. -/
 
 namespace Egglog.Congruence
-
-/-- Compilation preserves success, failed checks, and divergence. Neither side's
-termination is a premise. -/
-def PreservesBehaviors : Prop :=
-  ∀ P : Program, P.WellFormed → P.Fragment → ∀ behavior : Behavior,
-    Behaves Database.empty (encode P) behavior ↔ Behaves Database.empty P behavior
-
-/-- For a well-formed supported source program, every pair of finite evaluations agrees
-on success versus check failure. This does not assert either evaluation exists. -/
-def PreservesObservations : Prop :=
-  ∀ P : Program, P.WellFormed → P.Fragment → ∀ source target : Result,
-    Eval Database.empty P source → Eval Database.empty (encode P) target →
-      source.succeeded = target.succeeded
 
 /-- The paper's statement: the outcomes agree, and so does divergence. -/
 def Correctness : Prop :=
@@ -55,10 +41,5 @@ and build terms of bounded size. -/
   and build terms of bounded size. -/)
   (latexEnv := "theorem")]
 theorem correctness : Correctness := fun P hW hP => encode_correct P hW hP
-
-/-- Every source evaluation has a compiled evaluation. -/
-def PreservesTermination : Prop :=
-  ∀ P : Program, P.WellFormed → P.Fragment → ∀ source : Result,
-    Eval Database.empty P source → ∃ target, Eval Database.empty (encode P) target
 
 end Egglog.Congruence

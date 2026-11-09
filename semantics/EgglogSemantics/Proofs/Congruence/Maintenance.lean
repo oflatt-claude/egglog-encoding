@@ -208,7 +208,7 @@ theorem maint_round (h : Rel src d) : Rel src (RunRules (maintenance P) d) := by
     rw [h.cong]
     constructor
     · exact Cong.mono_eqs (view_mono hmono)
-    · exact fun hab => Conservativity.cong_replay (D := view d') (E := view d)
+    · exact fun hab => Cong.replay (D := view d') (E := view d)
         (fun q hq => (hrow q.1 q.2 hq).cong_view h) hab
   have hlive : ∀ p ∈ Keys d, ∀ k, Row d' k p → Cong (liveView d') k p := by
     intro p hp

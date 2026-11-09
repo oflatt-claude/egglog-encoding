@@ -64,14 +64,6 @@ theorem execSchedule_reach {d e : FDatabase} (he : d.Closed) (hi : d.IndexOk)
     ∃ out, Reach d.toDatabase S out ∧ e.toDatabase.SameMeaning out :=
   execSchedule_transport ⟨he, hi, hj, hw⟩ hw d.finite_toDatabase (.refl _) rfl hd hc hs
 
-/-- The former command-refinement interface now accepts a nested schedule. -/
-theorem execCmd_cmdStep {d e : FDatabase} (he : d.Closed) (hi : d.IndexOk)
-    (hj : d.IndexCurrent) (hw : d.toDatabase.WF) {c : Schedule} {fuel : Nat}
-    (hd : ∀ r ∈ c.rules, r.SubsumeFree) (hc : c.OrderingFree)
-    (hs : execSchedule fuel d c = some e) :
-    ∃ out, Reach d.toDatabase c out ∧ e.toDatabase.SameMeaning out :=
-  execSchedule_reach he hi hj hw hd hc hs
-
 private theorem schedule_subsumeFree {S : Schedule} (h : S.monotoneB = true) :
     ∀ r ∈ S.rules, r.SubsumeFree := by
   intro r hr
@@ -92,58 +84,6 @@ theorem exec_programStep {p : Program} {e : FDatabase}
   have h := InterpReady.empty
   simpa only [FDatabase.toDatabase_empty] using
     execProgram_programStep h.closed h.indexOk h.indexCurrent h.wf hp ho.1 hs
-
-theorem closed_iterate {R : List Rule} (k : Nat) {d : FDatabase}
-    (he : d.Closed) (hd : ∀ r ∈ R, r.SubsumeFree) : ((execRunRules R)^[k] d).Closed := by
-  induction k generalizing d with
-  | zero => exact he
-  | succ k ih =>
-    rw [Function.iterate_succ_apply]
-    exact ih (closed_execRunRules he)
-
-theorem execCmd_closed {d e : FDatabase} (he : d.Closed) {c : Schedule} {fuel : Nat}
-    (hd : ∀ r ∈ c.rules, r.SubsumeFree) (hs : execSchedule fuel d c = some e) : e.Closed :=
-  execSchedule_preserves (fun _ _ hg h => closed_execRunRules h) hd he hs
-
-/-- Successful saturation refines the semantic fixed point for these rules. -/
-theorem runSaturateF_saturateReach {R : List Rule} {n : Nat} {d e : FDatabase}
-    (he : d.Closed) (hi : d.IndexOk) (hj : d.IndexCurrent) (hw : d.toDatabase.WF)
-    (hd : ∀ r ∈ R, r.SubsumeFree) (hn : ∀ r ∈ R, r.OrderingFree)
-    (hs : d.runSaturateF R n = some e) :
-    ∃ out, Reach d.toDatabase (.saturate (.run R)) out ∧ e.toDatabase.SameMeaning out :=
-  execSchedule_reach he hi hj hw hd hn (by rwa [execSchedule_saturate_run])
-
-private theorem iterate_transport {R : List Rule}
-    (hd : ∀ r ∈ R, r.SubsumeFree) (hn : ∀ r ∈ R, r.OrderingFree) : ∀ (k : Nat)
-    {d : FDatabase} {db : Database}, InterpReady d → db.WF → db.eqs.Finite →
-    d.toDatabase.SameMeaning db → d.toDatabase.subsumed = db.subsumed →
-    ((execRunRules R)^[k] d).toDatabase.SameMeaning ((RunRules R)^[k] db) := by
-  intro k
-  induction k with
-  | zero => intro d db _ _ _ hh _; exact hh
-  | succ k ih =>
-    intro d db h hw hf hh hX
-    rw [Function.iterate_succ_apply, Function.iterate_succ_apply]
-    exact ih (h.round R) (RunRules.wf hw) (RunRules.finite_eqs hf R)
-      (round_transport h hw hf hh hX R hd hn)
-      (by rw [execRunRules_subsumed_of_subsumeFree h.closed h.indexOk h.indexCurrent hd,
-        RunRules.subsumed_eq hd, hX])
-
-theorem execRunRules_iterate {R : List Rule} (k : Nat) {d : FDatabase}
-    (he : d.Closed) (hi : d.IndexOk) (hj : d.IndexCurrent) (hw : d.toDatabase.WF)
-    (hd : ∀ r ∈ R, r.SubsumeFree) (hn : ∀ r ∈ R, r.OrderingFree) :
-    ((execRunRules R)^[k] d).toDatabase.SameMeaning ((RunRules R)^[k] d.toDatabase) :=
-  iterate_transport hd hn k ⟨he, hi, hj, hw⟩ hw d.finite_toDatabase (.refl _) rfl
-
-/-- Every saturation-free schedule succeeds, independently of its rule heads and fuel. -/
-theorem execCmd_toDatabase {d : FDatabase} {c : Schedule} {fuel : Nat}
-    (hns : c.NoSaturate) :
-    (execSchedule fuel d c).isSome = true ↔ ∃ out, Reach d.toDatabase c out := by
-  constructor
-  · intro _; exact Reach.exists_of_noSaturate hns
-  · intro _
-    obtain ⟨e, he⟩ := execSchedule_exists (fuel := fuel) hns d
-    simp [he]
 
 theorem execProgram_complete {p : Schedule} {fuel : Nat} {d : FDatabase} {out : Database}
     (he : d.Closed) (hi : d.IndexOk) (hj : d.IndexCurrent) (hw : d.toDatabase.WF)

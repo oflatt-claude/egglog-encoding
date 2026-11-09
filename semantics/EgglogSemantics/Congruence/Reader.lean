@@ -52,7 +52,7 @@ def idF (d : FDatabase) (t : Term) : Option Term :=
   | [e] => some e
   | _ => none
 
-/-- `SameClass`, computed: both terms have an id, and it is the same one. -/
+/-- Both terms have an id, and it is the same one. -/
 def sameClassF (d : FDatabase) (a b : Term) : Bool :=
   match idF d a, idF d b with
   | some x, some y => x == y

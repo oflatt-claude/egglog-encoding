@@ -44,9 +44,6 @@ theorem Row.mem_terms {d : Database} {k p : Term} (h : Row d k p) : ufRowT k p �
 theorem Row.key_mem_terms {d : Database} {k p : Term} (h : Row d k p) : k ∈ d.terms :=
   ⟨_, h, Or.inl (.arg (by simp) (.refl _))⟩
 
-theorem Row.parent_mem_terms {d : Database} {k p : Term} (h : Row d k p) : p ∈ d.terms :=
-  ⟨_, h, Or.inl (.arg (by simp) (.refl _))⟩
-
 theorem Row.mem_keys {d : Database} {k p : Term} (h : Row d k p) : k ∈ Keys d := ⟨p, h⟩
 
 theorem Row.mono {d e : Database} (h : d.eqs ⊆ e.eqs) {k p : Term} (hr : Row d k p) :
@@ -188,17 +185,6 @@ theorem lit_live_iff {d : Database} (hd : d.Diag) {l : Lit} :
     refine ⟨h, ?_⟩
     rintro ⟨u, _, f, as, bs, hl, _, _⟩
     cases hl
-
-/-- A held application of a source name is a subterm of a key. -/
-theorem app_mem_terms_iff {d : Database} (hu : UfOnly d)
-    (hself : ∀ k p, Row d k p → Row d p p) {f : FnName} (hf : f ≠ ufName) {ts : List Term} :
-    Term.app f ts ∈ d.terms ↔ ∃ k ∈ Keys d, Term.app f ts ∈ k.subterms := by
-  rw [mem_terms_iff hu hself]
-  constructor
-  · rintro (⟨k, p, _, h⟩ | h)
-    · exact (hf (Term.app.inj h).1).elim
-    · exact h
-  · exact Or.inr
 
 /-- Representatives of a diagonal state are all of its terms. -/
 theorem mem_reps_of_diag {d : Database} (hd : d.Diag) {t : Term} (ht : t ∈ d.terms) :
