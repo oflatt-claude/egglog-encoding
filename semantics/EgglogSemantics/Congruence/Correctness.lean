@@ -26,14 +26,13 @@ def PreservesObservations : Prop :=
 /-- The paper's statement: the outcomes agree, and so does divergence. -/
 @[blueprint "thm:congruence"
   (title := /-- Congruence pass correctness -/)
-  (statement := /-- Let $P$ be a well-formed program in the source fragment. Then, for
-  every outcome $o$,
+  (statement := /-- Let $P$ be a well-formed program in the source fragment, and let
+  $P\leadsto P'$. Then for each outcome $o\in\{\kw{ok},\kw{error}\}$,
   \[
-    \langle\operatorname{encode}(P),\varnothing\rangle\Downarrow o
-      \iff\langle P,\varnothing\rangle\Downarrow o,
+    \langle P',\emptyset\rangle\Downarrow o\iff\langle P,\emptyset\rangle\Downarrow o,
   \]
-  and $\operatorname{encode}(P)$ has a nonterminating execution, a saturation that
-  repeats forever, if and only if $P$ has one. -/)
+  and $P'$ has a nonterminating execution, a saturation that never settles, if and only
+  if $P$ has one. -/)
   (hasProof := false) (latexEnv := "theorem")]
 def Correctness : Prop :=
   ∀ P : Program, P.WellFormed → P.Fragment →

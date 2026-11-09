@@ -91,8 +91,9 @@ def node_paths() -> dict[str, Path]:
 
 
 def clean_node(text: str) -> str:
-    """One extracted node, without the blueprint bookkeeping. The label stays, on the
-    node's first line, so the paper can refer to the definition."""
+    """One extracted node, without the blueprint bookkeeping. The label stays so the paper
+    can refer to the node: on its first line, or just inside a theorem-like environment so
+    that a reference gives the theorem's number."""
     labels = []
     lines = []
     for line in text.splitlines():
@@ -105,7 +106,11 @@ def clean_node(text: str) -> str:
             labels.append(stripped)
             continue
         lines.append(line)
-    return "".join(labels) + "\n".join(lines).strip() + "\n"
+    body = "\n".join(lines).strip()
+    first, newline, rest = body.partition("\n")
+    if first.startswith(("\\begin{theorem}", "\\begin{definition}")):
+        return first + "".join(labels) + newline + rest + "\n"
+    return "".join(labels) + body + "\n"
 
 
 def strip_command(text: str, name: str) -> str:
