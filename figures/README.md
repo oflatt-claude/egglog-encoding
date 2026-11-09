@@ -7,6 +7,7 @@ From the code repository root:
 cp -R figures/output/eval ../extended-egglog-paper/figures/
 ./bench.py figures --help
 ./bench.py figures math-runtime slotted-runtime
+./bench.py figures slotted-multipattern-runtime
 ./bench.py figures --rounds 3 --memory-limit --report /tmp/figures-quick.jsonl --output-dir /tmp/figure-previews
 ./bench.py figures --config path/to/catalog.json
 ./bench.py figures --output-dir ../extended-egglog-paper/figures/eval
@@ -20,7 +21,7 @@ embedded font subsets. The first run may download the pinned renderer packages.
 
 Bare `./bench.py figures` writes one ignored output folder at
 `figures/output/eval/` in this checkout, independent of the invocation directory.
-Each of the six figures has seven companions: PDF, SVG, 3x PNG, `.bound.vl.json`,
+Each of the seven figures has seven companions: PDF, SVG, 3x PNG, `.bound.vl.json`,
 `.results.json`, `.numbers.tex` and `.table.tex`. Authored specifications remain
 under `figures/eval/`. Absolute artifact paths are printed on stderr.
 
@@ -45,6 +46,27 @@ before copying it, and remove obsolete artifacts explicitly when needed.
 | `corpus-proof-recording-cdf` | Recording-only proof time and peak-RSS overhead across the same replays; strict correctness coverage retained |
 | `corpus-proofs-cdf` | Full proof recording, extraction and checking time and peak-RSS overhead across the same replays |
 | `slotted-runtime` | Full 44-rule SDQL kernels/phases; aligned runtime/RSS encoding-to-native ratio panels and a table of both metrics |
+| `slotted-multipattern-runtime` | Complete multipattern matching on the original SDQL kernels/phases, omitting pairs with a resource-failing endpoint |
+
+The two Slotted figures share the authored `eval/slotted-runtime.vl.json`
+specification. `slotted-runtime` keeps its ten original SDQL inputs, restricted
+matcher and syntactic native substitution baseline. The complete comparison uses
+`slotted` and `slotted-ref-multi`, with snapshot substitution in both systems.
+Its catalog uses the same SDQL glob as the baseline, followed by explicit
+`!` selectors for BATAX's and MTTKRP's second phases. If either endpoint times out
+or exceeds the memory limit, the entire pair
+is omitted from this graph and the failing side and bound are reported in the text.
+BATAX's second phase is omitted: its encoded run hit the 16 GiB allocation guard
+and its native reference run timed out at 600 seconds. MTTKRP's second phase is also omitted
+because its native reference timed out at 600 seconds; its encoded run succeeded.
+Eight matched pairs remain. Every retained pair requires complete successful
+observations on both endpoints; unexpected incomplete data still stop atomic
+publication.
+
+This supplemental comparison uses ten observations per retained endpoint at
+600 seconds and 16 GiB: `./bench.py figures slotted-multipattern-runtime --rounds 10 --timeout-sec 600 --memory-limit-gib 16`.
+Native Slotted is the pinned slotted-egraphs fork, a separate engine from Egg; the frozen input manifest records
+its source revision and hashes.
 
 ## Flat configuration and automatic reuse
 
@@ -69,8 +91,14 @@ No names selects every figure; names select a subset. An alternate catalog is
 selected with `--config`, not a positional path. Help lists that catalog without
 expanding files, reading the observation cache or building engines. Spec and
 workload paths resolve relative to the catalog. Globs expand in sorted order;
-recursive `**` is supported. Overlapping patterns retain each path once.
-Different paths with identical bytes remain a duplicate-workload error.
+recursive `**` is supported. Process `files` selectors in order: a positive glob
+adds its matches once, while `!pattern` removes matching paths currently selected.
+A later positive glob can re-add a removed path at the end. Every positive or
+negative glob must match filesystem files; matching only unselected files is a
+valid removal with no effect. Directories, unmatched patterns and an empty final
+selection are errors. This is ordered glob selection, not gitignore syntax.
+Workload counts use the resolved files, not the number of selector tokens.
+Different retained paths with identical bytes remain a duplicate-workload error.
 
 Each figure requests the product of its own files and treatments. Collection
 merges identical requests across figures into one plan and one progress display.
@@ -255,7 +283,9 @@ and ready-to-include tables need no JSON reader or extra LaTeX package:
 
 Keys use the figure, readable workload label, treatment and metric (`runtime` or
 `memory`); suffixes include `mean`, `ratio`, `ci-low`, `ci-high`, and sample
-counts. `.numbers.tex` rounds to three significant digits; JSON retains full
+counts. Figure-level `FIGURE/rounds` and `FIGURE/workload-count` macros retain the
+invocation's requested observation count and selected workload count.
+`.numbers.tex` rounds to three significant digits; JSON retains full
 precision. Missing estimates/endpoints and unknown keys render `unavailable`.
 Tables escape workload labels and report `CI unavailable` when a point lacks a
 bounded interval. Three-round runs are layout previews; retain ten observations
@@ -267,7 +297,7 @@ make check
 
 The figure tests use synthetic snapshots without writing the benchmark cache.
 They cover sample counts, means/intervals, missing/failing outcomes, label and
-subset selection, cohort boundaries and coverage. Inspect all six PDFs/PNGs at
+subset selection, cohort boundaries and coverage. Inspect all seven PDFs/PNGs at
 manuscript width for unclipped labels, tails and uncertainty; use `pdffonts` to
 verify embedding. `make check` includes the catalog-driven Rust correctness suite:
 visible table sizes, stable source results, extraction correspondence and strict proof

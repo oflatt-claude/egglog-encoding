@@ -11,6 +11,56 @@ mod paper_oracles;
 mod table_comparison;
 
 #[test]
+fn figure_globs_exclude_pairs_and_allow_ordered_reinclusion() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../slotted/inputs/sdql")
+        .canonicalize()
+        .unwrap();
+    let all = paper_oracles::figure_files(&directory, ["*.egg"]);
+    assert_eq!(all.len(), 10);
+    let retained = paper_oracles::figure_files(
+        &directory,
+        ["*.egg", "!batax_2nd-44rules.egg", "!mttkrp_2nd-44rules.egg"],
+    );
+    assert_eq!(retained.len(), 8);
+    assert_eq!(
+        retained,
+        all.iter()
+            .filter(|file| !matches!(
+                file.file_name().unwrap().to_str().unwrap(),
+                "batax_2nd-44rules.egg" | "mttkrp_2nd-44rules.egg"
+            ))
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        paper_oracles::figure_files(&directory, ["*.egg", "batax_1st-44rules.egg"]),
+        all
+    );
+    let readded = paper_oracles::figure_files(
+        &directory,
+        ["*.egg", "!batax_1st-44rules.egg", "batax_1st-44rules.egg"],
+    );
+    assert_eq!(&readded[..9], &all[1..]);
+    assert_eq!(readded.last(), all.first());
+}
+
+#[test]
+fn figure_globs_reject_unmatched_non_file_and_empty_selections() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../slotted/inputs/sdql");
+    for patterns in [
+        ["*.egg", "!missing.egg"],
+        ["*.egg", "!*.egg"],
+        ["*.egg", "!"],
+        ["*.egg", "."],
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| paper_oracles::figure_files(&directory, patterns)).is_err()
+        );
+    }
+}
+
+#[test]
 fn recording_catalog_modes_register_strict_oracles_and_exclusion_names() {
     let modes = paper_oracles::correctness_modes([
         "off",

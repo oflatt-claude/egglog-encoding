@@ -3,7 +3,17 @@
 `inputs/` contains the 23 paper benchmark pairs and their provenance manifest.
 `correctness/` contains 122 small frozen semantic pairs, including conformance
 and edge cases rather than a list of known bugs. Both are read by normal
-Rust workspace tests; the shared figure catalog selects the paper SDQL inputs.
+Rust workspace tests. The nested Slotted figure keeps all ten original SDQL
+inputs. The complete multipattern figure compares `slotted` with native
+`slotted-ref-multi` on original SDQL inputs, using snapshot substitution in both
+systems. Its fixed cohort omits pairs when either endpoint times out or exceeds
+the memory limit. BATAX's second phase is omitted because the encoded run hit
+the 16 GiB allocation guard and the native reference timed out at 600 seconds. MTTKRP's second phase
+is omitted because its native reference timed out at 600 seconds; its encoded run
+succeeded. The eight retained pairs require ten successful observations per
+endpoint under that 600-second/16-GiB profile; other incomplete data stop
+publication. Source goals and matched count checks remain correctness
+requirements, separate from timing collection.
 The top-level `benchmarks/ignore.json` is the sole exclusion policy.
 
 GitHub collapses the generated `.egg`/`.ref` pairs by default. Review the

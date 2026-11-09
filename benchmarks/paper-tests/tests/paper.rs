@@ -591,22 +591,15 @@ fn main() {
                 )
                 .map(|mode| mode.as_str().unwrap()),
         );
-        for pattern in figure["files"].as_array().unwrap() {
-            let pattern = catalog_path
-                .parent()
+        for file in paper_oracles::figure_files(
+            catalog_path.parent().unwrap(),
+            figure["files"]
+                .as_array()
                 .unwrap()
-                .join(pattern.as_str().unwrap());
-            let matches: Vec<_> = glob::glob(pattern.to_str().unwrap())
-                .unwrap()
-                .map(Result::unwrap)
-                .collect();
-            assert!(!matches.is_empty(), "catalog pattern matched nothing");
-            for file in matches {
-                cells
-                    .entry(file.canonicalize().unwrap())
-                    .or_default()
-                    .extend(modes.iter().cloned());
-            }
+                .iter()
+                .map(|pattern| pattern.as_str().unwrap()),
+        ) {
+            cells.entry(file).or_default().extend(modes.iter().cloned());
         }
     }
     for file in glob::glob(

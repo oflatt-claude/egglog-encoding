@@ -160,9 +160,12 @@ or modify the JSONL.
 
 ## Paper figures
 
-- `./bench.py figures` collects and renders the six paper PDFs through the shared
+- `./bench.py figures` collects and renders the seven paper PDFs through the shared
   benchmark phases. `--config` selects a flat JSON catalog with global `rounds`
   and optional `timeout_sec` override, and direct per-figure `spec`, `files`, `treatments`, and optional correctness-only `checks`.
+  File selectors are ordered catalog-relative globs: `!pattern` removes current
+  matches, and later positives can re-add them. Both forms must match files;
+  final selections must be nonempty. Count resolved workloads, not selector tokens.
 - Resource defaults for all entrypoints come from `benchmarking/config.py`.
   The Rust paper parent reads them once through stdlib-only `python3`; execution
   and worker scheduling stay in Rust. The catalog requests ten observations.
@@ -178,6 +181,7 @@ or modify the JSONL.
   separate validators. Retain selected published input hashes/aliases, strict
   failures and source blockers. Source blockers are not saved replay counts.
 - The outputs are `disequality-runtime`, `math-runtime`, `slotted-runtime`,
+  `slotted-multipattern-runtime`,
   `corpus-congruence-cdf`, `corpus-proof-recording-cdf`, and `corpus-proofs-cdf`.
   Each has PDF/SVG/PNG, bound specification, results JSON, numeric TeX macros,
   and a TeX table under `figures/output/eval/` by default. Authored specifications
@@ -189,7 +193,7 @@ or modify the JSONL.
   files and replace the requested bundle only after every condition is complete
   and every format succeeds. Failed/missing measurements stop publication.
   Observation provenance remains in the raw JSONL, grouped JSON and results JSON.
-- `make check` includes the Vega tests; inspect all six exported figures at manuscript width
+- `make check` includes the Vega tests; inspect all seven exported figures at manuscript width
   and verify PDF font embedding. Tests must cover latest-N selection, N=1 without
   intervals, independent Fieller intervals, incomplete-bundle rejection, and
   the shared baseline-runtime corpus cohort (>=0.2 seconds, no upper cutoff).
