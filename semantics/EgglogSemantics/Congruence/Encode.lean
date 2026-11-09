@@ -376,7 +376,8 @@ mentions, so that a union-find edge finds every row it moves by lookup. -/
   (statement := /--
   \[
   \textsc{Idx}_f:\ \mathtt{View}_f(c_1,\ldots,c_{n+1})
-    \Rightarrow\mathtt{HasChild}(\mathtt{View}_f(c_1,\ldots,c_{n+1}),c_i)\ (\forall i)
+    \Rightarrow\mathtt{HasChild}(\mathtt{View}_f(c_1,\ldots,c_{n+1}),c_1),\ldots,
+    \mathtt{HasChild}(\mathtt{View}_f(c_1,\ldots,c_{n+1}),c_{n+1})
   \]
   -/)
   (latexEnv := "paperfragment")]
@@ -387,15 +388,15 @@ def indexRule (f : FnName) (arity : Nat) : Rule :=
     actions := cs.map fun c => .expr (.app hasChildName [row, c]) }
 
 /-- The indexed view: the index entry of column `i` of a row, joined with the union-find
-edge of that column, moves the row to the column's parent. One binary join; builds write a
-node's row with the node. -/
+edge of that column, moves the row to the column's parent. One binary join. The naive view
+rule is gone: building `f(ē)` writes the row `View_f(ē, f(ē))` next to the node's self-loop
+(`encodeBuildWith`), and this rule keeps it current. -/
 @[blueprint "def:view-indexed"
   (statement := /--
   \[
   \begin{aligned}
   \textsc{Rekey}_{f,i}&:\ \mathtt{HasChild}(\mathtt{View}_f(c_1,\ldots,c_{n+1}),c_i)\land\mathtt{UF}(c_i,x)\land c_i\ne x\\
-    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(c_1,\ldots,c_{n+1})),\ \mathtt{View}_f(c_1,\ldots,x,\ldots,c_{n+1})\\
-  \operatorname{exist}(f(e_1,\ldots,e_n))&\ni\mathtt{View}_f(e_1,\ldots,e_n,f(e_1,\ldots,e_n))
+    &\qquad\Rightarrow\kw{subsume}(\mathtt{View}_f(c_1,\ldots,c_{n+1})),\ \mathtt{View}_f(c_1,\ldots,x,\ldots,c_{n+1})
   \end{aligned}
   \]
   -/)
