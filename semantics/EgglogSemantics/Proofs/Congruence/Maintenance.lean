@@ -7,11 +7,6 @@ replacement, and the live rows still generate every row. -/
 
 namespace Egglog.Congruence
 
-theorem ufRowT_inj {k p k' p' : Term} (h : ufRowT k p = ufRowT k' p') : k = k' ∧ p = p' := by
-  have := Term.app.inj h
-  simp only [List.cons.injEq, and_true] at this
-  exact this.2
-
 /-- A row one maintenance firing asserts: an existing row, or the replacement a rule writes
 for the live edges it matched. -/
 inductive MaintRow (d : Database) : Term → Term → Prop

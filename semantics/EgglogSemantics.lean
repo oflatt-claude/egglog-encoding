@@ -67,9 +67,11 @@ import EgglogSemantics.Proofs.Congruence.Invariant
 import EgglogSemantics.Proofs.Congruence.Maintenance
 import EgglogSemantics.Proofs.Congruence.Properties
 import EgglogSemantics.Proofs.Congruence.QueryCorr
+import EgglogSemantics.Proofs.Congruence.Round
 import EgglogSemantics.Proofs.Congruence.Rules
 import EgglogSemantics.Proofs.Congruence.Sound
 import EgglogSemantics.Proofs.Congruence.Target
+import EgglogSemantics.Proofs.Congruence.Writes
 import EgglogSemantics.Proofs.Database
 import EgglogSemantics.Proofs.Diagonal
 import EgglogSemantics.Proofs.DiagonalPreservation

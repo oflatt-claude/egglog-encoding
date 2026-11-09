@@ -14,6 +14,11 @@ namespace Egglog.Congruence
 /-- The union-find row `@UF(k, p)` as a term. -/
 abbrev ufRowT (k p : Term) : Term := .app ufName [k, p]
 
+theorem ufRowT_inj {k p k' p' : Term} (h : ufRowT k p = ufRowT k' p') : k = k' ∧ p = p' := by
+  have := Term.app.inj h
+  simp only [List.cons.injEq, and_true] at this
+  exact this.2
+
 /-- The row `@UF(k, p)` is asserted, live or stale. -/
 def Row (d : Database) (k p : Term) : Prop := (ufRowT k p, ufRowT k p) ∈ d.eqs
 
