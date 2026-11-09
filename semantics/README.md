@@ -36,9 +36,10 @@ encoding, the log, and the rationale.
 Compiler correctness is stated in
 [Congruence/Correctness.lean](EgglogSemantics/Congruence/Correctness.lean): well-formed
 source programs in the fragment and their compilations have exactly the same outcomes and
-the same divergence, over mathematical databases. Its proof for the view-free encoding is
-open and the congruence gate checks it executably on the corpus. The
-specification-level proofs, the interpreter refinement (subsume-free programs, and
+the same divergence, over mathematical databases. Its proof (`Congruence.correctness`,
+developed under `Proofs/Congruence/`) is a simulation between the source and the compiled
+schedules up to the meaning of the source state; the congruence gate also checks the
+statement executably on the corpus. The specification-level proofs, the interpreter refinement (subsume-free programs, and
 union-free programs with subsumption such as the compiler's output), and the certificate
 soundness proofs are ported to the declaration-free specification; `EgglogPaper.lean`
 lists the theorems the paper relies on. Brief certificate notes live with the
@@ -56,7 +57,7 @@ lists the theorems the paper relies on. Brief certificate notes live with the
 | `EgglogSemantics/SourceProof/` | Source proof format and checker |
 | `EgglogSemantics/Provenance/` | Firing-log instrumentation, proof format, checker, and extraction |
 | `EgglogSemantics/Resugar/` | Proof lifting to source proofs, fixtures, and JSON export |
-| `EgglogSemantics/Proofs/` | Theorems about the specification, checker and lifting soundness; the compiler proofs there predate this encoding |
+| `EgglogSemantics/Proofs/` | Theorems about the specification, checker and lifting soundness, and the compiler proof under `Proofs/Congruence/` |
 | `EgglogSemantics/Tests/` | Executable regressions, `.egg` parsing and emission, and proof rendering |
 | `tests/` | Hand-written `.egg` programs with snapshots of their encodings and lifted proofs |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |

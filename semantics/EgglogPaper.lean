@@ -19,8 +19,8 @@ import EgglogSemantics.Proofs.Resugar.Soundness
 import Mathlib.Util.AssertNoSorry
 
 /-! The modules whose blueprint nodes the paper displays, and the proof closure the paper
-relies on. The congruence pass theorem is displayed as a statement
-(`Congruence.Correctness`); its proof for the constructor-and-subsume encoding is open. -/
+relies on. The congruence pass theorem (`Congruence.correctness`) is proved for the
+constructor-and-subsume encoding. -/
 
 -- The term order the compiled rebuilding uses, and the representatives it picks.
 assert_no_sorry Egglog.Term.blt_admissible
@@ -50,6 +50,9 @@ assert_no_sorry Egglog.exec_programStep_noUnions
 assert_no_sorry Egglog.exec_complete_noUnions
 assert_no_sorry Egglog.observe_eval_noUnions
 assert_no_sorry Egglog.Congruence.exec_encode_programStep
+
+-- The congruence pass: the compiled program has the source's outcomes and divergence.
+assert_no_sorry Egglog.Congruence.correctness
 
 -- Certificates: checked source proofs infer their claims, and so does every proof read
 -- off the firing log and lifted.

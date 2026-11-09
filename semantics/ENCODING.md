@@ -128,8 +128,10 @@ At a rebuild fixpoint no maintenance rule matches. `compress` not matching means
 parent is a root; `collide` not matching means every key has one parent; the congruence
 rules not matching means two applications with the same child parents have the same root.
 A stale row is subsumed in the round that matches it and is only rewritten from a strictly
-staler row, so staleness is well founded and the fixpoint is reached; the formal argument
-is part of the pending proof work.
+staler row, so staleness is well founded and the fixpoint is reached. The formal argument
+(`Proofs/Congruence/Fixpoint.lean`) counts the rows and the marks still missing from the
+square of the keys; a round that changes the state lowers that count, and a round that
+changes nothing leaves the state canonical.
 
 ### Provenance: a firing log
 
@@ -187,10 +189,11 @@ identity out of the data entirely.
   programs with subsumption, disequalities and `min` (`exec_programStep_noUnions`,
   `Congruence.exec_encode_programStep`), which is what the compiler emits; mixed
   union-and-subsume programs are not covered. Compiler correctness against the source,
-  stated in `Congruence/Correctness.lean`, is established executably by the congruence
-  gate; its Lean proof for this encoding is open. The proofs of the previous,
-  merge-function encoding were deleted on 2026-10-30 (`PROOF-PORT-*.md` record the ports
-  that preceded them).
+  stated in `Congruence/Correctness.lean`, is proved for this encoding
+  (`Congruence.correctness`, developed under `Proofs/Congruence/`; `PROOF-PORT-S.md`
+  records the plan) and is also checked executably by the congruence gate. The proofs of
+  the previous, merge-function encoding were deleted on 2026-10-30 (`PROOF-PORT-*.md`
+  record the ports that preceded them).
 
 
 ## Current implementation

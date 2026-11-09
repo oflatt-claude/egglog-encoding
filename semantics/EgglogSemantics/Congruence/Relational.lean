@@ -12,8 +12,9 @@ exactly the row named.
 The matcher is the general one (`Impl/Interp.lean`) with every congruence test specialized
 to identity, which makes a test constant-time instead of a scan of the closure. The
 congruence gate in `DiffTest.lean` checks executably that this runtime and the general
-interpreter agree on every compiled corpus program; the proof of that equivalence awaits
-the port of the compiler proofs.
+interpreter agree on every compiled corpus program. That equivalence of the two executable
+interpreters is not proved in Lean; the compiler proof (`Proofs/Congruence/`) is about the
+mathematical databases, where a compiled state is diagonal (`Congruence.Rel.diag`).
 -/
 
 namespace Egglog.Relational
