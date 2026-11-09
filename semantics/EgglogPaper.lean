@@ -12,6 +12,7 @@ import EgglogSemantics.Source.Domain
 import EgglogSemantics.Source.WellFormed
 import EgglogSemantics.Proofs.OrderFinite
 import EgglogSemantics.Congruence.Correctness
+import EgglogSemantics.Provenance.Correctness
 import EgglogSemantics.Proofs.Subsume
 import EgglogSemantics.Proofs.InterpSubsume
 import EgglogSemantics.Proofs.Provenance.GeneratedSoundness
@@ -20,7 +21,8 @@ import Mathlib.Util.AssertNoSorry
 
 /-! The modules whose blueprint nodes the paper displays, and the proof closure the paper
 relies on. The congruence pass theorem (`Congruence.correctness`) is proved for the
-constructor-and-subsume encoding. -/
+constructor-and-subsume encoding, and the provenance pass theorem
+(`Provenance.correctness`) for its instrumentation. -/
 
 -- The term order the compiled rebuilding uses, and the representatives it picks.
 assert_no_sorry Egglog.Term.blt_admissible
@@ -53,6 +55,10 @@ assert_no_sorry Egglog.Congruence.exec_encode_programStep
 
 -- The congruence pass: the compiled program has the source's outcomes and divergence.
 assert_no_sorry Egglog.Congruence.correctness
+
+-- The provenance pass: the instrumented program has the original's outcomes, divergence and
+-- final state under the log.
+assert_no_sorry Egglog.Provenance.correctness
 
 -- Certificates: checked source proofs infer their claims, and so does every proof read
 -- off the firing log and lifted.

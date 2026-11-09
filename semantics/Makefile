@@ -29,6 +29,7 @@ PAPER_MODULES := \
   EgglogSemantics.SourceProof.Checker \
   EgglogSemantics.Provenance.Encode \
   EgglogSemantics.Provenance.Log \
+  EgglogSemantics.Provenance.Correctness \
   EgglogSemantics.Resugar.Claim \
   EgglogSemantics.Resugar.Query \
   EgglogSemantics.Resugar.Lift
