@@ -46,7 +46,7 @@ before copying it, and remove obsolete artifacts explicitly when needed.
 | `corpus-proof-recording-cdf` | Recording-only proof time and peak-RSS overhead across the same replays; strict correctness coverage retained |
 | `corpus-proofs-cdf` | Full proof recording, extraction and checking time and peak-RSS overhead across the same replays |
 | `slotted-runtime` | Full 44-rule SDQL kernels/phases; aligned runtime/RSS encoding-to-native ratio panels and a table of both metrics |
-| `parallel-scaling` | Ordinary and proof-recording Egglog speedup at 1, 2, 4 and 8 threads; median curves, workload IQR, and a per-project table |
+| `parallel-scaling` | Ordinary and proof-recording Egglog speedup at 1, 2, 4 and 8 threads; full-cohort and per-project panels, workload IQR, and a table |
 
 ## Flat configuration and automatic reuse
 
@@ -171,7 +171,8 @@ The companion exports use the existing Python report estimators; a shared
 fixture checks numerical parity against executed Vega transforms.
 
 For `parallel-scaling`, each file's speedup is its one-thread arithmetic
-mean divided by its N-thread arithmetic mean. The lines show medians across files;
+mean divided by its N-thread arithmetic mean. Panels show the full cohort and each
+project, with input counts and a shared y-axis. The lines show medians across files;
 the bands show the 25th–75th percentiles across files (inclusive interpolation),
 not confidence intervals. Both modes use the same cohort, chosen solely by the
 ordinary one-thread mean >= 0.2 seconds, with no upper cutoff. Each mode starts at
@@ -189,6 +190,8 @@ Both configurations measure whole-process wall time, including startup and
 lowering, and exclude compilation. Parallel runs have no additive phase summary
 because search and apply overlap.
 
+The inputs are saved `.egg` replays from Eggcc, HardBoiled, MISAAL, Churchroad,
+DialEgg, and Luminal; measurements do not run the original application pipelines.
 The default catalog collects the entire saved application corpus with ten
 observations per configuration. A shorter preview can use `--config` with a
 declared subset and `--rounds 3`, retaining explicit input provenance. Preview

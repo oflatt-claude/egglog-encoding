@@ -1,6 +1,6 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
-  "description": "Median per-workload speedup for egglog with and without proof recording. Each mode is normalized to its own one-thread mean. Both modes use the same RQ2 baseline-runtime cohort. Bands show the workload interquartile range, not confidence intervals.",
+  "description": "Parallel scaling of saved application replays, for the full cohort and each project. Lines show median per-input speedup over the same mode at one thread; bands show workload IQR. Panels share the same runtime cutoff and y-axis.",
   "data": {
     "url": "../../.reports-grouped.json",
     "format": {
@@ -29,167 +29,207 @@
     {
       "calculate": "datum.point.treatment === 'off' ? 'Egglog' : datum.point.treatment === 'proofs' ? 'Egglog + proof recording' : 'Egglog + checked proofs'",
       "as": "Mode"
+    },
+    {
+      "calculate": "datum.point.family == null ? 'All projects' : ({eggcc: 'Eggcc', hardboiled: 'HardBoiled', misaal: 'MISAAL', luminal: 'Luminal', dialegg: 'DialEgg', churchroad: 'Churchroad'})[datum.point.family] || datum.point.family || 'Other'",
+      "as": "Project"
+    },
+    {
+      "calculate": "datum.Project + ' (n = ' + datum.point.workloads + ')'",
+      "as": "Panel"
+    },
+    {
+      "calculate": "datum.point.family == null ? 0 : ({eggcc: 1, hardboiled: 2, misaal: 3, luminal: 4, dialegg: 5, churchroad: 6})[datum.point.family] || 7",
+      "as": "PanelOrder"
     }
   ],
   "title": {
-    "text": "Parallel scaling",
+    "text": "Parallel scaling of application replays",
     "subtitle": []
   },
-  "width": 480,
-  "height": 260,
-  "encoding": {
-    "x": {
-      "field": "point.threads",
-      "type": "ordinal",
-      "title": "Worker threads",
-      "axis": {
-        "labelAngle": 0
-      }
-    },
-    "color": {
-      "field": "Mode",
-      "type": "nominal",
-      "scale": {
-        "range": [
-          "#0072B2",
-          "#D55E00"
-        ]
-      },
-      "legend": {
-        "title": null,
-        "orient": "top",
-        "symbolType": "stroke",
-        "symbolOpacity": 1
-      }
-    }
-  },
-  "layer": [
-    {
-      "name": "spread",
-      "mark": {
-        "type": "area",
-        "opacity": 0.13
-      },
-      "encoding": {
-        "y": {
-          "field": "point.q25",
-          "type": "quantitative",
-          "title": "Speedup over one thread",
-          "scale": {
-            "zero": true
-          }
-        },
-        "y2": {
-          "field": "point.q75"
-        }
-      }
-    },
-    {
-      "name": "scaling",
-      "mark": {
-        "type": "line",
-        "point": {
-          "filled": true,
-          "size": 55
-        },
-        "strokeWidth": 2
-      },
-      "encoding": {
-        "y": {
-          "field": "point.speedup",
-          "type": "quantitative",
-          "title": "Speedup over one thread"
-        },
-        "strokeDash": {
-          "field": "Mode",
-          "scale": {
-            "range": [
-              [
-                1,
-                0
-              ],
-              [
-                6,
-                3
-              ]
-            ]
-          },
-          "legend": {
-            "title": null,
-            "orient": "top",
-            "symbolType": "stroke",
-            "symbolOpacity": 1
-          }
-        },
-        "tooltip": [
-          {
-            "field": "Mode"
-          },
-          {
-            "field": "point.threads",
-            "title": "Threads"
-          },
-          {
-            "field": "point.speedup",
-            "format": ".3f",
-            "title": "Median speedup"
-          },
-          {
-            "field": "point.workloads",
-            "title": "Workloads"
-          }
-        ]
-      }
-    },
-    {
-      "mark": {
-        "type": "rule",
-        "color": "#666",
-        "strokeDash": [
-          3,
-          3
-        ]
-      },
-      "encoding": {
-        "y": {
-          "datum": 1
-        },
-        "color": {
-          "value": "#666"
-        },
-        "x": {
-          "value": 0
-        },
-        "x2": {
-          "value": "width"
-        }
-      },
-      "data": {
-        "values": [
-          {}
-        ]
-      }
-    }
-  ],
   "config": {
     "font": "Arial",
     "view": {
       "stroke": null
     },
     "axis": {
-      "labelFontSize": 12,
-      "titleFontSize": 13,
+      "labelFontSize": 10,
+      "titleFontSize": 11,
       "titleFontWeight": "normal",
       "gridColor": "#e8eaed"
     },
     "legend": {
-      "labelFontSize": 13
+      "labelFontSize": 12
     },
     "title": {
       "anchor": "start",
-      "fontSize": 17,
+      "fontSize": 16,
       "subtitleFontSize": 11,
       "subtitlePadding": 8
+    }
+  },
+  "facet": {
+    "field": "Panel",
+    "type": "nominal",
+    "sort": {
+      "field": "PanelOrder",
+      "op": "min"
+    },
+    "header": {
+      "title": null,
+      "labelFontSize": 12,
+      "labelFontWeight": "bold",
+      "labelPadding": 8
+    }
+  },
+  "columns": 3,
+  "spacing": 16,
+  "spec": {
+    "width": 205,
+    "height": 140,
+    "encoding": {
+      "x": {
+        "field": "point.threads",
+        "type": "ordinal",
+        "title": "Threads",
+        "axis": {
+          "labelAngle": 0
+        }
+      },
+      "color": {
+        "field": "Mode",
+        "type": "nominal",
+        "scale": {
+          "range": [
+            "#0072B2",
+            "#D55E00"
+          ]
+        },
+        "legend": {
+          "title": null,
+          "orient": "top",
+          "symbolType": "stroke",
+          "symbolOpacity": 1
+        }
+      }
+    },
+    "layer": [
+      {
+        "name": "spread",
+        "mark": {
+          "type": "area",
+          "opacity": 0.1
+        },
+        "encoding": {
+          "y": {
+            "field": "point.q25",
+            "type": "quantitative",
+            "title": "Speedup over 1 thread",
+            "scale": {
+              "zero": false
+            }
+          },
+          "y2": {
+            "field": "point.q75"
+          }
+        }
+      },
+      {
+        "name": "scaling",
+        "mark": {
+          "type": "line",
+          "point": {
+            "filled": true,
+            "size": 35
+          },
+          "strokeWidth": 2
+        },
+        "encoding": {
+          "y": {
+            "field": "point.speedup",
+            "type": "quantitative",
+            "title": "Speedup over 1 thread"
+          },
+          "strokeDash": {
+            "field": "Mode",
+            "scale": {
+              "range": [
+                [
+                  1,
+                  0
+                ],
+                [
+                  6,
+                  3
+                ]
+              ]
+            },
+            "legend": {
+              "title": null,
+              "orient": "top",
+              "symbolType": "stroke",
+              "symbolOpacity": 1
+            }
+          },
+          "tooltip": [
+            {
+              "field": "Mode"
+            },
+            {
+              "field": "point.threads",
+              "title": "Threads"
+            },
+            {
+              "field": "point.speedup",
+              "format": ".3f",
+              "title": "Median speedup"
+            },
+            {
+              "field": "point.workloads",
+              "title": "Workloads"
+            }
+          ]
+        }
+      },
+      {
+        "mark": {
+          "type": "rule",
+          "color": "#666",
+          "strokeDash": [
+            3,
+            3
+          ]
+        },
+        "encoding": {
+          "y": {
+            "datum": 1
+          },
+          "color": {
+            "value": "#666"
+          },
+          "x": {
+            "value": 0
+          },
+          "x2": {
+            "value": "width"
+          }
+        },
+        "transform": [
+          {
+            "aggregate": [
+              {
+                "op": "count",
+                "as": "count"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "resolve": {
+    "scale": {
+      "y": "shared"
     }
   }
 }

@@ -47,23 +47,25 @@ async function evaluate(name, inputs, groups, rounds=2, boundSpec=null, treatmen
 }
 const find=(result,name)=>result.marks.filter(m=>m.mark.name===name+'_marks');
 
-test('parallel curves plot the shared exported medians and workload IQR, with a horizontal serial reference',async()=>{
+test('parallel panels preserve project counts, exported medians, IQR and shared axes',async()=>{
   const spec=JSON.parse(await readFile(new URL(figures['parallel-scaling'].spec,import.meta.url),'utf8'));
-  const points=['off','proofs'].flatMap((treatment,i)=>[1,2,4,8].map(threads=>({
-    treatment,threads,workloads:5,speedup:1+(threads-1)/(i+2),
+  const points=[null,'eggcc'].flatMap(family=>['off','proofs'].flatMap((treatment,i)=>[1,2,4,8].map(threads=>({
+    family,treatment,threads,workloads:family?3:5,speedup:1+(threads-1)/(i+2),
     q25:1+(threads-1)/(i+3),q75:1+(threads-1)/(i+1)
-  })));
+  }))));
   spec.params.find(p=>p.name==='scaling').value=points;
   const result=await evaluate('parallel-scaling',[],[],3,spec);
   const plotted=result.marks.filter(m=>m.mark.marktype==='symbol'&&m.datum.point);
-  assert.equal(plotted.length,8);
-  assert.deepEqual(plotted.map(m=>m.datum.point.speedup),points.map(p=>p.speedup));
+  assert.equal(plotted.length,16);
+  for(const point of points) assert.ok(plotted.some(m=>m.datum.point===point));
+  assert.equal(new Set(plotted.filter(m=>m.datum.point.threads===1).map(m=>m.y)).size,1,'panels share the same y scale');
   assert.ok(result.marks.some(m=>m.mark.marktype==='area'&&m.datum.point.q25));
   const references=result.marks.filter(m=>m.mark.marktype==='rule'&&m.stroke==='#666');
-  assert.equal(references.length,1);
-  assert.equal(references[0].x,0);
-  assert.equal(references[0].x2,480);
+  assert.equal(references.length,2);
+  assert.ok(references.every(m=>m.x===0&&m.x2===205));
   assert.match(result.svg,/Egglog \+ proof recording/);
+  assert.match(result.svg,/All projects \(n = 5\)/);
+  assert.match(result.svg,/Eggcc \(n = 3\)/);
 });
 
 test('serial figures ignore parallel observations from the same cache',async()=>{

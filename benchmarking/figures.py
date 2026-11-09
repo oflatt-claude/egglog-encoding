@@ -463,10 +463,10 @@ def render_figures(
                     raise ValueError("parallel-scaling: no workloads meet the serial baseline threshold")
                 for parameter in spec["params"]:
                     if parameter["name"] == "scaling":
-                        parameter["value"] = results["scaling"]
+                        parameter["value"] = results["scaling"] + results["family_scaling"]
                 spec["title"]["subtitle"] = [
                     f"{results['cohort_n']} workloads · {config.rounds} runs/condition · whole-process time",
-                    "Own 1-thread baseline; shaded bands show workload IQR",
+                    "Median and IQR across inputs; each mode uses its own 1-thread baseline",
                 ]
             if figure.name.startswith("corpus-"):
                 domains = corpus_view_domains(results)
