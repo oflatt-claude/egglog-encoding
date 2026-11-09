@@ -144,15 +144,7 @@ def test_profile_accepts_explicit_proof_extraction(tmp_path: Path) -> None:
     assert request.treatment == "proof-extraction"
 
 
-@pytest.mark.parametrize("encoding", ["nee", "ee", "unknown"])
-def test_profile_has_no_disequality_encoding_selector(encoding: str) -> None:
-    with pytest.raises(SystemExit):
-        profile_runner.parse_profile_args(["file.egg", "--disequality-encoding", encoding])
-
-
-def test_profile_uses_ee_and_reuses_its_cached_artifact(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
-) -> None:
+def test_profile_reuses_its_cached_artifact(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any) -> None:
     file = stable_file_spec(tmp_path)
     binary = ROOT / "target/profiling/egglog-experimental"
     target = make_target(binary_sha256="sha256:" + "a" * 64, binary_path=binary)

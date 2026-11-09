@@ -120,12 +120,6 @@ def test_strict_metadata_is_identity_bound_and_can_be_cleared(tmp_path: Path) ->
     assert _figure_inventory(tmp_path)["workloads"][0]["validation_failures"] == {
         "sha256:engine": "Strict replay failed",
     }
-    for status in ("success", "failure"):
-        legacy_ee = {**outcome, "disequality_encoding": "ee", "status": status, "reason": "EE replay result"}
-        path.write_text(json.dumps([outcome, legacy_ee]))
-        assert _figure_inventory(tmp_path)["workloads"][0]["validation_failures"] == {
-            "sha256:engine": "Strict replay failed",
-        }
     path.write_text(json.dumps([outcome, {**outcome, "timeout_sec": 120, "reason": "timed out after 120 seconds"}]))
     assert _figure_inventory(tmp_path)["workloads"][0]["validation_failures"] == {
         "sha256:engine": "Strict replay failed",

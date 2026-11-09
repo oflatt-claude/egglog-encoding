@@ -114,9 +114,6 @@ def _figure_inventory(root: Path, selected: Sequence[FileSpec] | None = None) ->
         item = workloads.get(outcome["file_sha256"])
         if item is None or outcome["kind"] != "validation" or outcome["policy"] != VALIDATION_POLICY:
             continue
-        # Legacy EE diagnostics describe a different encoding of the same binary.
-        if outcome.get("disequality_encoding") == "ee":
-            continue
         key = outcome["binary_sha256"]
         if outcome["status"] == "success":
             item["validation_failures"].pop(key, None)
