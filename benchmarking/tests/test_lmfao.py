@@ -102,12 +102,10 @@ def test_fixed_workload_is_original_covariance_configuration() -> None:
     assert len(model.WORKLOAD.relations) == 6
 
 
-def test_cli_limits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    calls: list[Any] = []
-    monkeypatch.setattr(cli, "run", calls.append)
+def test_cli_limits(tmp_path: Path) -> None:
     argv = ["--data", str(tmp_path), "--backend", str(tmp_path / "multifaq"), "--output-dir", str(tmp_path / "out")]
-    assert cli.main([*argv, "--rounds", "1", "--dag-timeout", "2"]) == 0
-    assert calls[0].samples == 1 and calls[0].dag_timeout == 2
+    args = cli.parse_args([*argv, "--rounds", "1", "--dag-timeout", "2"])
+    assert args.samples == 1 and args.dag_timeout == 2
     for value in ["0", "-1", "nan", "inf"]:
         with pytest.raises(SystemExit):
             cli.main([*argv, "--dag-timeout", value])
@@ -375,6 +373,18 @@ def test_pipeline_charges_optimization_once_and_excludes_validation_and_diagnost
     assert "Slotted egglog" in comparison and "Ordinary egglog (de Bruijn)" in comparison
     assert "27.000 | 40.000 | 0.2750" in comparison
     assert "2 egraph / 2 execution" in comparison
+    from benchmarking.lmfao.report import paper_results
+
+    published = paper_results(report)
+    assert len(published) == 4
+    assert json.loads(published["lmfao.results.json"]) == report
+    table = published["lmfao.table.tex"]
+    assert "27.000 & 40.000 & 0.2750" in table
+    assert published["lmfao.md"] == comparison
+    # A failed extraction must stop before publishing any paper artifacts.
+    report["optimizer"]["slotted"]["pipeline_issue"] = "extractor failed"
+    with pytest.raises(ValueError, match="incomplete"):
+        paper_results(report)
 
 
 def test_optimizer_rejects_workload_drift_before_rewriting(tmp_path: Path) -> None:

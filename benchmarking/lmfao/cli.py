@@ -29,14 +29,18 @@ def status(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace, *, collected: tuple[dict[str, Any], dict[str, Any]] | None = None) -> dict[str, Any]:
     provenance = verify_backend(args.backend)
     if args.cpu is not None:
         os.sched_setaffinity(0, {args.cpu})
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
-    documents, optimizer = collect_optimizers(
-        out, args.samples, args.timeout, args.report, args.memory_limit_bytes, rewrite_rounds=args.rewrite_rounds
+    documents, optimizer = (
+        collected
+        if collected is not None
+        else collect_optimizers(
+            out, args.samples, args.timeout, args.report, args.memory_limit_bytes, rewrite_rounds=args.rewrite_rounds
+        )
     )
     metadata: dict[str, Any] = {
         "cpu_affinity": sorted(os.sched_getaffinity(0)),
@@ -171,10 +175,10 @@ def run(args: argparse.Namespace) -> None:
     }
     write_json(out / "pipeline.json", report)
     (out / "comparison.md").write_text(comparison_markdown(report))
-    print(json.dumps(report, indent=2) if args.format == "json" else comparison_markdown(report), end="\n")
+    return report
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--backend", type=Path, required=True, help="Pinned multifaq executable with optimizer bridge")
@@ -202,5 +206,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     for name in ("output_dir", "data", "backend", "report"):
         if getattr(args, name) is not None:
             setattr(args, name, getattr(args, name).resolve())
-    run(args)
+    return args
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    report = run(args)
+    print(json.dumps(report, indent=2) if args.format == "json" else comparison_markdown(report), end="\n")
     return 0

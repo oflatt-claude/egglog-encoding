@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from . import model
@@ -22,12 +23,8 @@ def preparation_costs(plans: dict[str, Any], builds: dict[str, Any], aliases: di
     return result
 
 
-def comparison_markdown(report: dict[str, Any]) -> str:
-    lines = [
-        "| Method | Egraph (s) | Peak RSS (MiB) | Optimization + generation (s) | "
-        "C++ compilation (s) | Computation (s) | Views / columns | Samples |",
-        "|---|---:|---:|---:|---:|---:|---:|---|",
-    ]
+def comparison_rows(report: dict[str, Any]) -> list[list[str]]:
+    rows = []
     names = {
         "original": "LMFAO configured roots",
         "paper": "LMFAO + paper root heuristic",
@@ -45,10 +42,18 @@ def comparison_markdown(report: dict[str, Any]) -> str:
             reason = (
                 ", ".join(failures) or optimization.get("pipeline_issue") or optimization.get("issue") or "unavailable"
             )
-            lines.append(
-                f"| {name} ({reason}) | {runtime} | {rss} | — | — | — | — | "
-                f"{optimization.get('completed_samples', 0)} completed, "
-                f"{len(optimization.get('failures', []))} failed |"
+            rows.append(
+                [
+                    f"{name} ({reason})",
+                    runtime,
+                    rss,
+                    "—",
+                    "—",
+                    "—",
+                    "—",
+                    f"{optimization.get('completed_samples', 0)} completed, "
+                    f"{len(optimization.get('failures', []))} failed",
+                ]
             )
             continue
         preparation = report["accounted_pipeline"][label]
@@ -56,16 +61,25 @@ def comparison_markdown(report: dict[str, Any]) -> str:
         execution = timing["median_seconds"]
         egraph_samples = optimization.get("completed_samples", "—")
         plan = report["plan_summaries"][label]
-        lines.append(
-            f"| {name} | {runtime} | {rss} | {preparation['optimization_and_generation_seconds']:.3f} | "
-            f"{preparation['compilation_seconds']:.3f} | {execution:.4f} | "
-            f"{plan['views']} / {plan['aggregate_columns']} | "
-            f"{egraph_samples} egraph / {timing['samples']} execution |"
+        rows.append(
+            [
+                name,
+                runtime,
+                rss,
+                f"{preparation['optimization_and_generation_seconds']:.3f}",
+                f"{preparation['compilation_seconds']:.3f}",
+                f"{execution:.4f}",
+                f"{plan['views']} / {plan['aggregate_columns']}",
+                f"{egraph_samples} egraph / {timing['samples']} execution",
+            ]
         )
+    return rows
+
+
+def comparison_caption(report: dict[str, Any]) -> str:
     limit = report["optimizer_memory_limit_bytes"]
     bound = f"{limit / 1024**3:g} GiB allocator/address-space cap" if limit is not None else "no memory cap"
-    lines += [
-        "",
+    lines = [
         "The original 140-query Favorita covariance workload on the public 2M-Sales-row fragment, using the "
         "same pinned frontend and corrected C++ backend. This replicates the workload and pipeline, not the "
         "paper's full 127M-row experiment. The paper-heuristic control uses our implementation of its section 3.3 "
@@ -87,6 +101,68 @@ def comparison_markdown(report: dict[str, Any]) -> str:
         "pipeline.json records those aliases, samples, hashes and all output checks.",
     ]
     return "\n".join(lines) + "\n"
+
+
+def comparison_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "| Method | Egraph (s) | Peak RSS (MiB) | Optimization + generation (s) | "
+        "C++ compilation (s) | Computation (s) | Views / columns | Samples |",
+        "|---|---:|---:|---:|---:|---:|---:|---|",
+        *("| " + " | ".join(row) + " |" for row in comparison_rows(report)),
+        "",
+        comparison_caption(report),
+    ]
+    return "\n".join(lines)
+
+
+def paper_results(report: dict[str, Any]) -> dict[str, str]:
+    """Format the checked execution table for the shared paper publisher."""
+    if not {"original", "paper", "slotted"} <= report["accounted_pipeline"].keys() or any(
+        item.get("pipeline_issue") for item in report["optimizer"].values()
+    ):
+        raise ValueError("LMFAO execution comparison is incomplete; no paper table replaced")
+    escapes = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+        "—": r"\textemdash{}",
+    }
+
+    def tex(value: str) -> str:
+        return "".join(escapes.get(c, c) for c in value)
+
+    table = [
+        "% GENERATED: ./bench.py figures lmfao; provenance in lmfao.results.json",
+        r"\begingroup\scriptsize\setlength{\tabcolsep}{3pt}",
+        r"\begin{tabular}{lrrrrrrl}",
+        r"Method & \shortstack{Egraph\\(s)} & \shortstack{Peak RSS\\(MiB)} & "
+        r"\shortstack{Optimize +\\generate (s)} & \shortstack{C++ compile\\(s)} & "
+        r"\shortstack{Compute\\(s)} & \shortstack{Views /\\columns} & \shortstack{Samples\\egraph / exec.} \\",
+        r"\hline",
+    ]
+    for row in comparison_rows(report):
+        cells = list(map(tex, row))
+        cells[0] = r"\shortstack[l]{" + tex(row[0]).replace(" (", r"\\(") + "}"
+        cells[-1] = (
+            r"\shortstack[l]{"
+            + tex(row[-1]).replace(" egraph", "").replace(" execution", "").replace(", ", r"\\")
+            + "}"
+        )
+        table.append(" & ".join(cells) + r" \\")
+    table += [r"\end{tabular}", r"\endgroup", ""]
+    return {
+        "lmfao.table.tex": "\n".join(table),
+        "lmfao.caption.tex": tex(" ".join(comparison_caption(report).split())) + "\n",
+        "lmfao.md": comparison_markdown(report),
+        "lmfao.results.json": json.dumps(report, indent=2, allow_nan=False) + "\n",
+    }
 
 
 def plan_text(plan: dict[str, Any]) -> str:

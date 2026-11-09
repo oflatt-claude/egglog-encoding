@@ -67,13 +67,16 @@ Cargo.lock pins the Rust solver and bundled HiGHS source.
 git clone https://github.com/fdbresearch/LMFAO /tmp/LMFAO
 git -C /tmp/LMFAO checkout df6a5f59d597e9d7dd5984f268700223553789d0
 uv run --locked python -m benchmarks.reproduction.lmfao.prepare \
-  --source /tmp/LMFAO --output /tmp/lmfao-backend
-./bench.py lmfao --data /tmp/LMFAO/data/favorita-small \
-  --backend /tmp/lmfao-backend/build/multifaq \
-  --output-dir /tmp/lmfao-results --rounds 3 --timeout-sec 300
+  --source /tmp/LMFAO --output benchmarks/local/lmfao
+./bench.py figures lmfao --rounds 3 --timeout-sec 300
 ```
 
-The command compares shipped LMFAO roots, our implementation of the paper's
+The default paper catalog includes this experiment, so `./bench.py figures`
+runs it along with the other paper figures. The command above selects only
+LMFAO. `--lmfao-data` and `--lmfao-backend` can select another prepared directory.
+Neither command downloads sources or prepares the external backend implicitly.
+
+The experiment compares shipped LMFAO roots, our implementation of the paper's
 section 3.3 root heuristic, slotted egglog, and ordinary egglog. Every generated
 program uses the same corrected backend and compiler flags. All 140 answers are
 checked against independent DECIMAL queries before timing: keys and counts must
@@ -85,15 +88,18 @@ Evaluation rejects mismatched provenance. An adapter change requires a new
 prepared directory; preparation preserves the source checkout.
 
 `--boost PREFIX` supports unpacked Boost. Generated programs also need its include
-path; `--cxxflags` replaces all defaults, so retain the optimization flags:
+path; `--lmfao-cxxflags` replaces all defaults, so retain the optimization flags:
 
 ```sh
---cxxflags '-std=c++11 -O3 -pthread -mtune=native -ftree-vectorize -fopenmp -I/PREFIX/include'
+--lmfao-cxxflags '-std=c++11 -O3 -pthread -mtune=native -ftree-vectorize -fopenmp -I/PREFIX/include'
 ```
 
-`--rounds` sets measured repetitions; `--rewrite-rounds` sets the egraph budget
-(default 192, not a claim of saturation). `--cpu N` pins the experiment, while
-`--jobs` controls compilation. Optimizers and generated programs use one thread.
+`--rounds` sets measured repetitions; the paper experiment uses a 192-round
+egraph budget, not a claim of saturation. Optimizers and generated programs use
+one thread. The focused `./bench.py lmfao --data PATH --backend PATH --output-dir PATH`
+command retains advanced options: `--rewrite-rounds` changes that budget,
+`--cpu N` pins the experiment, `--jobs` controls compilation, and `--cxxflags`
+sets generated-program flags.
 `--dag-timeout` bounds extraction; `--build-timeout` bounds backend builds and
 checks. The shared timeout and 16 GiB allocator/address-space cap apply to egraph
 runs, including extraction. `--memory-limit-gib` and `--no-memory-limit` override
@@ -102,8 +108,9 @@ but no allocator cap.
 
 ## Results and timing
 
-Egraph measurements use the repository's collector, resource limits and append-only
-JSONL cache. `--report PATH` selects that cache (default `OUTPUT/optimizer.jsonl`).
+Egraph measurements join the paper invocation's collector, resource limits and
+append-only JSONL cache. `--report PATH` selects that cache (default `.reports.jsonl`;
+the focused `./bench.py lmfao` command defaults to `OUTPUT/optimizer.jsonl`).
 Successful observations are reused; a resource failure stops repetition at
 unchanged bounds and remains visible. Query executions are fresh, with rotating
 and reversing method order after correctness checking has warmed each program.
@@ -125,12 +132,18 @@ The separate egraph measurements are not added to the preparation time.
 Identical plans share compilation/execution observations, recorded as aliases.
 For repeated use, preparation plus N executions is an amortization estimate.
 
-Status goes to stderr; the final Markdown table goes to stdout (`--format json`
-selects JSON). The output directory contains `pipeline.json`, `comparison.md`,
-`optimizer.jsonl`, `execution.jsonl`, validation records and per-method
-`plan.json`/`plan.txt`/generated C++. Results are generated, not checked in.
-This case study is separate from the default figure catalog because it requires
-the pinned external frontend/backend and data.
+The paper command writes `lmfao.table.tex`, `lmfao.caption.tex`, `lmfao.md` and
+`lmfao.results.json` to the common paper output directory. Its `lmfao/` subdirectory
+contains `pipeline.json`, `comparison.md`, `execution.jsonl`, validation records
+and per-method `plan.json`/`plan.txt`/generated C++. Status and artifact paths go
+to stderr. The focused command prints Markdown to stdout (`--format json` selects
+JSON). Results are generated, not checked in.
+
+On the measured machine, a fresh three-repetition evaluation takes about 25
+minutes once tools are built, or about 12 minutes with compatible egraph
+measurements cached. Ten repetitions are estimated at about 40 minutes. Most
+time goes to rewriting and C++ compilation; query computation takes less than
+one second. Initial source/dependency setup is additional.
 
 ## Comparison with the paper
 

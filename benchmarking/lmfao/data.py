@@ -14,10 +14,17 @@ from .model import ident
 type Results = list[list[tuple[Any, ...]]]
 
 
-def load_data(directory: Path) -> tuple[duckdb.DuckDBPyConnection, dict[str, Any]]:
+def validate_inputs(directory: Path) -> None:
     for filename in ("features.conf", "treedecomposition.conf"):
         if (directory / filename).read_bytes() != (model.FIXTURES / filename).read_bytes():
             raise ValueError(f"{filename} differs from the pinned artifact")
+    for name in model.WORKLOAD.relations:
+        if not (directory / f"{name}.tbl").is_file():
+            raise ValueError(f"missing LMFAO input: {directory / f'{name}.tbl'}")
+
+
+def load_data(directory: Path) -> tuple[duckdb.DuckDBPyConnection, dict[str, Any]]:
+    validate_inputs(directory)
     attrs, relations = model.WORKLOAD.attributes, model.WORKLOAD.relations
     types = {name: "DECIMAL(18,6)" if kind == "double" else "BIGINT" for name, kind in attrs}
     db = duckdb.connect()

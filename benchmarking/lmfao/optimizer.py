@@ -15,12 +15,13 @@ from rich.console import Console
 
 from benchmarking.collection import BenchmarkRequest, collect, plan_collection, resolve_requests
 from benchmarking.engines import Treatment
-from benchmarking.models import BenchmarkEndpoint, EndpointRequest
+from benchmarking.models import BenchmarkEndpoint, EndpointRequest, FileSpec, ResolvedTarget, TargetRequest
 from benchmarking.reports.store import ReportRecord, ReportStore, select_observations
 from benchmarking.targets import parse_target, sha256_file
 from benchmarking.workloads import resolve_files
 
 ROOT = Path(__file__).resolve().parents[2]
+MODES: dict[str, Treatment] = {"slotted": "slotted", "debruijn": "off"}
 
 
 def extractor_path(profile: str) -> Path:
@@ -66,6 +67,28 @@ def summarize_optimizer(rows: list[ReportRecord], budget: int, requested: int, i
     }
 
 
+def optimizer_inputs(output: Path, rewrite_rounds: int) -> dict[str, FileSpec]:
+    """Translate the same frontend workload for both benchmark treatments."""
+    from .program import program
+
+    output.mkdir(parents=True, exist_ok=True)
+    files = {}
+    for mode in MODES:
+        path = output / f"{mode}.egg"
+        path.write_text(program(mode, rounds=rewrite_rounds))
+        files[mode] = resolve_files([str(path)], ROOT)[0]
+    return files
+
+
+def optimizer_requests(
+    files: dict[str, FileSpec], target: TargetRequest, memory_limit_bytes: int | None
+) -> tuple[BenchmarkRequest, ...]:
+    return tuple(
+        BenchmarkRequest(EndpointRequest(target, treatment, memory_limit_bytes=memory_limit_bytes), (files[mode],))
+        for mode, treatment in MODES.items()
+    )
+
+
 def collect_optimizers(
     output: Path,
     samples: int,
@@ -76,43 +99,48 @@ def collect_optimizers(
     rewrite_rounds: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Measure the executable scoped lowering with the shared collector."""
-    from .program import program
-
-    modes: dict[str, Treatment] = {"slotted": "slotted", "debruijn": "off"}
     request = parse_target(str(ROOT))
-    files = {}
-    requests = []
-    for mode, treatment in modes.items():
-        path = output / f"{mode}.egg"
-        path.write_text(program(mode, rounds=rewrite_rounds))
-        files[mode] = resolve_files([str(path)], ROOT)[0]
-        requests.append(
-            BenchmarkRequest(EndpointRequest(request, treatment, memory_limit_bytes=memory_limit_bytes), (files[mode],))
-        )
+    files = optimizer_inputs(output, rewrite_rounds)
+    requests = optimizer_requests(files, request, memory_limit_bytes)
     store = ReportStore(report_path or output / "optimizer.jsonl")
     console = Console(stderr=True)
-    targets = resolve_requests(tuple(requests), store, samples, timeout, False, ROOT, ROOT, console)
-    pending = plan_collection(store, tuple(requests), targets, samples, timeout, False)
-    collect(store, pending, tuple(requests), targets, timeout, console)
+    targets = resolve_requests(requests, store, samples, timeout, False, ROOT, ROOT, console)
+    pending = plan_collection(store, requests, targets, samples, timeout, False)
+    collect(store, pending, requests, targets, timeout, console)
+    return optimizer_report(
+        output, store, targets[request], files, samples, timeout, memory_limit_bytes, rewrite_rounds
+    )
+
+
+def optimizer_report(
+    output: Path,
+    store: ReportStore,
+    target: ResolvedTarget,
+    files: dict[str, FileSpec],
+    samples: int,
+    timeout: int,
+    memory_limit_bytes: int | None,
+    rewrite_rounds: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read the shared collection and build the extractor for plan generation."""
     subprocess.run(
         ["cargo", "build", "--locked", "--release", "-p", "lmfao-extract"],
         cwd=ROOT,
         check=True,
         stdout=sys.stderr,
     )
-    target = targets[request]
     report: dict[str, Any] = {
         "rewrite_round_budget": rewrite_rounds,
         "optimizer": {},
         "extractor_path": str(extractor_path("release")),
         "extractor_sha256": sha256_file(extractor_path("release")),
-        "binary_paths": {t: str(target.binary_path_for(t)) for t in modes.values()},
-        "binary_sha256": {t: target.binary_sha256_for(t) for t in modes.values()},
+        "binary_paths": {t: str(target.binary_path_for(t)) for t in MODES.values()},
+        "binary_sha256": {t: target.binary_sha256_for(t) for t in MODES.values()},
         "optimizer_report": str(store.path),
         "optimizer_memory_limit_bytes": memory_limit_bytes,
     }
     successful = {}
-    for mode, treatment in modes.items():
+    for mode, treatment in MODES.items():
         label = f"{mode}"
         endpoint = BenchmarkEndpoint(
             target.row, target.binary_sha256_for(treatment), treatment, memory_limit_bytes=memory_limit_bytes

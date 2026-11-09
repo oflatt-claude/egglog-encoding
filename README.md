@@ -47,11 +47,13 @@ The [source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also
 included in the Rust documentation for `egglog_experimental::slotted`.
 
 The [LMFAO case study](benchmarks/lmfao/README.md) uses bag-sum rewrites and joint
-DAG extraction to optimize the artifact's 140 covariance queries. `./bench.py lmfao`
-compares slotted and ordinary egglog with LMFAO's configured roots and the paper's
-root heuristic, retaining the upstream query frontend and C++ backend. It uses
-the shared benchmark collector and reports query execution separately from
-optimization and compilation.
+DAG extraction to optimize the artifact's 140 covariance queries. It is included
+in `./bench.py figures`; `./bench.py figures lmfao` selects just its table.
+Prepare its pinned external backend and data first, following the case-study
+guide. It compares slotted and ordinary egglog with LMFAO's configured roots and
+the paper's root heuristic, retaining the upstream frontend and C++ backend.
+Egraph measurements share collection and caching with the other paper inputs;
+query execution is reported separately from optimization and compilation.
 
 The reusable Rust checker accepts `egraph-serialize` JSON from either engine,
 with optional annotations for slotted graphs:
@@ -348,11 +350,15 @@ The [paper figures](figures/README.md) use the checked-in
 `benchmarks/corpus/manifest.json` rather than the default workload list.
 Run `./bench.py figures` from this checkout to build the required release engines,
 reuse compatible observations, collect missing runs, and render all six paper
-figures into the ignored `figures/output/eval/` folder. Each figure has seven
+figures and the LMFAO table into the ignored `figures/output/eval/` folder. Each figure has seven
 companions: PDF, SVG, PNG, bound specification, results JSON, numeric TeX macros,
-and a TeX table. Setup requires the Python environment above, the
+and a TeX table. LMFAO exports a table, caption, Markdown and results JSON, with
+generated programs and validation records in the `lmfao/` subdirectory.
+Setup requires the Python environment above, the
 pinned Rust toolchain, and Node.js/npm (`npx`); renderer packages are pinned in
-the command. Generate, inspect, then copy the output folder into the manuscript:
+the command. The [LMFAO setup](benchmarks/lmfao/README.md#reproduce) prepares its
+external backend; missing setup fails before collection. Generate, inspect, then
+copy the output folder into the manuscript:
 
 ```sh
 ./bench.py figures
