@@ -59,11 +59,14 @@ import EgglogSemantics.Proofs.Closure
 import EgglogSemantics.Proofs.Completion
 import EgglogSemantics.Proofs.Congruence
 import EgglogSemantics.Proofs.Congruence.Atoms
+import EgglogSemantics.Proofs.Congruence.Check
 import EgglogSemantics.Proofs.Congruence.Complete
+import EgglogSemantics.Proofs.Congruence.Diverge
 import EgglogSemantics.Proofs.Congruence.Firing
 import EgglogSemantics.Proofs.Congruence.Fixpoint
 import EgglogSemantics.Proofs.Congruence.Flatten
 import EgglogSemantics.Proofs.Congruence.Invariant
+import EgglogSemantics.Proofs.Congruence.Main
 import EgglogSemantics.Proofs.Congruence.Maintenance
 import EgglogSemantics.Proofs.Congruence.Properties
 import EgglogSemantics.Proofs.Congruence.QueryCorr

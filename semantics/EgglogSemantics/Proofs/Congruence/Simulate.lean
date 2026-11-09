@@ -138,7 +138,7 @@ theorem bounded_universe (hP : P.Fragment) {x₀ : Database} (hx₀ : SrcInv P x
       ∀ x, Rounds P x₀ x → x.SameMeaning x₀ → ∀ t ∈ x.terms, t ∈ U := by
   obtain ⟨M, hM⟩ := terms_bounded hP hx₀
   refine ⟨{t | Term.VocabIn P t ∧ t.nodeSize ≤ M},
-    Term.finite_nodeSize_le P.fnNames_finite P.litSet_finite M, fun x hr hm t ht => ?_⟩
+    Term.finite_nodeSize_le P.ctorSet_finite P.litSet_finite M, fun x hr hm t ht => ?_⟩
   exact ⟨(hx₀.rounds hP hr).vocab t ht, hM x hr hm t ht⟩
 
 /-- After the source has settled, the compiled saturation still terminates, at a state

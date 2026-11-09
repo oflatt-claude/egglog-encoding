@@ -48,13 +48,13 @@ def Schedule.lits (S : Schedule) : List Lit := S.rules.flatMap Rule.lits
 /-- Every literal the program mentions. -/
 def Program.lits (P : Program) : List Lit := P.schedule.lits ++ P.check.flatMap Pattern.lits
 
-/-- The function names of a program, as a set. -/
-def Program.fnNames (P : Program) : Set FnName := {g | ∃ k, (g, k) ∈ P.ctors}
+/-- The constructor names of a program, as a set. -/
+def Program.ctorSet (P : Program) : Set FnName := {g | ∃ k, (g, k) ∈ P.ctors}
 
 /-- The literals of a program, as a set. -/
 def Program.litSet (P : Program) : Set Lit := {l | l ∈ P.lits}
 
-theorem Program.fnNames_finite (P : Program) : P.fnNames.Finite := by
+theorem Program.ctorSet_finite (P : Program) : P.ctorSet.Finite := by
   apply ((List.finite_toSet P.ctors).image Prod.fst).subset
   rintro g ⟨k, hk⟩
   exact ⟨(g, k), hk, rfl⟩
@@ -62,13 +62,13 @@ theorem Program.fnNames_finite (P : Program) : P.fnNames.Finite := by
 theorem Program.litSet_finite (P : Program) : P.litSet.Finite := List.finite_toSet _
 
 /-- A term over the program's names and literals. -/
-abbrev Term.VocabIn (P : Program) (t : Term) : Prop := Term.UsesVocabulary P.fnNames P.litSet t
+abbrev Term.VocabIn (P : Program) (t : Term) : Prop := Term.UsesVocabulary P.ctorSet P.litSet t
 
 theorem Term.VocabIn.subterm {P : Program} {s t : Term} (ht : t.VocabIn P) (hs : s ∈ t.subterms) :
     s.VocabIn P := Term.UsesVocabulary.subterm ht hs
 
 theorem Term.vocabIn_app_iff {P : Program} {f : FnName} {args : List Term} :
-    Term.VocabIn P (.app f args) ↔ f ∈ P.fnNames ∧ ∀ a ∈ args, Term.VocabIn P a := by
+    Term.VocabIn P (.app f args) ↔ f ∈ P.ctorSet ∧ ∀ a ∈ args, Term.VocabIn P a := by
   constructor
   · intro h; cases h with | app hf hargs => exact ⟨hf, hargs⟩
   · rintro ⟨hf, hargs⟩; exact .app hf hargs
