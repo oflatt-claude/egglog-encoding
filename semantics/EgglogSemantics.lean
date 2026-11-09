@@ -70,7 +70,9 @@ import EgglogSemantics.Proofs.Congruence.QueryCorr
 import EgglogSemantics.Proofs.Congruence.Round
 import EgglogSemantics.Proofs.Congruence.Rules
 import EgglogSemantics.Proofs.Congruence.Sound
+import EgglogSemantics.Proofs.Congruence.Source
 import EgglogSemantics.Proofs.Congruence.Target
+import EgglogSemantics.Proofs.Congruence.Vocab
 import EgglogSemantics.Proofs.Congruence.Writes
 import EgglogSemantics.Proofs.Database
 import EgglogSemantics.Proofs.Diagonal

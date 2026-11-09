@@ -240,6 +240,68 @@ theorem rebuild_exists (h : Rel src d) : ∃ e, Reach d (.saturate (.run (mainte
       (RU \ rowsOf e).ncard + (RU \ e.subsumed).ncard
     omega
 
+/-- The measure of a union-find state inside a finite universe of keys: the rows not yet
+asserted and the rows not yet marked. -/
+noncomputable def rank (U : Set Term) (e : Database) : Nat :=
+  (Set.image2 ufRowT U U \ rowsOf e).ncard + (Set.image2 ufRowT U U \ e.subsumed).ncard
+
+/-- A meaning-changing step of a union-find state inside the universe lowers the rank. -/
+theorem rank_lt {U : Set Term} (hU : U.Finite) {d d' : Database} (hud : UfOnly d)
+    (hud' : UfOnly d') (hkeys : ∀ k p, Row d' k p → k ∈ U ∧ p ∈ U)
+    (hmarks : ∀ t ∈ d'.subsumed, ∃ k p, t = ufRowT k p ∧ Row d' k p)
+    (heqs : d.eqs ⊆ d'.eqs) (hsub : d.subsumed ⊆ d'.subsumed) (hne : ¬ d.SameMeaning d') :
+    rank U d' < rank U d := by
+  classical
+  have hRU : (Set.image2 ufRowT U U).Finite := hU.image2 ufRowT hU
+  have hrows : rowsOf d' ⊆ Set.image2 ufRowT U U := by
+    intro t ht
+    obtain ⟨k, p, heq⟩ := hud' _ ht
+    obtain rfl : t = ufRowT k p := (Prod.mk.inj heq).1
+    have hr : Row d' k p := ht
+    exact ⟨k, (hkeys k p hr).1, p, (hkeys k p hr).2, rfl⟩
+  have hmarks' : d'.subsumed ⊆ Set.image2 ufRowT U U := by
+    intro t ht
+    obtain ⟨k, p, rfl, hr⟩ := hmarks t ht
+    exact ⟨k, (hkeys k p hr).1, p, (hkeys k p hr).2, rfl⟩
+  have hdiff : d.eqs ≠ d'.eqs ∨ d.subsumed ≠ d'.subsumed := by
+    by_contra hc
+    push Not at hc
+    have : d = d' := Database.ext hc.1 hc.2
+    exact hne (this ▸ Database.SameMeaning.refl d)
+  have hle₁ : (Set.image2 ufRowT U U \ rowsOf d').ncard ≤
+      (Set.image2 ufRowT U U \ rowsOf d).ncard :=
+    Set.ncard_le_ncard (Set.sdiff_subset_sdiff_right (rowsOf_mono heqs)) hRU.sdiff
+  have hle₂ : (Set.image2 ufRowT U U \ d'.subsumed).ncard ≤
+      (Set.image2 ufRowT U U \ d.subsumed).ncard :=
+    Set.ncard_le_ncard (Set.sdiff_subset_sdiff_right hsub) hRU.sdiff
+  unfold rank
+  rcases hdiff with hdiff | hdiff
+  · have hss : Set.image2 ufRowT U U \ rowsOf d' ⊂ Set.image2 ufRowT U U \ rowsOf d := by
+      refine LE.le.ssubset_of_ne (Set.sdiff_subset_sdiff_right (rowsOf_mono heqs)) ?_
+      intro heq
+      apply hdiff
+      apply eqs_eq_of_rowsOf_eq hud hud'
+      apply Set.Subset.antisymm (rowsOf_mono heqs)
+      intro t ht
+      by_contra hnt
+      have h₁ : t ∈ Set.image2 ufRowT U U \ rowsOf d := ⟨hrows ht, hnt⟩
+      rw [← heq] at h₁
+      exact h₁.2 ht
+    have := Set.ncard_lt_ncard hss hRU.sdiff
+    omega
+  · have hss : Set.image2 ufRowT U U \ d'.subsumed ⊂ Set.image2 ufRowT U U \ d.subsumed := by
+      refine LE.le.ssubset_of_ne (Set.sdiff_subset_sdiff_right hsub) ?_
+      intro heq
+      apply hdiff
+      apply Set.Subset.antisymm hsub
+      intro t ht
+      by_contra hnt
+      have h₁ : t ∈ Set.image2 ufRowT U U \ d.subsumed := ⟨hmarks' ht, hnt⟩
+      rw [← heq] at h₁
+      exact h₁.2 ht
+    have := Set.ncard_lt_ncard hss hRU.sdiff
+    omega
+
 /-- The result of the rebuild saturation is related, canonical, and has the same keys. -/
 theorem rebuild_rel (h : Rel src d) (hcs : src.CtorsIn P) {e : Database}
     (hr : Reach d (.saturate (.run (maintenance P))) e) :
