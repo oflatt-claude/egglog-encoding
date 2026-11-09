@@ -325,13 +325,6 @@ theorem mem_congruence_vars {f : FnName} {n : Nat} {v : Var} :
     · refine ⟨.ne (.var "@y") (.var "@z"), by rw [congruence_query]; simp, ?_⟩
       simp [Pattern.vars, Expr.vars]
 
-theorem matchesList_map_var {d : Database} {σ : Env} : ∀ {vs : List Var},
-    (∀ v ∈ vs, (Env.lookup v σ).isSome) → Expr.MatchesList d σ (vs.map Expr.var)
-  | [], _ => .nil
-  | v :: vs, h => by
-      obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp (h v (by simp))
-      exact .cons (.var ht) (matchesList_map_var fun w hw => h w (by simp [hw]))
-
 /-- The congruence rule fires on two live applications with the same live child parents. -/
 theorem congruence_fire {src d : Database} (h : Rel src d) {f : FnName} {as bs rs : List Term}
     {y z : Term} (hla : Term.app f as ∈ d.live) (hlb : Term.app f bs ∈ d.live)

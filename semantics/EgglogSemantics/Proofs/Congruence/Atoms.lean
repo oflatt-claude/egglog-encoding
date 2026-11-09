@@ -28,6 +28,14 @@ theorem Expr.matchesList_cons_iff {d : Database} {σ : Env} {e : Expr} {es : Lis
 
 theorem Expr.matchesList_nil {d : Database} {σ : Env} : Expr.MatchesList d σ [] := .nil
 
+/-- A list of bound variables matches. -/
+theorem matchesList_map_var {d : Database} {σ : Env} : ∀ {vs : List Var},
+    (∀ v ∈ vs, (Env.lookup v σ).isSome) → Expr.MatchesList d σ (vs.map Expr.var)
+  | [], _ => .nil
+  | v :: vs, h => by
+      obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp (h v (by simp))
+      exact .cons (.var ht) (matchesList_map_var fun w hw => h w (by simp [hw]))
+
 /-- An application atom: its arguments match and evaluate, and the instance is live. -/
 theorem matches_app_iff {d : Database} {σ : Env} {f : FnName} {es : List Expr} :
     Matches d (.expr (.app f es)) σ ↔ ∃ ts, Expr.MatchesList d σ es ∧
