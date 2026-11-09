@@ -91,9 +91,11 @@ def node_paths() -> dict[str, Path]:
 
 
 def clean_node(text: str) -> str:
-    """One extracted node, without the blueprint bookkeeping. The label stays so the paper
-    can refer to the node: on its first line, or just inside a theorem-like environment so
-    that a reference gives the theorem's number."""
+    """One extracted node, without the blueprint bookkeeping or its proof sketch: the paper
+    displays statements. The label stays so the paper can refer to the node: on its first
+    line, or just inside a theorem-like environment so that a reference gives the theorem's
+    number."""
+    text = re.sub(r"\\begin\{proof\}.*?\\end\{proof\}\n?", "", text, flags=re.S)
     labels = []
     lines = []
     for line in text.splitlines():
