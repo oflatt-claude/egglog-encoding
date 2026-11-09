@@ -2,7 +2,7 @@
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
   "description": "Per-kernel/phase arithmetic-mean runtime and peak RSS ratios of Egglog encoding to native Slotted. Aligned metric panels use the same workload order and scale, with uniform black squares, capped independent Fieller 95% intervals and a 1x guide. No lines connect workloads. Explicit unavailable and unbounded statuses remain visible; the companion table and raw selected rows are unchanged.",
   "data": {
-    "url": "../../.reports-grouped.json",
+    "url": "../../data-cache/reports-grouped.json",
     "format": {"type": "json"}
   },
   "params": [

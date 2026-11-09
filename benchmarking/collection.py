@@ -194,7 +194,7 @@ def resolve_requests(
 
 
 def plan_collection(
-    store: ReportStore,
+    store: ReportStore | GroupedReport,
     requests: tuple[BenchmarkRequest, ...],
     resolved_targets: Mapping[TargetRequest, ResolvedTarget],
     rounds: int,

@@ -15,16 +15,24 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from time import perf_counter
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from rich.console import Console
 
 from benchmarks.reproduction.corpus import MANIFEST_RELATIVE_PATH, VALIDATION_POLICY, load_manifest
 from benchmarks.reproduction.native import NATIVE_ALLOCATION_FAILURE
 
-from .config import DEFAULT_MEMORY_LIMIT_BYTES, DEFAULT_TIMEOUT_SEC
+from .config import DEFAULT_AST_CACHE, DEFAULT_MEMORY_LIMIT_BYTES, DEFAULT_REPORT, DEFAULT_TIMEOUT_SEC
 from .engines import TREATMENT_SPECS, TREATMENTS, Treatment
-from .models import BenchmarkEndpoint, EndpointRequest, FileSpec, ResolvedTarget, validate_unique_file_identities
+from .figure_reuse import FigureData
+from .models import (
+    BenchmarkEndpoint,
+    BuiltBinary,
+    EndpointRequest,
+    FileSpec,
+    ResolvedTarget,
+    validate_unique_file_identities,
+)
 from .native_memory import add_memory_limit_options
 from .reports.grouped import grouped_report_path, write_grouped_report
 from .reports.store import CacheKey, GroupedReport, select_observations
@@ -197,9 +205,15 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, FigureConfig]:
     """Make configured names available in help without resolving files or builds."""
     preliminary = argparse.ArgumentParser(add_help=False)
     preliminary.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    preliminary.add_argument("--reuse-from", type=Path)
     known, _ = preliminary.parse_known_args(argv)
+    explicit = {token.split("=", 1)[0] for token in argv}
     try:
-        config = load_config(known.config)
+        config = (
+            FigureConfig(known.config, 10, DEFAULT_TIMEOUT_SEC, ())
+            if known.reuse_from is not None and not explicit & {"--config", "--target"}
+            else load_config(known.config)
+        )
     except (OSError, ValueError, TypeError) as error:
         preliminary.error(str(error))
     parser = argparse.ArgumentParser(
@@ -217,7 +231,14 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, FigureConfig]:
     parser.add_argument(
         "--target", default=f"figures={ROOT}", help="source target (default: this checkout, label figures)"
     )
-    parser.add_argument("--report", type=Path, default=Path(".reports.jsonl"), help="append-only observation cache")
+    parser.add_argument(
+        "--no-runs", action="store_true", help="render cached target labels only; never build or collect"
+    )
+    parser.add_argument(
+        "--reuse-from", type=Path, help="reuse per-figure exported observations, bindings, and AST data"
+    )
+    parser.add_argument("--ast-cache", type=Path, default=Path(DEFAULT_AST_CACHE), help="Slotted AST JSONL cache path")
+    parser.add_argument("--report", type=Path, default=Path(DEFAULT_REPORT), help="append-only observation cache")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -234,7 +255,7 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, FigureConfig]:
     if len(args.names) != len(set(args.names)):
         parser.error("duplicate figure name")
     unknown = set(args.names) - {figure.name for figure in config.figures}
-    if unknown:
+    if unknown and args.reuse_from is None:
         parser.error("unknown figure names: " + ", ".join(sorted(unknown)) + "; select a JSON catalog with --config")
     return args, replace(
         config, rounds=args.rounds, timeout_sec=args.timeout_sec, memory_limit_bytes=args.memory_limit_bytes
@@ -253,8 +274,12 @@ def resolve_figures(config: FigureConfig, names: Sequence[str], invocation_cwd: 
             if not figure.spec.is_file():
                 raise ValueError(f"figure spec does not exist: {figure.spec}")
             spec = json.loads(figure.spec.read_bytes())
-            if not isinstance(spec, dict) or not isinstance(spec.get("data"), dict) or not spec["data"].get("url"):
-                raise ValueError(f"{figure.name}: specification must declare a primary data.url")
+            if (
+                not isinstance(spec, dict)
+                or not isinstance(spec.get("data"), dict)
+                or not ({"url", "values"} & spec["data"].keys())
+            ):
+                raise ValueError(f"{figure.name}: specification must declare a primary data source")
             specs[figure.spec] = spec
         paths: dict[Path, None] = {}
         for pattern in figure.patterns:
@@ -327,181 +352,253 @@ def render_figures(
     output_dir: Path | None,
     console: Console,
     inventory: FigureInventory,
+    ast_records: Sequence[dict[str, Any]] = (),
 ) -> tuple[Path, ...]:
     """Bind shared sample selections and render Vega through temporary files."""
     from scipy import stats
 
-    from .figure_results import corpus_view_domains, figure_results, latex_results
+    from .figure_results import corpus_view_domains, figure_results
 
     metadata = {item["file_sha256"]: item for item in inventory["workloads"]}
     label = target.row.label
     if label is None:
         raise ValueError("figure target must have a label")
+    (output_dir or DEFAULT_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+    prepared = []
+    for resolved in figures:
+        figure = resolved.figure
+        selected_inputs = []
+        for file in resolved.files:
+            info = metadata.get(file.sha256)
+            for treatment in figure.treatments:
+                physical = file.for_binary(TREATMENT_SPECS[treatment].binary_name)
+                endpoint = BenchmarkEndpoint(
+                    target.row,
+                    target.binary_sha256_for(treatment),
+                    treatment,
+                    memory_limit_bytes=config.memory_limit_bytes,
+                )
+                key = CacheKey.for_endpoint(endpoint, file)
+                selection = select_observations(grouped, endpoint, file, config.rounds, config.timeout_sec)
+                excluded, rows = selection.exclusion, selection.rows
+                correctness_mode = PROOF_ORACLES.get(treatment, treatment)
+                if correctness_mode != treatment:
+                    # Recording inherits correctness exclusions, while resource
+                    # deferrals apply to the timed treatment's own samples.
+                    strict = select_observations(
+                        grouped,
+                        replace(endpoint, treatment=correctness_mode),
+                        file,
+                        config.rounds,
+                        config.timeout_sec,
+                    )
+                    if strict.exclusion is not None and strict.exclusion.kind != "resource":
+                        excluded = excluded or strict.exclusion
+                    if excluded is not None:
+                        rows = ()
+                validation_issue = (
+                    info["validation_failures"].get(f"{key.binary_sha256}/nee", "")
+                    if info and correctness_mode == "proof-testing"
+                    else ""
+                )
+                selected_inputs.append(
+                    {
+                        "logical_id": file.sha256,
+                        "label": info["label"] if info else file.display_path,
+                        "family": info["family"] if info else "",
+                        "file_sha256": physical.sha256,
+                        "treatment": treatment,
+                        "binary_sha256": key.binary_sha256,
+                        "memory_limit_bytes": endpoint.memory_limit_bytes,
+                        "selected_row_indices": [row.row_index for row in rows],
+                        "validation_failures": info["validation_failures"] if info else {},
+                        "validation_issue": validation_issue,
+                        "exclusion": None
+                        if excluded is None
+                        else {
+                            "kind": excluded.kind,
+                            "reason": excluded.reason,
+                            "evidence": excluded.evidence,
+                        },
+                    }
+                )
+        t_critical = None if config.rounds == 1 else float(stats.t.ppf(0.975, config.rounds - 1))
+        bindings = {
+            "target_label": label,
+            "timeout_sec": config.timeout_sec,
+            "rounds": config.rounds,
+            "memory_limit_bytes": config.memory_limit_bytes,
+            "t_critical": t_critical,
+            "selected_inputs": selected_inputs,
+            "treatments": figure.treatments,
+            "source_blockers": inventory["unavailable_cases"],
+        }
+        spec = deepcopy(resolved.spec)
+        for parameter in spec.get("params", []):
+            if parameter.get("name") in bindings:
+                parameter["value"] = bindings[parameter["name"]]
+        spec["data"]["url"] = grouped_report_path(report_path).as_uri()
+        results = figure_results(figure.name, selected_inputs, grouped, config.rounds, t_critical)
+        for condition in results["conditions"]:
+            issue = (
+                f"excluded ({condition['exclusion']['kind']}): {condition['exclusion']['reason']}"
+                if condition["exclusion"]
+                else condition["validation_issue"]
+                or (f"{condition['failed_n']} failed observations" if condition["failed_n"] else None)
+                or (
+                    f"{condition['sample_n']}/{config.rounds} observations"
+                    if condition["sample_n"] != config.rounds
+                    else None
+                )
+                or next(
+                    (
+                        f"{metric}: measurement unavailable"
+                        for metric, values in condition["metrics"].items()
+                        if values["valid_n"] != config.rounds
+                    ),
+                    None,
+                )
+            )
+            if issue:
+                raise ValueError(
+                    f"{figure.name}: {condition['label']} · {condition['treatment']}: {issue}; "
+                    "no figure outputs replaced"
+                )
+        if figure.name.startswith("corpus-"):
+            domains = corpus_view_domains(results)
+            results["view_domains"] = domains
+            for parameter in spec.get("params", []):
+                if parameter["name"] == "view_domains":
+                    parameter.pop("expr", None)
+                    parameter["value"] = domains
+            if not any(domain["zoom"] < domain["full"] for domain in domains.values()):
+                # Empty facets still reserve axes/space in Vega-Lite. Omit the
+                # entire optional composition when every value fits the detail.
+                del spec["vconcat"][1]
+        results["provenance"] = {
+            "target": asdict(target.row),
+            "catalog_path": str(config.path),
+            "spec_path": str(figure.spec),
+            "report_path": str(report_path),
+            "timeout_sec": config.timeout_sec,
+            "memory_limit_bytes": config.memory_limit_bytes,
+            "source_blockers": inventory["unavailable_cases"],
+            "view_domains": results.get("view_domains"),
+        }
+        prepared.append(FigureData(figure.name, spec, grouped, results["provenance"], tuple(ast_records)))
+    return render_figure_data(prepared, output_dir or DEFAULT_OUTPUT_DIR, console)
+
+
+def renderer_metadata() -> dict[str, Any]:
+    """Identify the renderer checkout, allowing installed distributions outside Git."""
+    from .targets import git_dirty, git_sha
+
+    try:
+        return {"git_sha": git_sha(ROOT), "is_dirty": git_dirty(ROOT)}
+    except (OSError, subprocess.SubprocessError):
+        return {"git_sha": None, "is_dirty": None}
+
+
+def render_figure_data(
+    data: Sequence[FigureData],
+    destination: Path,
+    console: Console,
+    *,
+    images: bool = True,
+    renderer: dict[str, Any] | None = None,
+) -> tuple[Path, ...]:
+    """Atomically export and optionally draw portable, per-figure selected snapshots."""
+    from .figure_results import figure_results, latex_results
+
     command = [*shlex.split(os.environ.get("NPX", "npx --yes")), *[f"--package={p}" for p in VEGA_PACKAGES]]
-    rendered = []
-    destination = (output_dir or DEFAULT_OUTPUT_DIR).resolve()
+    renderer = renderer_metadata() if renderer is None else renderer
+    destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
+    rendered: list[Path] = []
     with tempfile.TemporaryDirectory(dir=destination, prefix=".figures.") as temporary:
-        for resolved in figures:
-            figure = resolved.figure
-            selected_inputs = []
-            for file in resolved.files:
-                info = metadata.get(file.sha256)
-                for treatment in figure.treatments:
-                    physical = file.for_binary(TREATMENT_SPECS[treatment].binary_name)
-                    endpoint = BenchmarkEndpoint(
-                        target.row,
-                        target.binary_sha256_for(treatment),
-                        treatment,
-                        memory_limit_bytes=config.memory_limit_bytes,
-                    )
-                    key = CacheKey.for_endpoint(endpoint, file)
-                    selection = select_observations(grouped, endpoint, file, config.rounds, config.timeout_sec)
-                    excluded, rows = selection.exclusion, selection.rows
-                    correctness_mode = PROOF_ORACLES.get(treatment, treatment)
-                    if correctness_mode != treatment:
-                        # Recording inherits correctness exclusions, while resource
-                        # deferrals apply to the timed treatment's own samples.
-                        strict = select_observations(
-                            grouped,
-                            replace(endpoint, treatment=correctness_mode),
-                            file,
-                            config.rounds,
-                            config.timeout_sec,
-                        )
-                        if strict.exclusion is not None and strict.exclusion.kind != "resource":
-                            excluded = excluded or strict.exclusion
-                        if excluded is not None:
-                            rows = ()
-                    validation_issue = (
-                        info["validation_failures"].get(f"{key.binary_sha256}/nee", "")
-                        if info and correctness_mode == "proof-testing"
-                        else ""
-                    )
-                    selected_inputs.append(
+        for item in data:
+            name, spec = item.name, deepcopy(item.spec)
+            parameters = {parameter["name"]: parameter["value"] for parameter in spec["params"] if "value" in parameter}
+            results = figure_results(
+                name, parameters["selected_inputs"], item.grouped, parameters["rounds"], parameters["t_critical"]
+            )
+            results.update(figure_data_version=1, provenance=item.provenance, renderer=renderer)
+            # Include only selected measurements; full profiling/provenance lives outside the plot view.
+            selections: dict[tuple[str, str, str], set[int]] = {}
+            for selected in parameters["selected_inputs"]:
+                identity = (selected["binary_sha256"], selected["file_sha256"], selected["treatment"])
+                selections.setdefault(identity, set()).update(selected["selected_row_indices"])
+            groups = []
+            for group in item.grouped.data["groups"]:
+                key = group["key"]
+                indices = selections.get((key["binary_sha256"], key["file_sha256"], key["treatment"]))
+                if indices is not None:
+                    groups.append(
                         {
-                            "logical_id": file.sha256,
-                            "label": info["label"] if info else file.display_path,
-                            "family": info["family"] if info else "",
-                            "file_sha256": physical.sha256,
-                            "treatment": treatment,
-                            "binary_sha256": key.binary_sha256,
-                            "memory_limit_bytes": endpoint.memory_limit_bytes,
-                            "selected_row_indices": [row.row_index for row in rows],
-                            "validation_failures": info["validation_failures"] if info else {},
-                            "validation_issue": validation_issue,
-                            "exclusion": None
-                            if excluded is None
-                            else {
-                                "kind": excluded.kind,
-                                "reason": excluded.reason,
-                                "evidence": excluded.evidence,
-                            },
+                            **group,
+                            "samples": [
+                                {
+                                    key: cast(Any, row)[key]
+                                    for key in (
+                                        "row_index",
+                                        "started_at",
+                                        "status",
+                                        "wall_sec",
+                                        "max_rss_bytes",
+                                        "timeout_sec",
+                                        "memory_limit_bytes",
+                                    )
+                                }
+                                for row in group["samples"]
+                                if row["row_index"] in indices
+                            ],
                         }
                     )
-            t_critical = None if config.rounds == 1 else float(stats.t.ppf(0.975, config.rounds - 1))
-            bindings = {
-                "target_label": label,
-                "timeout_sec": config.timeout_sec,
-                "rounds": config.rounds,
-                "memory_limit_bytes": config.memory_limit_bytes,
-                "t_critical": t_critical,
-                "selected_inputs": selected_inputs,
-                "treatments": figure.treatments,
-                "source_blockers": inventory["unavailable_cases"],
-            }
-            spec = deepcopy(resolved.spec)
-            for parameter in spec.get("params", []):
-                if parameter.get("name") in bindings:
-                    parameter["value"] = bindings[parameter["name"]]
-            spec["data"]["url"] = grouped_report_path(report_path).as_uri()
-            outputs = [destination / f"{figure.name}.{extension}" for extension in ("pdf", "svg", "png")]
-            results = figure_results(figure.name, selected_inputs, grouped, config.rounds, t_critical)
+            spec["data"] = {"values": [{"groups": groups}]}
             for condition in results["conditions"]:
-                issue = (
-                    f"excluded ({condition['exclusion']['kind']}): {condition['exclusion']['reason']}"
-                    if condition["exclusion"]
-                    else condition["validation_issue"]
-                    or (f"{condition['failed_n']} failed observations" if condition["failed_n"] else None)
-                    or (
-                        f"{condition['sample_n']}/{config.rounds} observations"
-                        if condition["sample_n"] != config.rounds
-                        else None
-                    )
-                    or next(
-                        (
-                            f"{metric}: measurement unavailable"
-                            for metric, values in condition["metrics"].items()
-                            if values["valid_n"] != config.rounds
-                        ),
-                        None,
-                    )
-                )
-                if issue:
-                    raise ValueError(
-                        f"{figure.name}: {condition['label']} · {condition['treatment']}: {issue}; "
-                        "no figure outputs replaced"
-                    )
-            if figure.name.startswith("corpus-"):
-                domains = corpus_view_domains(results)
-                results["view_domains"] = domains
-                for parameter in spec.get("params", []):
-                    if parameter["name"] == "view_domains":
-                        parameter.pop("expr", None)
-                        parameter["value"] = domains
-                if not any(domain["zoom"] < domain["full"] for domain in domains.values()):
-                    # Empty facets still reserve axes/space in Vega-Lite. Omit the
-                    # entire optional composition when every value fits the detail.
-                    del spec["vconcat"][1]
-            results["provenance"] = {
-                "target": asdict(target.row),
-                "catalog_path": str(config.path),
-                "spec_path": str(figure.spec),
-                "report_path": str(report_path),
-                "timeout_sec": config.timeout_sec,
-                "memory_limit_bytes": config.memory_limit_bytes,
-                "source_blockers": inventory["unavailable_cases"],
-                "view_domains": results.get("view_domains"),
-            }
+                for row in condition["observations"]:
+                    row.pop("timing_summary", None)
             numbers, table = latex_results(results)
-            console.print(f"Rendering {figure.name}", markup=False)
-            # Stage every companion before publishing the requested bundle.
-            bound_path = Path(temporary) / f"{figure.name}.bound.vl.json"
-            bound_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n")
-            # Export the same selected observations and quarantine decisions,
-            # atomically with the images and their bound specification.
+            console.print(f"Rendering {name}" if images else f"Exporting {name}", markup=False)
+            bound_path = Path(temporary) / f"{name}.bound.vl.json"
+            bound_path.write_text(json.dumps(spec, ensure_ascii=False, separators=(",", ":")) + "\n")
+            metadata_outputs = [bound_path]
             for suffix, content in (
-                ("results.json", json.dumps(results, ensure_ascii=False, indent=2, allow_nan=False) + "\n"),
+                (
+                    "results.json",
+                    json.dumps(results, ensure_ascii=False, allow_nan=False, separators=(",", ":")) + "\n",
+                ),
                 ("numbers.tex", numbers),
                 ("table.tex", table),
             ):
-                exported = Path(temporary) / f"{figure.name}.{suffix}"
+                exported = Path(temporary) / f"{name}.{suffix}"
                 exported.write_text(content)
-            for output in outputs:
-                generated = Path(temporary) / output.name
-                args = [
-                    *command,
-                    "vl2" + output.suffix[1:],
-                    str(bound_path),
-                    str(generated),
-                    "--base",
-                    str(figure.spec.parent),
-                ]
-                if output.suffix == ".png":
-                    args += ["-s", "3"]
-                subprocess.run(args, cwd=ROOT, check=True, stdout=sys.stderr, stderr=sys.stderr)
-                if not generated.is_file() or not generated.stat().st_size:
-                    raise ValueError(f"renderer produced no image: {output}")
-            outputs.append(destination / bound_path.name)
-            outputs.extend(
-                destination / f"{figure.name}.{suffix}" for suffix in ("results.json", "numbers.tex", "table.tex")
-            )
-            if figure.name == "slotted-runtime":
+                metadata_outputs.append(exported)
+            outputs = []
+            if images:
+                for extension in ("pdf", "svg", "png"):
+                    generated = Path(temporary) / f"{name}.{extension}"
+                    args = [*command, "vl2" + extension, str(bound_path), str(generated), "--base", temporary]
+                    if extension == "png":
+                        args += ["-s", "3"]
+                    completed = subprocess.run(
+                        args, cwd=ROOT, check=True, stdout=sys.stderr, stderr=subprocess.PIPE, text=True
+                    )
+                    if completed is not None and completed.stderr:
+                        print(completed.stderr, file=sys.stderr, end="")
+                        if "ERROR" in completed.stderr:
+                            raise ValueError(f"{name}: Vega renderer failed; no figure outputs replaced")
+                    if not generated.is_file() or not generated.stat().st_size:
+                        raise ValueError(f"renderer produced no image: {generated}")
+                    outputs.append(generated)
+            outputs.extend(metadata_outputs)
+            if name == "slotted-runtime":
                 from .slotted_ast import export_slotted_ast
 
-                console.print("Compiling Slotted AST-size table (no benchmark execution)", markup=False)
-                outputs.extend(destination / path.name for path in export_slotted_ast(resolved.files, Path(temporary)))
-            rendered.extend(outputs)
+                if not item.ast_records:
+                    raise ValueError("slotted-runtime requires a persisted AST measurement snapshot")
+                outputs.extend(export_slotted_ast(item.ast_records, Path(temporary)))
+            rendered.extend(destination / path.name for path in outputs)
         for output in rendered:
             os.replace(Path(temporary) / output.name, output)
     for output in rendered:
@@ -514,10 +611,54 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw = tuple(sys.argv[1:] if argv is None else argv)
     args, config = parse_args(raw)
     from .collection import BenchmarkRequest, collect, current_label_bindings, plan_collection, resolve_requests
-    from .reports.store import ReportStore
+    from .reports.store import ReportStore, parse_grouped_report
 
     console = Console(stderr=True)
     try:
+        if args.reuse_from is not None and not any(token.split("=", 1)[0] == "--target" for token in raw):
+            from .figure_reuse import import_figure, restyle_figure, reuse_figure
+            from .targets import git_dirty, git_sha
+
+            directory = args.reuse_from.expanduser().resolve()
+            explicit = {token.split("=", 1)[0] for token in raw}
+            names = args.names or (
+                [figure.name for figure in config.figures]
+                if "--config" in explicit
+                else sorted(
+                    {
+                        path.name.removesuffix(".gz").removesuffix(".results.json")
+                        for pattern in ("*.results.json", "*.results.json.gz")
+                        for path in directory.glob(pattern)
+                    }
+                )
+            )
+            if not names:
+                raise ValueError(f"no per-figure results found in {directory}")
+            if any(Path(name).name != name for name in names):
+                raise ValueError("figure names must be filenames, not paths")
+            data = [import_figure(name, directory) for name in names]
+            if "--config" in explicit:
+                styles = {figure.name: figure.spec for figure in config.figures}
+                for item in data:
+                    if item.name not in styles:
+                        raise ValueError(f"{item.name}: no matching figure in explicit --config")
+                    restyle_figure(item, styles[item.name])
+            overrides = {
+                name: getattr(args, name)
+                for name, flag in (("rounds", "--rounds"), ("timeout_sec", "--timeout-sec"))
+                if flag in explicit
+            }
+            if explicit & {"--memory-limit", "--memory-limit-gib", "--no-memory-limit"}:
+                overrides["memory_limit_bytes"] = args.memory_limit_bytes
+            for item in data:
+                reuse_figure(item, args.report.expanduser().resolve(), args.no_runs, overrides, console)
+            render_figure_data(
+                data,
+                args.output_dir.expanduser().resolve(),
+                console,
+                renderer={"git_sha": git_sha(ROOT), "is_dirty": git_dirty(ROOT)},
+            )
+            return 0
         cwd = Path.cwd()
         figure_count = len(args.names) or len(config.figures)
         console.print(
@@ -527,6 +668,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         started = perf_counter()
         figures = resolve_figures(config, args.names, cwd)
         all_files = tuple(dict.fromkeys(file for figure in figures for file in figure.files))
+        imports = []
+        if args.reuse_from is not None:
+            from .figure_reuse import import_figure
+
+            directory = args.reuse_from.expanduser().resolve()
+            imports = [
+                import_figure(item.figure.name, directory)
+                for item in figures
+                if any((directory / f"{item.figure.name}.results.json{suffix}").exists() for suffix in ("", ".gz"))
+            ]
         if args.verbose:
             input_count = len(all_files)
             console.print(
@@ -539,7 +690,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.verbose:
             console.print(f"  loaded {len(inventory['workloads'])} metadata records in {perf_counter() - started:.1f}s")
         target_request = parse_target(str(args.target))
-        if not target_request.source:
+        if not target_request.source and not args.no_runs:
             raise ValueError("figures requires a source target, not a cached label lookup")
         if target_request.label is None:
             target_request = parse_target(f"figures={args.target}")
@@ -556,30 +707,70 @@ def main(argv: Sequence[str] | None = None) -> int:
             for figure in figures
             for treatment in figure.figure.treatments
         )
-        console.print("Resolving targets")
-        started = perf_counter()
-        targets = resolve_requests(requests, store, config.rounds, config.timeout_sec, False, cwd, ROOT, console)
-        if args.verbose:
-            target_count = len(targets)
-            console.print(
-                f"  resolved {target_count} target{'s' if target_count != 1 else ''} in {perf_counter() - started:.1f}s"
-            )
-        plans = plan_collection(store, requests, targets, config.rounds, config.timeout_sec, False)
         status = 0
-        try:
-            grouped = collect(store, plans, requests, targets, config.timeout_sec, console, verbose=args.verbose)
-        except KeyboardInterrupt:
-            return 130
-        except (OSError, ValueError, subprocess.SubprocessError) as error:
-            console.print(f"collection error: {error}")
-            # A failed snapshot write must not make an older executable look current.
-            console.print(f"Writing {grouped_report_path(report_path)}", soft_wrap=True, markup=False)
+        if args.no_runs:
+            binaries = []
+            row = None
+            for binary_name in dict.fromkeys(
+                TREATMENT_SPECS[request.endpoint.treatment].binary_name for request in requests
+            ):
+                pointer = store.find_label_pointer(str(target_request.label), binary_name)
+                if pointer is None:
+                    raise ValueError(f"no cached {binary_name} rows for label {target_request.label!r}")
+                if row is not None and pointer.row != row:
+                    raise ValueError("cached engine labels have different target provenance; choose a consistent label")
+                row = pointer.row
+                binaries.append(BuiltBinary(binary_name, pointer.binary_sha256, None))
+            assert row is not None
+            targets = {
+                target_request: ResolvedTarget(
+                    target_request, row, binaries[0].sha256, None, tuple(binaries), binaries[0].binary_name
+                )
+            }
+            grouped = parse_grouped_report(grouped_report_path(report_path).read_bytes(), str(report_path))
+        else:
+            console.print("Resolving targets")
             started = perf_counter()
-            grouped = store.grouped_report(current_label_bindings(requests, targets), exclusion_bindings(all_files))
-            write_grouped_report(grouped, grouped_report_path(report_path))
+            targets = resolve_requests(requests, store, config.rounds, config.timeout_sec, False, cwd, ROOT, console)
             if args.verbose:
-                console.print(f"  wrote grouped snapshot in {perf_counter() - started:.1f}s")
-            status = 2
+                target_count = len(targets)
+                console.print(
+                    f"  resolved {target_count} target{'s' if target_count != 1 else ''} "
+                    f"in {perf_counter() - started:.1f}s"
+                )
+            planning: ReportStore | GroupedReport = store
+            if imports:
+                from .figure_reuse import merge_grouped
+
+                planning = merge_grouped(store.grouped_report(), imports, str(target_request.label))
+            plans = plan_collection(planning, requests, targets, config.rounds, config.timeout_sec, False)
+            try:
+                grouped = collect(store, plans, requests, targets, config.timeout_sec, console, verbose=args.verbose)
+            except KeyboardInterrupt:
+                return 130
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                console.print(f"collection error: {error}")
+                # A failed snapshot write must not make an older executable look current.
+                console.print(f"Writing {grouped_report_path(report_path)}", soft_wrap=True, markup=False)
+                started = perf_counter()
+                grouped = store.grouped_report(current_label_bindings(requests, targets), exclusion_bindings(all_files))
+                write_grouped_report(grouped, grouped_report_path(report_path))
+                if args.verbose:
+                    console.print(f"  wrote grouped snapshot in {perf_counter() - started:.1f}s")
+                status = 2
+        if imports:
+            from .figure_reuse import merge_grouped
+
+            grouped = merge_grouped(grouped, imports, str(target_request.label))
+        ast_records: tuple[dict[str, Any], ...] = ()
+        for resolved in figures:
+            if resolved.figure.name == "slotted-runtime":
+                from .slotted_ast import slotted_ast_records
+
+                console.print("Loading Slotted AST cache", markup=False)
+                ast_records = slotted_ast_records(
+                    resolved.files, args.ast_cache.expanduser().resolve(), collect=not args.no_runs
+                )
         render_figures(
             figures,
             config,
@@ -589,6 +780,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output_dir.expanduser().resolve() if args.output_dir else None,
             console,
             inventory,
+            ast_records,
         )
         return status
     except (OSError, ValueError, subprocess.SubprocessError) as error:

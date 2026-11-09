@@ -25,7 +25,7 @@ from .collection import (
     plan_collection,
     resolve_requests,
 )
-from .config import DEFAULT_TIMEOUT_SEC
+from .config import DEFAULT_REPORT, DEFAULT_TIMEOUT_SEC
 from .engines import TREATMENTS, Treatment
 from .models import (
     BenchmarkEndpoint,
@@ -41,7 +41,6 @@ from .reports.store import ReportStore
 from .targets import git_root_for_path, parse_target
 from .workloads import resolve_files
 
-DEFAULT_REPORT = ".reports.jsonl"
 DEFAULT_ROUNDS = 6
 
 

@@ -1,26 +1,25 @@
-"""AST exports must retain selected inputs and distinguish compilation from timing."""
+"""AST collection is identity-cached and rendering uses persisted measurements only."""
 
 from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from benchmarking import slotted_ast
 from benchmarking.models import FileSpec
-from benchmarking.slotted_ast import export_slotted_ast
 from benchmarking.targets import sha256_file
 
 
-def test_exports_include_native_input_hashes_and_actual_programs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = "(sort U)\n"
+@pytest.fixture
+def ast_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     file = tmp_path / "case_1st.egg"
+    file.write_text("(sort U)\n")
     native = file.with_suffix(".ref")
-    file.write_text(source)
     native.write_text("native fixture")
     compiler = tmp_path / "compiler"
     compiler.write_text("compiler fixture")
@@ -30,68 +29,148 @@ def test_exports_include_native_input_hashes_and_actual_programs(
         "file": str(file),
         "benchmark": file.stem,
         "compiler_binary": str(compiler),
-        "programs": {
-            "source": source,
-            "slotted": "(sort U) (rule () ())",
-            "proof_compatible_slotted": "(sort U) (rule () ()) (ruleset proof)",
-            "proof_congruence": "(sort U) (rule () ()) (ruleset proof) (rule () ())",
-        },
+        "programs": {"source": file.read_text(), "slotted": "(sort U) (rule () ())", "proof_congruence": None},
         "source_ast_nodes": 4,
         "slotted_ast_nodes": 8,
         "proof_compatible_slotted_ast_nodes": 12,
-        "proof_congruence_ast_nodes": 16,
-        "proof_congruence_error": None,
-        "proof_congruence_error_debug": None,
-        "proof_congruence_error_stage": None,
-        "congruence_ast_nodes": 15,
-        "congruence_error": None,
+        "proof_congruence_ast_nodes": None,
+        "proof_congruence_error": "uses subst, which has no proof translation",
+        "proof_congruence_error_debug": "Source(UnsupportedProofFeature { feature: Substitution })",
+        "proof_congruence_error_stage": "source-slotted-proofs",
+        "congruence_ast_nodes": None,
+        "congruence_error": "primitive lacks a validator",
     }
-    run = subprocess.run
+    launches = []
+
+    def measure(args: list[str], **_kwargs: Any) -> Any:
+        assert args == [str(compiler), str(file)]
+        launches.append(args)
+        return subprocess.CompletedProcess(args, 0, json.dumps(measured) + "\n")
+
+    monkeypatch.setattr(slotted_ast.subprocess, "run", measure)
+    monkeypatch.setattr(slotted_ast, "git_sha", lambda _root: "recorded-source-revision")
+    return {
+        "file": selected,
+        "compiler": compiler,
+        "cache": tmp_path / "cache.jsonl",
+        "measured": measured,
+        "launches": launches,
+    }
+
+
+def test_warm_cached_render_needs_no_inputs_or_compiler(
+    ast_case: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = ast_case
+    records = slotted_ast.slotted_ast_records([case["file"]], case["cache"], collect=True, compiler=case["compiler"])
+    original = case["cache"].read_bytes()
+    assert len(original.splitlines()) == 1 and "programs" not in records[0]["row"]
+    assert records[0]["row"]["reference_sha256"] == case["file"].for_binary("slotted-reference").sha256
+    assert records[0]["compiler_binary_sha256"] == sha256_file(case["compiler"])
     monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda args, **kwargs: (
-            subprocess.CompletedProcess([], 0, json.dumps(measured) + "\n")
-            if args[0] == str(compiler)
-            else run(args, **kwargs)
-        ),
+        slotted_ast.subprocess, "run", lambda *_args, **_kw: pytest.fail("warm cache launched a compiler")
     )
-    outputs = export_slotted_ast([selected], tmp_path / "out", compiler=compiler)
+    monkeypatch.setattr(slotted_ast, "git_sha", lambda *_args: pytest.fail("renderer inspected the checkout"))
+    assert (
+        slotted_ast.slotted_ast_records([case["file"]], case["cache"], collect=True, compiler=case["compiler"])
+        == records
+    )
+    case["compiler"].unlink()
+    case["file"].absolute_path.unlink()
+    assert slotted_ast.slotted_ast_records([case["file"]], case["cache"]) == records
+    outputs = slotted_ast.export_slotted_ast(records, tmp_path / "out")
     report = json.loads((tmp_path / "out/slotted-runtime.ast.json").read_text())
-    assert report["rows"][0]["reference_sha256"] == physical.sha256
-    assert report["rows"][0]["proof_compatible_slotted_ast_nodes"] == 12
-    assert report["compiler_binary_sha256"] == sha256_file(compiler)
-    assert "Compiler::compile_program with ProofMode::Prove" in report["metric"]
-    assert "ProofMode::Check" in report["diagnostics"]
-    assert json.loads((tmp_path / "out/slotted-runtime.ast-programs.json").read_text())[0]["source"] == source
-    assert (tmp_path / "out/slotted-runtime.files.txt").read_text() == f"{file}\t{native}\n"
-    assert len(outputs) == 6
-
-    measured["proof_congruence_ast_nodes"] = None
-    measured["programs"]["proof_congruence"] = None
-    measured["proof_congruence_error"] = "At beta rewrite\nuses subst, which has no proof translation"
-    measured["proof_congruence_error_debug"] = "Source(UnsupportedProofFeature { feature: Substitution })"
-    measured["proof_congruence_error_stage"] = "source-slotted-proofs"
-    export_slotted_ast([selected], tmp_path / "unsupported", compiler=compiler)
-    unsupported = json.loads((tmp_path / "unsupported/slotted-runtime.ast.json").read_text())
-    assert unsupported["rows"][0]["proof_congruence_ast_nodes"] is None
-    assert "proof_congruence" not in unsupported["rows"][0]["program_sha256"]
-    assert "Unsupported" in (tmp_path / "unsupported/slotted-runtime.ast.tex").read_text()
-    assert "uses subst, which has no proof translation" in (tmp_path / "unsupported/slotted-runtime.ast.md").read_text()
-    assert unsupported["rows"][0]["proof_congruence_error_stage"] == "source-slotted-proofs"
-    assert "UnsupportedProofFeature" in unsupported["rows"][0]["proof_congruence_error_debug"]
-
-    measured["programs"]["source"] = "(sort Changed)"
-    with pytest.raises(ValueError, match="changed input"):
-        export_slotted_ast([selected], tmp_path / "out", compiler=compiler)
-    assert json.loads((tmp_path / "out/slotted-runtime.ast.json").read_text()) == report
-
-
-def test_rejects_compiler_workload_selection_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    selected = FileSpec("selected.egg", tmp_path / "selected.egg", "hash")
-    monkeypatch.setattr(
-        subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, '{"file":"different.egg"}\n')
+    assert report["source_revision"] == "recorded-source-revision"
+    assert report["rows"][0]["proof_congruence_ast_nodes"] is None
+    assert report["rows"][0]["proof_congruence_error_stage"] == "source-slotted-proofs"
+    assert "UnsupportedProofFeature" in report["rows"][0]["proof_congruence_error_debug"]
+    assert "Unsupported" in (tmp_path / "out/slotted-runtime.ast.tex").read_text()
+    assert (tmp_path / "out/slotted-runtime.files.txt").read_text() == (
+        f"{case['file'].display_path}\t{case['file'].for_binary('slotted-reference').display_path}\n"
     )
-    with pytest.raises(ValueError, match="different workload selection"):
-        export_slotted_ast([selected], tmp_path / "out", compiler=tmp_path / "compiler")
-    assert not (tmp_path / "out").exists()
+    assert len(outputs) == 5 and not (tmp_path / "out/slotted-runtime.ast-programs.json").exists()
+    assert case["cache"].read_bytes() == original
+
+
+@pytest.mark.parametrize("changed", ["input", "compiler", "options", "version"])
+def test_identity_changes_miss_the_cache(
+    ast_case: dict[str, Any], monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    case = ast_case
+    slotted_ast.slotted_ast_records([case["file"]], case["cache"], collect=True, compiler=case["compiler"])
+    file = case["file"]
+    if changed == "input":
+        file = replace(file, sha256="sha256:changed-input")
+    elif changed == "compiler":
+        case["compiler"].write_text("new compiler")
+    elif changed == "options":
+        monkeypatch.setattr(slotted_ast, "PIPELINE", {**slotted_ast.PIPELINE, "no_aliasing": False})
+    else:
+        monkeypatch.setattr(slotted_ast, "CACHE_VERSION", 2)
+    with pytest.raises(ValueError, match="missing 1 inputs"):
+        slotted_ast.slotted_ast_records([file], case["cache"], compiler=case["compiler"])
+    assert len(case["launches"]) == 1
+
+
+@pytest.mark.parametrize("error", [subprocess.CalledProcessError(1, ["cargo"]), KeyboardInterrupt()])
+def test_build_failures_and_interruptions_are_not_cached(
+    ast_case: dict[str, Any], monkeypatch: pytest.MonkeyPatch, error: BaseException
+) -> None:
+    def fail(*_args: Any, **_kwargs: Any) -> None:
+        raise error
+
+    monkeypatch.setattr(slotted_ast.subprocess, "run", fail)
+    with pytest.raises(type(error)):
+        slotted_ast.slotted_ast_records([ast_case["file"]], ast_case["cache"], collect=True)
+    assert not ast_case["cache"].exists()
+
+
+@pytest.mark.parametrize("changed", ["source", "selection"])
+def test_measurement_drift_does_not_publish_records(ast_case: dict[str, Any], changed: str) -> None:
+    case = ast_case
+    if changed == "source":
+        case["measured"]["programs"]["source"] = "(sort Changed)"
+    else:
+        case["measured"]["file"] = "different.egg"
+    with pytest.raises(ValueError, match="changed|different workload"):
+        slotted_ast.slotted_ast_records([case["file"]], case["cache"], collect=True, compiler=case["compiler"])
+    assert not case["cache"].exists()
+
+
+def test_explicit_collection_resolves_current_compiler_before_reusing_unsupported(
+    ast_case: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = ast_case
+    old = slotted_ast.slotted_ast_records([case["file"]], case["cache"], collect=True, compiler=case["compiler"])
+    current = case["compiler"].with_name("current-compiler")
+    current.write_text("new compiler with proof support")
+    measured = dict(case["measured"])
+    measured.update(
+        compiler_binary=str(current),
+        proof_congruence_ast_nodes=16,
+        proof_congruence_error=None,
+        proof_congruence_error_debug=None,
+        proof_congruence_error_stage=None,
+    )
+    measured["programs"] = {**measured["programs"], "proof_congruence": "(sort Proof)"}
+    lowered = []
+
+    def run(args: list[str], **_kwargs: Any) -> Any:
+        if args[0] == "cargo":
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                json.dumps(
+                    {"reason": "compiler-artifact", "target": {"name": "slotted_ast"}, "executable": str(current)}
+                )
+                + "\n",
+            )
+        lowered.append(args)
+        return subprocess.CompletedProcess(args, 0, json.dumps(measured) + "\n")
+
+    monkeypatch.setattr(slotted_ast.subprocess, "run", run)
+    new = slotted_ast.slotted_ast_records([case["file"]], case["cache"], collect=True)
+    assert new[0]["compiler_binary_sha256"] != old[0]["compiler_binary_sha256"]
+    assert new[0]["row"]["proof_congruence_ast_nodes"] == 16
+    assert slotted_ast.slotted_ast_records([case["file"]], case["cache"], collect=True) == new
+    assert len(lowered) == 1 and len(case["cache"].read_text().splitlines()) == 2

@@ -421,7 +421,7 @@ and keeps the canonical comparison, summary, files, phases, rulesets order.
 
 The remaining collection options are:
 
-- `--report PATH`: append-only report/cache path; default `.reports.jsonl`.
+- `--report PATH`: append-only report/cache path; default `data-cache/reports.jsonl`.
   A filesystem path is required; `-` is not a streaming destination.
 - `--rounds N`: selected observations required for every endpoint/file;
   default `6`.
@@ -437,7 +437,7 @@ The remaining collection options are:
   newest rows.
 - `--format rich|markdown`: final human report format.
 - `--open`: write the complete cache snapshot to an interactive HTML file and
-  open it. For the default cache, the output is `.reports.html`.
+  open it. For the default cache, the output is `data-cache/reports.html`.
 - `-v`, `--verbose`: add preparation timings, resolved counts and redirected
   collection-attempt start lines.
 
@@ -558,10 +558,17 @@ Markdown, and `--no-summary` prints only the artifact path.
 
 ## Reports and cache behavior
 
-`.reports.jsonl` is an append-only, disposable local cache. Each line is one
+The ignored `data-cache/` directory contains `reports.jsonl`, its derived
+`reports-grouped.json`, and `slotted-ast.jsonl` for compile-only Slotted AST
+measurements. Portable figure exports retain selected observations and drawing settings.
+`./bench.py figures --reuse-from OUTPUT_DIR --no-runs` redraws them without
+benchmark execution or access to historical inputs/binaries. AST replay retains
+its recorded compiler; fresh collection resolves the current compiler. See [the figure commands](figures/README.md#slotted-input-list-and-program-sizes).
+
+`data-cache/reports.jsonl` is an append-only, disposable local cache. Each line is one
 measured process observation. The runner parses the file once into an indexed
 `ReportStore`; appends update both the JSONL and those indexes. After collection,
-the runner writes a typed `.reports-grouped.json` snapshot and computes its
+the runner writes a typed `data-cache/reports-grouped.json` snapshot and computes its
 report from that same grouped data in memory. The JSONL remains the measurement
 cache; grouped JSON is replaceable output for reports and charts. `--open`
 exports the grouped snapshot in an HTML report.
@@ -703,7 +710,7 @@ Top-level ownership:
 - `benchmarking/tests/`: pytest and Syrupy snapshot coverage for the tooling.
 - `Makefile`: canonical validation and maintenance commands.
 - `pyproject.toml` and `uv.lock`: Python configuration and locked environment.
-- `.reports.jsonl`: ignored, disposable benchmark cache.
+- `data-cache/reports.jsonl`: ignored, disposable benchmark cache.
 - `.profiles/`: ignored Samply artifact cache.
 
 Python ownership is layered so new code has one clear home:

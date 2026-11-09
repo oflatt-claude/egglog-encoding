@@ -27,7 +27,7 @@ From the repository root:
 ```
 
 This requests ten runs per configuration through one collection plan, using the
-append-only `.reports.jsonl` cache. Compatible cached
+append-only `data-cache/reports.jsonl` cache. Compatible cached
 observations are reused. Cargo dependency resolution and release builds happen
 automatically, outside measurement. Each measured interval spans the complete
 engine process, including input reading, expression parsing, and shutdown.

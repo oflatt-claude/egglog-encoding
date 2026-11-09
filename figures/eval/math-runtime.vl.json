@@ -2,7 +2,7 @@
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
   "description": "Math absolute runtime and peak RSS distributions use standard gray/black boxplots with medians, interquartile ranges, 1.5-IQR whiskers and generated outliers only. Four explicitly labelled engine/proof conditions share each metric axis. Within-engine checked/off ratios are arithmetic-mean estimates with capped independent Fieller 95% intervals and a 1x guide. Actual means and Student-t mean intervals remain in the numeric exports.",
   "data": {
-    "url": "../../.reports-grouped.json",
+    "url": "../../data-cache/reports-grouped.json",
     "format": {"type": "json"}
   },
   "params": [

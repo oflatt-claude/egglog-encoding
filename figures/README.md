@@ -167,13 +167,13 @@ Each figure reports `Rendering NAME` before rendering and prints all output path
 
 ## Selection and statistics
 
-The runner refreshes the shared typed `.reports-grouped.json`, including current
+The runner refreshes the shared typed `data-cache/reports-grouped.json`, including current
 label-to-engine identities when every observation is already cached. This binding
 belongs to the current grouped artifact; raw label-only lookup remains based on
-recorded observations. Source targets are checked and rebound on each figure
-invocation. An ordinary comparison that assigns the same label/engine to two
+recorded observations. Source-target invocations check and rebind their targets;
+exported-data replay retains its recorded bindings. An ordinary comparison that assigns the same label/engine to two
 different binaries is rejected before launch. The raw
-`.reports.jsonl` remains append-only. The shared selector matches the current
+`data-cache/reports.jsonl` remains append-only. The shared selector matches the current
 executable, physical input file hash, treatment, and encoding. Resource failures
 are selected under the shared retry rule; successes remain reusable when guards
 change. It binds their original row
@@ -309,42 +309,64 @@ Variant order, costs and actual proof
 right-hand sides remain exact. See [the root workflow](../README.md) for the fixtures
 and filters. The Python suite also checks the public comparison CLI.
 
+### Reuse exported figures
+
+A figure directory is portable data and configuration: each `.results.json`
+contains selected raw observations and measured engine/input identities; each
+`.bound.vl.json` contains the saved drawing and settings. Gzip versions of either
+file are accepted. The Slotted AST table has its own `.ast.json` snapshot.
+Only selected observations are exported; unused per-ruleset profiling and the
+whole local benchmark history are not copied.
+
+```sh
+./bench.py figures --reuse-from /path/to/exported/eval --no-runs
+./bench.py figures disequality-runtime --reuse-from /path/to/exported/eval --no-runs
+```
+
+Without names, directory reuse discovers exported figures, including historical
+names absent from the current catalog. Complete replay needs no original
+workload files, checkout, executable, global report, or AST compiler. `--no-runs`
+forbids measurement, builds, and AST compilation and leaves measurement caches
+untouched; it still renders images and tables. Each figure retains its recorded
+sample count, guards, selection, and measured versions. The renderer's revision
+is recorded separately. Explicit CLI settings override recorded settings.
+
+Edit the saved bound specification to change a drawing directly. Alternatively,
+use `--config PATH` to take drawing specifications from an authored catalog
+while retaining the saved samples/settings; its workload globs are not read.
+To fill missing observations, omit `--no-runs`: matching imported/local data is
+reused first, then only the deficit is collected. Historical collection requires
+the original input bytes and an available executable with the recorded hash;
+unavailable or changed artifacts are explicit blockers. `--target SOURCE`
+intentionally retargets current inputs to a new endpoint instead of silently
+substituting current main for a historical measurement.
+
 ### Slotted input list and program sizes
 
-Rendering `slotted-runtime` also writes `slotted-runtime.files.txt` (the ten
-selected `.egg` files and paired native `.ref` files), `slotted-runtime.ast.tex`
-(the four-column program-size table), and JSON, CSV, and Markdown companions.
-The JSON records both input hashes, the compiler executable hash, intermediate
-sizes, and any unsupported composition. `slotted-runtime.ast-programs.json`
-retains the source and generated programs, including the proof-compatible
-Slotted form. The complete-matching figure does not produce these companions.
+The ignored `data-cache/` directory holds `reports.jsonl` (append-only timing
+history), `reports-grouped.json` (derived timing data), and `slotted-ast.jsonl`
+(compact compiler/input/pipeline measurements). Explicit cache paths remain
+relative to the invocation. These local caches need not accompany portable
+per-figure exports.
 
-Sizes count one S-expression AST node per list, atom, or literal across the
-whole program; comments and whitespace do not count. The table compiles the
-**current adapted inputs** for the same ten named workloads. Their bytes differ
-from the historical e8a2a58d-era inputs used by the reused timing figure, so
-these sizes must not be presented as sizes of those timed input/compiler
-identities. The JSON records this distinction and the current source revision.
-The Slotted column uses the current ordinary restricted-aliasing encoding. The
-last column first applies the public source proof profile through
-`Compiler::compile_program` with `ProofMode::Prove`, then lowers accepted
-output through core congruence/proof instrumentation. PR #141 supports this
-pipeline for its documented source profile. The SDQL beta rewrite uses `subst`,
-which that profile explicitly excludes: the table reports **Unsupported** with
-the source diagnostic, rather than counting a partially lowered program.
-The JSON separately retains proof-compatible `Check` intermediate sizes and a
-congruence-only diagnostic; these do not replace the source proof stage.
-These are compiler-size observations, not proof-correctness results.
-
-To regenerate only the list/table without running benchmarks or rendering
-other figures:
+`slotted-runtime` exports its selected `.egg`/`.ref` file list and AST counts in
+JSON, CSV, Markdown, and LaTeX. Imported tables retain recorded compiler identity
+and unsupported outcomes, without storing or compiling desugared programs.
+To redraw or explicitly collect AST measurements alone:
 
 ```sh
 uv run --locked python -m benchmarking.slotted_ast_cli
+uv run --locked python -m benchmarking.slotted_ast_cli --collect
 ```
 
-This compiles and runs the small `slotted_ast` Rust example. It parses and
-lowers programs without executing schedules, saturation, proof extraction, or
-verification, and does not touch the timing cache. Reuse an already built
-example with `--compiler /path/to/slotted_ast`; use `--output-dir` to choose a
-destination. The AST compiler hash is separate from the timing engine hashes.
+The first command uses the latest recorded compiler cohort; the second resolves
+the current compiler and collects only missing identities. `--compiler PATH`
+selects an exact existing compiler. Ordinary fresh figure collection also uses
+the current compiler; `--no-runs` never builds it. Build failures and interruptions
+are not stored as unsupported programs.
+
+Counts give one S-expression node per list, atom, or literal, excluding comments
+and whitespace. The stages are input, restricted-aliasing Slotted output, and
+public `ProofMode::Prove` followed by core congruence/proof lowering. Diagnostic
+`Check` counts do not replace the Proofs stage, and AST input/compiler identities
+must be compared separately with those of the timing figure.

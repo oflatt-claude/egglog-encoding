@@ -2,7 +2,7 @@
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
   "description": "Runtime and peak RSS distributions for native DE in Disegg and extlog. Standard gray/black boxes show medians and interquartile ranges, with 1.5-IQR whiskers and only generated outlier points. Individual non-outlier observations are not overlaid. Means and native-DE ratio intervals remain in companion exports.",
   "data": {
-    "url": "../../.reports-grouped.json",
+    "url": "../../data-cache/reports-grouped.json",
     "format": {"type": "json"}
   },
   "params": [

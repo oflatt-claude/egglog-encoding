@@ -102,7 +102,7 @@ or modify the JSONL.
 ## Benchmarking
 
 - Use `./bench.py` as the public benchmark entrypoint.
-- Keep `.reports.jsonl` append-only and ignored by git.
+- Keep `data-cache/reports.jsonl` append-only and ignored by git.
 - `--report` requires a filesystem path; literal `-` is rejected rather than
   treated as a streaming destination.
 - Operational status, build diagnostics, and progress always go to stderr. The
