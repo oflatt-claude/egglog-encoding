@@ -66,6 +66,7 @@ import EgglogSemantics.Proofs.Congruence.Flatten
 import EgglogSemantics.Proofs.Congruence.Invariant
 import EgglogSemantics.Proofs.Congruence.Maintenance
 import EgglogSemantics.Proofs.Congruence.Properties
+import EgglogSemantics.Proofs.Congruence.QueryCorr
 import EgglogSemantics.Proofs.Congruence.Rules
 import EgglogSemantics.Proofs.Congruence.Sound
 import EgglogSemantics.Proofs.Congruence.Target
