@@ -22,6 +22,34 @@ mod tests {
     }
 
     #[test]
+    fn positional_fiats_share_large_actions_without_changing_endpoints() {
+        let mut level: Vec<String> = (0..32).map(|i| format!("(Num {i})")).collect();
+        let mut terms = level.clone();
+        while level.len() > 1 {
+            level = level
+                .chunks_exact(2)
+                .map(|children| format!("(Pair {} {})", children[0], children[1]))
+                .collect();
+            terms.extend(level.clone());
+        }
+        let mut source = format!(
+            "(datatype E (Num i64) (Pair E E))\n(function saved (i64) E :merge old)\n\
+             (let root {})\n(set (saved 0) root)\n",
+            level[0]
+        );
+        // Distinct positions in one action must keep their distinct terms, and
+        // successive extraction requests must not reuse another store's term IDs.
+        for term in terms.iter().chain(terms.iter().rev()) {
+            source.push_str(&format!("(check {term})\n"));
+        }
+        source.push_str("(check (= (saved 0) value))\n(fail (check (= (Num 0) (Num 31))))");
+        EGraph::new_with_proofs()
+            .with_proof_testing()
+            .parse_and_run_program(None, &source)
+            .unwrap();
+    }
+
+    #[test]
     fn constructor_merge_reads_a_dirty_view() {
         let source = r#"
             (datatype Bound (IntB i64) (Join Bound Bound) (Other i64))
@@ -310,6 +338,55 @@ mod tests {
                         ..
                     })
                 ));
+            }
+        }
+    }
+
+    #[test]
+    fn eq_globals_keep_written_values_through_canonicalization() {
+        for binding in [
+            "(let $b (B)) (union (A) (B))",
+            "(union (A) (B)) (let $b (B))",
+        ] {
+            let source = format!(
+                r#"
+                (datatype E (A) (B) (Unrelated) (Wrap E) (Root E))
+                (let $input (Root (Wrap (A))))
+                {binding}
+                (let $alias $b)
+                (let $selected (Root (Wrap $alias)))
+                (check (= $input $selected))
+                (extract $selected)
+                (fail (check (= $selected (Root (Wrap (Unrelated))))))
+
+                (function pinned () E :merge (Wrap $alias))
+                (set (pinned) (A))
+                (set (pinned) (Unrelated))
+                (check (= (pinned) (Wrap (A))))
+                "#
+            );
+            for mut egraph in [
+                EGraph::default(),
+                EGraph::new_with_term_encoding(),
+                EGraph::new_with_proofs(),
+                EGraph::new_with_proofs().with_proof_testing(),
+            ] {
+                let outputs = egraph.parse_and_run_program(None, &source).unwrap();
+                if egraph.proof_state.proof_testing {
+                    let (store, id) = outputs
+                        .iter()
+                        .find_map(|output| match output {
+                            CommandOutput::ProveExists {
+                                proof_store,
+                                proof_id,
+                            } => Some((proof_store, *proof_id)),
+                            _ => None,
+                        })
+                        .expect("strict checking must produce the requested equality proof");
+                    let proof = store.get(id);
+                    assert_eq!(store.term_dag().to_string(proof.lhs()), "(Root (Wrap (A)))");
+                    assert_eq!(store.term_dag().to_string(proof.rhs()), "(Root (Wrap (B)))");
+                }
             }
         }
     }
