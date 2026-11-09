@@ -268,6 +268,29 @@ test('CDF overview appears only for metrics with tails and never changes ranks o
   }
 });
 
+test('CDF overviews retain metric columns when just one has a tail',async()=>{
+  for(const [runtimeTail,memoryTail] of [[false,false],[true,false],[false,true],[true,true]]) {
+    const ids=['a','b','c','d'];
+    const inputs=ids.flatMap(id=>['off','proofs'].map(t=>input(id,t)));
+    const groups=ids.flatMap((id,i)=>[group(id,'off',[1,1]),
+      group(id,'proofs',[runtimeTail&&i===3?1000:2,runtimeTail&&i===3?1000:2],
+        {max_rss_bytes:(memoryTail&&i===3?1000:2)*1048576})]);
+    const result=await evaluate('corpus-proof-recording-cdf',inputs,groups);
+    const percentLabels=result.marks.filter(p=>p.mark.role==='axis-label'&&p.opacity!==0&&['0%','50%','100%'].includes(p.text));
+    assert.equal(percentLabels.length,3+3*(Number(runtimeTail)+Number(memoryTail)),
+      'only metrics with tails should show overview axes');
+    for(const [metric,hasTail] of [['Runtime',runtimeTail],['Peak RSS',memoryTail]]) {
+      const overview=find(result,'cdf_points').filter(p=>p.datum.metric===metric);
+      assert.equal(overview.length,hasTail?4:0);
+      if(hasTail) {
+        const detail=find(result,'cdf_points_zoom').find(p=>p.datum.metric===metric);
+        assert.equal(overview[0].mark.group.x,detail.mark.group.x,
+          `${metric} overview must remain beneath its own detail panel`);
+      }
+    }
+  }
+});
+
 test('CDF quarantines preserve coverage without measured points or altered denominator',async()=>{
   const result=await evaluate('corpus-proof-recording-cdf',[
     input('a','off'),input('a','proofs',{selected_row_indices:[],exclusion:{kind:'expected-failure',reason:'known table mismatch'}}),
@@ -409,9 +432,9 @@ test('executed corpus coverage and bound SVG layout match the shared paper-expor
   assert.equal(find(result,'cdf_coverage').length,0);
   assert.doesNotMatch(result.svg,/failed,|missing|excluded|not established/);
   const raw=await evaluate('corpus-proof-recording-cdf',corpus.inputs,corpus.groups,3,authored);
-  const percentAxes=r=>r.marks.filter(p=>p.mark.role==='axis-label'&&['0%','50%','100%'].includes(p.text));
+  const percentAxes=r=>r.marks.filter(p=>p.mark.role==='axis-label'&&p.opacity!==0&&['0%','50%','100%'].includes(p.text));
   assert.equal(percentAxes(result).length,3,'the bound compact figure must have only the detail percentage axis');
-  assert.equal(percentAxes(raw).length,6,'an empty authored overview demonstrates the axis regression');
+  assert.equal(percentAxes(raw).length,3,'empty overview slots must not show percentage axes');
   const height=r=>Number(r.svg.match(/<svg[^>]* height="([^"]+)"/)[1]);
   assert.ok(height(raw)-height(result)>=65,'omitting the overview must remove its reserved height');
 });

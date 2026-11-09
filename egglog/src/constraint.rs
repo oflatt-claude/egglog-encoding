@@ -2,7 +2,7 @@ use crate::{
     core::{Atom, CoreAction, GenericCoreActions, GenericCoreRule, HeadOrEq, Query, StringOrEq},
     *,
 };
-use std::{cmp, rc::Rc};
+use std::{cell::OnceCell, cmp, rc::Rc};
 // Use immutable hashmap for performance
 // cloning assignments is common and O(1) with immutable hashmap
 use egglog_ast::generic_ast::{GenericAction, GenericActions, GenericExpr, GenericFact};
@@ -482,9 +482,61 @@ impl<Var, Value> Default for Problem<Var, Value> {
 
 /// A mapping from variables to their assigned values.
 /// This is the result of constraint solving.
-/// Uses an immutable HashMap for efficient cloning during constraint solving.
-#[derive(Clone)]
-pub struct Assignment<Var, Value>(pub HashMap<Var, Value, crate::util::BuildHasher>);
+/// Overload branches clone this map to isolate their tentative assignments.
+pub struct Assignment<Var, Value>(pub AssignmentMap<Var, Value>);
+
+/// Flat lookup for monomorphic inference, with persistent snapshots once a
+/// branch clones the assignment. Promotion changes storage, not bindings.
+pub struct AssignmentMap<Var, Value> {
+    flat: hashbrown::HashMap<Var, Value, crate::util::BuildHasher>,
+    snapshot: OnceCell<HashMap<Var, Value, crate::util::BuildHasher>>,
+}
+
+impl<Var, Value> Default for AssignmentMap<Var, Value> {
+    fn default() -> Self {
+        Self {
+            flat: Default::default(),
+            snapshot: OnceCell::new(),
+        }
+    }
+}
+
+impl<Var: Hash + cmp::Eq + Clone, Value: Clone> Clone for Assignment<Var, Value> {
+    fn clone(&self) -> Self {
+        let map = &self.0;
+        let snapshot = map.snapshot.get_or_init(|| {
+            map.flat
+                .iter()
+                .map(|(var, value)| (var.clone(), value.clone()))
+                .collect()
+        });
+        Self(AssignmentMap {
+            flat: Default::default(),
+            snapshot: OnceCell::from(snapshot.clone()),
+        })
+    }
+}
+
+impl<Var: Hash + cmp::Eq + Clone, Value: Clone> AssignmentMap<Var, Value> {
+    pub fn get(&self, var: &Var) -> Option<&Value> {
+        match self.snapshot.get() {
+            Some(snapshot) => snapshot.get(var),
+            None => self.flat.get(var),
+        }
+    }
+
+    pub fn insert(&mut self, var: Var, value: Value) -> Option<Value> {
+        match self.snapshot.get_mut() {
+            Some(snapshot) => {
+                // The first clone can promote through &self. Its old flat
+                // backing is no longer authoritative and can now be freed.
+                self.flat = Default::default();
+                snapshot.insert(var, value)
+            }
+            None => self.flat.insert(var, value),
+        }
+    }
+}
 
 impl<Var, Value> Assignment<Var, Value>
 where
@@ -744,7 +796,8 @@ where
         mut self,
         key: fn(&Value) -> &str,
     ) -> Result<Assignment<Var, Value>, ConstraintError<Var, Value>> {
-        let mut assignment = Assignment(HashMap::default());
+        let mut assignment = Assignment(AssignmentMap::default());
+        assignment.0.flat.reserve(self.range.len());
         let mut changed = true;
         while changed {
             changed = false;
@@ -754,7 +807,7 @@ where
         }
 
         for v in self.range.iter() {
-            if !assignment.0.contains_key(v) {
+            if assignment.get(v).is_none() {
                 return Err(ConstraintError::UnconstrainedVar(v.clone()));
             }
         }
@@ -1032,6 +1085,14 @@ fn get_literal_and_global_constraints<'a>(
 /// A trait for generating type constraints from atom applications.
 /// This is used to create constraints that ensure proper typing of function/primitive applications.
 pub trait TypeConstraint {
+    /// Check a fully known signature without constructing inference constraints.
+    /// `None` retains the general constraint solver. Implementations returning
+    /// `Some` must agree with solving `get` over distinct placeholder arguments
+    /// assigned these sorts (including the output sort).
+    fn check_signature(&self, _sorts: &[ArcSort], _typeinfo: &TypeInfo) -> Option<bool> {
+        None
+    }
+
     /// Generates constraints for the given arguments based on this type constraint.
     /// The constraints ensure that the arguments have compatible types.
     fn get(
@@ -1063,6 +1124,15 @@ impl SimpleTypeConstraint {
 }
 
 impl TypeConstraint for SimpleTypeConstraint {
+    fn check_signature(&self, sorts: &[ArcSort], _typeinfo: &TypeInfo) -> Option<bool> {
+        Some(
+            self.sorts
+                .iter()
+                .map(|s| s.name())
+                .eq(sorts.iter().map(|s| s.name())),
+        )
+    }
+
     fn get(
         &self,
         arguments: &[AtomTerm],
@@ -1259,4 +1329,125 @@ pub(crate) fn grounded_check(
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+
+    #[test]
+    fn known_signature_checks_agree_with_general_constraint_solving() {
+        let graph = EGraph::default();
+        let sorts: Vec<ArcSort> = vec![
+            I64Sort.to_arcsort(),
+            StringSort.to_arcsort(),
+            Arc::new(EqSort { name: "T".into() }),
+        ];
+        let mut cases: Vec<Box<dyn TypeConstraint>> = (0..=3)
+            .map(|n| {
+                SimpleTypeConstraint::new("fixed", sorts[..n].to_vec(), Span::Panic).into_box()
+            })
+            .collect();
+        cases.push(
+            graph.type_info.get_prims("get-fresh!").unwrap()[0]
+                .primitive
+                .get_type_constraints(&Span::Panic),
+        );
+        for constraint in cases {
+            for len in 0..=4 {
+                for shift in 0..sorts.len() {
+                    let signature: Vec<_> = (0..len)
+                        .map(|i| sorts[(i + shift) % sorts.len()].clone())
+                        .collect();
+                    let lits: Vec<_> = (0..len)
+                        .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
+                        .collect();
+                    let mut constraints: Vec<_> = lits
+                        .iter()
+                        .zip(&signature)
+                        .map(|(lit, ty)| assign(lit.clone(), ty.clone()))
+                        .collect();
+                    constraints.extend(constraint.get(&lits, &graph.type_info));
+                    let expected = Problem {
+                        constraints,
+                        range: HashSet::default(),
+                    }
+                    .solve(|s: &ArcSort| s.name())
+                    .is_ok();
+                    assert_eq!(
+                        constraint.check_signature(&signature, &graph.type_info),
+                        Some(expected)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod assignment_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn snapshots_keep_independent_bindings_without_recopying_large_values() {
+        struct Counted {
+            value: usize,
+            copies: Rc<Cell<usize>>,
+        }
+        impl Clone for Counted {
+            fn clone(&self) -> Self {
+                self.copies.set(self.copies.get() + 1);
+                Self {
+                    value: self.value,
+                    copies: self.copies.clone(),
+                }
+            }
+        }
+        let copies = Rc::new(Cell::new(0));
+        let mut original = Assignment(AssignmentMap::default());
+        for value in 0..8 {
+            original.insert(
+                value,
+                Counted {
+                    value,
+                    copies: copies.clone(),
+                },
+            );
+        }
+        let small_snapshot = original.clone();
+        for value in 8..1024 {
+            original.insert(
+                value,
+                Counted {
+                    value,
+                    copies: copies.clone(),
+                },
+            );
+        }
+        let mut large_snapshot = original.clone();
+        copies.set(0);
+        let another_snapshot = original.clone();
+        assert_eq!(copies.get(), 0, "another large snapshot must share values");
+        original.insert(
+            0,
+            Counted {
+                value: 2000,
+                copies: copies.clone(),
+            },
+        );
+        large_snapshot.insert(
+            0,
+            Counted {
+                value: 3000,
+                copies: copies.clone(),
+            },
+        );
+        assert_eq!(original.get(&0).unwrap().value, 2000);
+        assert_eq!(large_snapshot.get(&0).unwrap().value, 3000);
+        assert_eq!(another_snapshot.get(&0).unwrap().value, 0);
+        assert_eq!(small_snapshot.get(&0).unwrap().value, 0);
+        assert!(small_snapshot.get(&1023).is_none());
+        assert_eq!(another_snapshot.get(&1023).unwrap().value, 1023);
+    }
 }

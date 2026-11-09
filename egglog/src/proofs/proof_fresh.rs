@@ -1,12 +1,11 @@
 //! The term/proof encoding's fresh-id, view-interning, and proof-row primitives.
 //!
 //! User terms are stored directly in source-named FD views, rather than in
-//! separate term relations. In term-only mode, building a term takes a bare
-//! fresh e-class and interns it through the view (`()` is the proof-off payload):
+//! separate term relations. Building a term interns it through the view and
+//! mints its e-class only on a miss (`()` is the proof-off payload):
 //!
 //! ```text
-//! (let fresh (get-fresh! "Math"))
-//! (let canonical (set-if-empty-Add! a b fresh ()))
+//! (let canonical (intern-Add! a b ()))
 //! ```
 //!
 //! Proof nodes remain append-only relations. Their `mint-<Relation>!` primitive
@@ -16,9 +15,8 @@
 //! operate directly on the e-graph's relational storage.
 
 use crate::*;
-use egglog_numeric_id::NumericId;
 
-/// Read the source output of a nullary custom-function view without creating it.
+/// Read the source output of a custom-function view without creating it.
 /// Registered with the view so the same read is available in encoded replay.
 #[derive(Clone)]
 pub(crate) struct ExtractFunctionRoot {
@@ -32,45 +30,27 @@ impl Primitive for ExtractFunctionRoot {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            &self.name,
-            vec![self.function.output().clone()],
-            span.clone(),
-        )
-        .into_box()
+        let mut signature = self.function.input.clone();
+        signature.push(self.function.output().clone());
+        SimpleTypeConstraint::new(&self.name, signature, span.clone()).into_box()
     }
 }
 
 impl ReadPrim for ExtractFunctionRoot {
-    fn apply<'a, 'db>(&self, mut state: ReadState<'a, 'db>, _args: &[Value]) -> Option<Value> {
-        state.eval_resolved_expr(
-            &ResolvedExpr::Call(
-                Span::Panic,
-                ResolvedCall::Func(self.function.clone()),
-                vec![],
-            ),
-            &[],
-        )
+    fn apply<'a, 'db>(&self, mut state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        crate::exec_state::Internal::apply_resolved_function(&mut state, &self.function, args)
     }
 }
 
-/// Deterministic name of an FD view's `set-if-empty` primitive. The stable
-/// `set-if-empty-` prefix carries no internal-symbol marker, so a name-sanitizer
-/// leaves it alone. Any internal-symbol marker already present in the embedded
-/// `view_name` is rewritten identically here and at the view's declaration, so
-/// the primitive stays resolvable when the desugared program is re-parsed.
-pub(crate) fn set_if_empty_prim_name(view_name: &str) -> String {
-    format!("set-if-empty-{view_name}!")
-}
-
-/// Deterministic name of an FD view's proof-column read primitive. See
-/// [`set_if_empty_prim_name`] for why the prefix carries no internal marker.
+/// Deterministic name of an FD view's proof-column read primitive. Stable
+/// prefixes survive name sanitization, while embedded view names are rewritten
+/// identically to their declarations when encoded programs are replayed.
 pub(crate) fn view_proof_prim_name(view_name: &str) -> String {
     format!("view-proof-{view_name}")
 }
 
 /// Deterministic name of a proof-node relation's mint primitive. See
-/// [`set_if_empty_prim_name`] for why the prefix carries no internal marker.
+/// [`view_proof_prim_name`] for why the prefix carries no internal marker.
 pub(crate) fn mint_prim_name(relation: &str) -> String {
     format!("mint-{relation}!")
 }
@@ -127,12 +107,11 @@ impl Primitive for MintRow {
     }
 }
 
-/// Register an FD view's `set-if-empty` primitive and (in proof mode) its
-/// proof-column reader, so the encoding can canonicalize a freshly-built term
-/// to the view's canonical e-class at insertion time. `out_sorts` is the view's
-/// output tuple `(eclass, proof)` (proof is `Unit` when proofs are off). The
-/// runtime entrypoint reads and writes the view's storage.
-pub(crate) fn register_set_if_empty(
+/// Register an FD view's interner and (in proof mode) its proof-column reader,
+/// so the encoding can canonicalize a freshly-built term at insertion time.
+/// `out_sorts` is the view's output tuple `(eclass, proof)` (proof is `Unit`
+/// when proofs are off). The runtime entrypoint reads and writes the view's storage.
+pub(crate) fn register_view_primitives(
     eg: &mut EGraph,
     view_name: &str,
     key_sorts: Vec<ArcSort>,
@@ -140,18 +119,17 @@ pub(crate) fn register_set_if_empty(
 ) {
     let n_keys = key_sorts.len();
     let out_arity = out_sorts.len();
-    let set_if_empty = SetIfEmpty {
-        name: set_if_empty_prim_name(view_name),
-        key_sorts: key_sorts.clone(),
-        out_sorts: out_sorts.clone(),
-        eclass_sort: out_sorts[0].clone(),
-    };
-    let name = view_name.to_string();
-    eg.add_internal_primitive(
-        set_if_empty,
-        WriteState::valid_contexts(),
-        move |egraph, _| egraph.register_set_if_empty(name.clone(), n_keys, out_arity),
-    );
+    if out_sorts[0].is_eq_sort() {
+        let intern = Intern {
+            name: format!("intern-{view_name}!"),
+            key_sorts: key_sorts.clone(),
+            out_sorts: out_sorts.clone(),
+        };
+        let name = view_name.to_string();
+        eg.add_internal_primitive(intern, WriteState::valid_contexts(), move |egraph, _| {
+            egraph.register_view_intern(name.clone(), n_keys, out_arity)
+        });
+    }
 
     // The proof column reader is only meaningful in proof mode (2-output view).
     if out_sorts.len() >= 2 {
@@ -171,35 +149,30 @@ pub(crate) fn register_set_if_empty(
     }
 }
 
-/// `set-if-empty`: get-or-insert-with-default on an FD view. Looks up
-/// `(view keys)`; if present returns its e-class (column 0), else inserts
-/// `(keys default_eclass default_proof)` and returns `default_eclass`. This lets
-/// the encoding thread canonical e-classes through term construction so the view
-/// tables stay canonical (nothing to re-key at rebuild). The lookup/insert is
-/// serviced directly against the view's storage.
+/// `intern-<View>!`: return the existing e-class, or mint it and insert the
+/// supplied remaining outputs when the key is absent.
 #[derive(Clone)]
-struct SetIfEmpty {
+struct Intern {
     name: String,
     key_sorts: Vec<ArcSort>,
     out_sorts: Vec<ArcSort>,
-    eclass_sort: ArcSort,
 }
 
-impl Primitive for SetIfEmpty {
+impl Primitive for Intern {
     fn name(&self) -> &str {
         &self.name
     }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        // (keys… default_eclass default_proof) -> eclass
+        // (keys… remaining_outputs…) -> eclass
         let mut sig = self.key_sorts.clone();
-        sig.extend(self.out_sorts.iter().cloned());
-        sig.push(self.eclass_sort.clone());
+        sig.extend(self.out_sorts[1..].iter().cloned());
+        sig.push(self.out_sorts[0].clone());
         SimpleTypeConstraint::new(&self.name, sig, span.clone()).into_box()
     }
 }
 
 /// Reads an FD view's proof column (column 1) by its key, for building the
-/// `fresh = canonical` connector proof after `set-if-empty`.
+/// `fresh = canonical` connector proof after interning.
 ///
 /// Signature `(keys… fallback) -> proof`: returns the committed view proof for
 /// the key, or `fallback` when the key is absent. The fallback lets the caller
@@ -237,12 +210,7 @@ pub(crate) const GET_FRESH_PRIM_NAME: &str = "get-fresh!";
 /// is re-parsed.
 pub(crate) fn register_get_fresh(eg: &mut EGraph) {
     eg.add_internal_primitive(GetFresh, WriteState::valid_contexts(), |egraph, _| {
-        let counter = egraph.id_counter();
-        egraph.register_external_func(Box::new(core_relations::make_external_func(
-            move |state: &mut ExecutionState, _args: &[Value]| {
-                Some(Value::from_usize(state.inc_counter(counter)))
-            },
-        )))
+        egraph.register_fresh_id()
     });
 }
 
@@ -269,6 +237,17 @@ struct GetFreshTypeConstraint {
 }
 
 impl TypeConstraint for GetFreshTypeConstraint {
+    fn check_signature(&self, sorts: &[ArcSort], typeinfo: &TypeInfo) -> Option<bool> {
+        // Resolution uses placeholder arguments rather than a sort-name string,
+        // so `get` only constrains the first argument in this case.
+        Some(
+            sorts.len() == 2
+                && typeinfo
+                    .get_sort_by_name("String")
+                    .is_none_or(|s| s.name() == sorts[0].name()),
+        )
+    }
+
     fn get(
         &self,
         arguments: &[crate::core::AtomTerm],
