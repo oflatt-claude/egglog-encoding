@@ -1,6 +1,6 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
-  "description": "Parallel scaling of saved application replays, for the full cohort and each project. Lines show median per-input speedup over the same mode at one thread; bands show workload IQR. Panels share the same runtime cutoff and y-axis.",
+  "description": "Parallel scaling by benchmark family. Lines show median per-input speedup over the same mode at one thread; bands show workload IQR. Panels share the same runtime cutoff and y-axis.",
   "data": {
     "url": "../../.reports-grouped.json",
     "format": {
@@ -27,11 +27,11 @@
       ]
     },
     {
-      "calculate": "datum.point.treatment === 'off' ? 'Egglog' : datum.point.treatment === 'proofs' ? 'Egglog + proof recording' : 'Egglog + checked proofs'",
+      "calculate": "datum.point.treatment === 'off' ? 'Egglog' : datum.point.treatment === 'proofs' ? 'Egglog + proof recording' : datum.point.treatment === 'slotted' ? 'Slotted Egglog (no proofs)' : 'Egglog + checked proofs'",
       "as": "Mode"
     },
     {
-      "calculate": "datum.point.family == null ? 'All projects' : ({eggcc: 'Eggcc', hardboiled: 'HardBoiled', misaal: 'MISAAL', luminal: 'Luminal', dialegg: 'DialEgg', churchroad: 'Churchroad'})[datum.point.family] || datum.point.family || 'Other'",
+      "calculate": "datum.point.family == null ? 'All workloads' : ({eggcc: 'Eggcc', hardboiled: 'HardBoiled', misaal: 'MISAAL', luminal: 'Luminal', dialegg: 'DialEgg', churchroad: 'Churchroad', 'math-growth': 'Math', slotted: 'Slotted'})[datum.point.family] || datum.point.family || 'Other'",
       "as": "Project"
     },
     {
@@ -39,12 +39,12 @@
       "as": "Panel"
     },
     {
-      "calculate": "datum.point.family == null ? 0 : ({eggcc: 1, hardboiled: 2, misaal: 3, luminal: 4, dialegg: 5, churchroad: 6})[datum.point.family] || 7",
+      "calculate": "datum.point.family == null ? 0 : ({eggcc: 1, hardboiled: 2, misaal: 3, luminal: 4, dialegg: 5, churchroad: 6, 'math-growth': 7, slotted: 8})[datum.point.family] || 9",
       "as": "PanelOrder"
     }
   ],
   "title": {
-    "text": "Parallel scaling of application replays",
+    "text": "Parallel scaling",
     "subtitle": []
   },
   "config": {

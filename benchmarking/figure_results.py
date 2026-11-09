@@ -34,7 +34,8 @@ def figure_results(
     records: dict[int, dict[str, Any]] = {
         row["row_index"]: dict(row) for group in grouped.data["groups"] for row in group["samples"]
     }
-    scaling = name == "parallel-scaling"
+    scaling = name in ("parallel-scaling", "slotted-parallel-scaling")
+    cohort_treatment = "slotted" if name == "slotted-parallel-scaling" else "off"
     conditions = []
     estimates = {}
     workloads: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -163,9 +164,9 @@ def figure_results(
                 )
             if scaling:
                 parallel = by_condition[baseline]
-                serial_off = by_condition["off-1threads"]["metrics"]["runtime"]["mean"]
+                serial_mean = by_condition[f"{cohort_treatment}-1threads"]["metrics"]["runtime"]["mean"]
                 comparison["cohort"] = (
-                    "unresolved" if serial_off is None else "selected" if serial_off >= 0.2 else "too-fast"
+                    "unresolved" if serial_mean is None else "selected" if serial_mean >= 0.2 else "too-fast"
                 )
                 comparison["threads"] = parallel["threads"]
                 comparison["treatment"] = parallel["treatment"]
@@ -225,7 +226,7 @@ def figure_results(
                     and (family is None or row["family"] == family)
                 ]
                 if any(value is None for value in ratios):
-                    raise ValueError("parallel-scaling: incomplete cohort; refusing to drop failed workloads")
+                    raise ValueError(f"{name}: incomplete cohort; refusing to drop failed workloads")
                 quartiles = statistics.quantiles(ratios, n=4, method="inclusive") if len(ratios) > 1 else ratios * 3
                 points.append(
                     {
@@ -243,7 +244,7 @@ def figure_results(
         result["statistics"] = (
             "Arithmetic means; Student-t mean intervals; independent Fieller speedup intervals. "
             "Each mode normalized to its own one-thread mean (exactly 1 at one thread). "
-            "Fixed cohort selected by proofs-off one-thread mean >= 0.2 s. "
+            f"Fixed cohort selected by {cohort_treatment} one-thread mean >= 0.2 s. "
             "Curves: median per-workload speedup; bands: workload IQR, not confidence intervals."
         )
     return result
@@ -368,18 +369,25 @@ def latex_results(result: dict[str, Any]) -> tuple[str, str]:
         )
         macros.append(r"\expandafter\def\csname egglogfigure@" + key + r"\endcsname{" + rendered + "}")
     table.append(r"\end{tabular}")
-    if result["figure"] == "parallel-scaling":
+    if "scaling" in result:
         table = _scaling_table(result, escapes)
     return header + "\n".join(macros) + "\n", header + "\n".join(table) + "\n"
 
 
+def scaling_points(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Include an overall panel only when it aggregates multiple benchmark families."""
+    families: list[dict[str, Any]] = result["family_scaling"]
+    overall: list[dict[str, Any]] = result["scaling"]
+    return overall + families if len({point["family"] for point in families}) > 1 else families
+
+
 def _scaling_table(result: dict[str, Any], escapes: dict[str, str]) -> list[str]:
-    """Format median speedups for the full cohort and each application project."""
-    points = result["scaling"] + result["family_scaling"]
+    """Format median speedups for the cohort and its benchmark families."""
+    points = scaling_points(result)
     threads = sorted({point["threads"] for point in points})
     groups: dict[tuple[str, str], dict[int, dict[str, Any]]] = defaultdict(dict)
     labels = {
-        None: "All projects",
+        None: "All workloads",
         "": "Other",
         "eggcc": "Eggcc",
         "hardboiled": "HardBoiled",
@@ -387,15 +395,17 @@ def _scaling_table(result: dict[str, Any], escapes: dict[str, str]) -> list[str]
         "churchroad": "Churchroad",
         "dialegg": "DialEgg",
         "luminal": "Luminal",
+        "math-growth": "Math",
+        "slotted": "Slotted",
     }
-    modes = {"off": "Off", "proofs": "Recording", "proof-testing": "Checked proofs"}
+    modes = {"off": "Off", "proofs": "Recording", "proof-testing": "Checked proofs", "slotted": "No proofs"}
     for point in points:
         family = "".join(escapes.get(ch, ch) for ch in labels.get(point["family"], point["family"]))
         groups[family, point["treatment"]][point["threads"]] = point
     table = [
         "% Median per-workload speedup over the same mode at one thread; N is workloads.",
         r"\begin{tabular}{llr" + "r" * len(threads) + "}",
-        "Project & Mode & N & " + " & ".join(f"{n} thread{'s' if n != 1 else ''}" for n in threads) + r" \\",
+        "Benchmark set & Mode & N & " + " & ".join(f"{n} thread{'s' if n != 1 else ''}" for n in threads) + r" \\",
         r"\hline",
     ]
     for (family, treatment), by_threads in groups.items():

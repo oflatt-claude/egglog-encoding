@@ -43,6 +43,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "figures/catalog.json"
 DEFAULT_OUTPUT_DIR = ROOT / "figures/output/eval"
 VEGA_PACKAGES = ("vega@6.4.0", "vega-lite@6.4.3", "vega-cli@6.4.0", "canvas@3.2.3")
+SCALING_TREATMENTS = {
+    "parallel-scaling": (("off", "proofs"), ("off", "proof-testing")),
+    "slotted-parallel-scaling": (("slotted",),),
+}
 PROOF_ORACLES: dict[Treatment, Treatment] = {
     "proofs": "proof-testing",
     "proof-extraction": "proof-testing",
@@ -195,15 +199,15 @@ def load_config(path: Path) -> FigureConfig:
             raise ValueError(f"{name}: threads must be positive integers")
         if len(set(threads)) != len(threads):
             raise ValueError(f"{name}: duplicate thread count")
-        if name != "parallel-scaling" and threads != [1]:
-            raise ValueError(f"{name}: thread sweeps require the parallel-scaling figure")
+        if name not in SCALING_TREATMENTS and threads != [1]:
+            raise ValueError(f"{name}: thread sweeps require a parallel-scaling figure")
         for treatment in item["treatments"]:
             for count in threads:
                 validate_threads(treatment, count)
-        if name == "parallel-scaling" and (
-            1 not in threads or item["treatments"] not in (["off", "proofs"], ["off", "proof-testing"])
+        if name in SCALING_TREATMENTS and (
+            1 not in threads or tuple(item["treatments"]) not in SCALING_TREATMENTS[name]
         ):
-            raise ValueError("parallel-scaling requires thread count 1 and off paired with proofs or proof-testing")
+            raise ValueError(f"{name}: requires thread count 1 and treatments from {SCALING_TREATMENTS[name]}")
         figures.append(
             Figure(
                 name,
@@ -355,7 +359,7 @@ def render_figures(
     """Bind shared sample selections and render Vega through temporary files."""
     from scipy import stats
 
-    from .figure_results import corpus_view_domains, figure_results, latex_results
+    from .figure_results import corpus_view_domains, figure_results, latex_results, scaling_points
 
     metadata = {item["file_sha256"]: item for item in inventory["workloads"]}
     label = target.row.label
@@ -407,7 +411,11 @@ def render_figures(
                         {
                             "logical_id": file.sha256,
                             "label": info["label"] if info else file.display_path,
-                            "family": info["family"] if info else "",
+                            "family": info["family"]
+                            if info
+                            else "slotted"
+                            if figure.name == "slotted-parallel-scaling"
+                            else "",
                             "file_sha256": physical.sha256,
                             "treatment": treatment,
                             "threads": threads,
@@ -468,14 +476,20 @@ def render_figures(
                         f"{figure.name}: {condition['label']} · {condition['condition']}: {issue}; "
                         "no figure outputs replaced"
                     )
-            if figure.name == "parallel-scaling":
+            if figure.name in SCALING_TREATMENTS:
                 if not results["scaling"]:
-                    raise ValueError("parallel-scaling: no workloads meet the serial baseline threshold")
+                    raise ValueError(f"{figure.name}: no workloads meet the serial baseline threshold")
                 for parameter in spec["params"]:
                     if parameter["name"] == "scaling":
-                        parameter["value"] = results["scaling"] + results["family_scaling"]
+                        parameter["value"] = scaling_points(results)
+                if len({point["family"] for point in results["family_scaling"]}) == 1:
+                    spec["columns"] = 1
+                    spec["spec"].update(width=440, height=210)
+                if figure.name == "slotted-parallel-scaling":
+                    spec["title"]["text"] = "Slotted Egglog parallel scaling (without proofs)"
                 spec["title"]["subtitle"] = [
-                    f"{results['cohort_n']} workloads · {config.rounds} runs/condition · whole-process time",
+                    f"{results['cohort_n']} workload{'s' if results['cohort_n'] != 1 else ''} · "
+                    f"{config.rounds} runs/condition · whole-process time",
                     "Median and IQR across inputs; each mode uses its own 1-thread baseline",
                 ]
             if figure.name.startswith("corpus-"):

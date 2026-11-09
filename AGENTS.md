@@ -160,7 +160,7 @@ or modify the JSONL.
 
 ## Paper figures
 
-- `./bench.py figures` collects and renders the eight paper PDFs through the shared
+- `./bench.py figures` collects and renders the nine paper PDFs through the shared
   benchmark phases. `--config` selects a flat JSON catalog with global `rounds`
   and optional `timeout_sec` override. Each figure declares `spec`, `files`,
   `treatments`, optional correctness-only `checks`, and optional `threads`
@@ -184,7 +184,8 @@ or modify the JSONL.
   failures and source blockers. Source blockers are not saved replay counts.
 - The outputs are `disequality-runtime`, `math-runtime`, `slotted-runtime`,
   `slotted-multipattern-runtime`, `corpus-congruence-cdf`,
-  `corpus-proof-recording-cdf`, `corpus-proofs-cdf`, and `parallel-scaling`.
+  `corpus-proof-recording-cdf`, `corpus-proofs-cdf`, `parallel-scaling`, and
+  `slotted-parallel-scaling`.
   Each has PDF/SVG/PNG, bound specification, results JSON, numeric TeX macros,
   and a TeX table under `figures/output/eval/` by default. Authored specifications
   stay in `figures/eval/`. `--output-dir` overrides the common generated folder.
@@ -195,7 +196,7 @@ or modify the JSONL.
   files and replace the requested bundle only after every condition is complete
   and every format succeeds. Failed/missing measurements stop publication.
   Observation provenance remains in the raw JSONL, grouped JSON and results JSON.
-- `make check` includes the Vega tests; inspect all eight exported figures at manuscript width
+- `make check` includes the Vega tests; inspect all nine exported figures at manuscript width
   and verify PDF font embedding. Tests must cover latest-N selection, N=1 without
   intervals, independent Fieller intervals, incomplete-bundle rejection, and
   the shared baseline-runtime corpus cohort (>=0.2 seconds, no upper cutoff).
@@ -203,9 +204,11 @@ or modify the JSONL.
 - The shared runner owns whole-process wall time and peak RSS for every engine.
   Parallel Egglog uses `--threads` and omits serial phase summaries; thread counts
   must remain distinct in caches, grouped selection, and interactive endpoints.
-  Scaling compares `off` with recording-only `proofs` on the RQ2 corpus. Select
-  one cohort by off's serial mean (>=0.2 s), normalize each mode to its own serial
-  mean, and report medians and workload IQR, not population confidence intervals.
+  Scaling compares `off` with recording-only `proofs` on the RQ2 corpus and Math12,
+  selecting one cohort by off's serial mean (>=0.2 s). Slotted scaling uses
+  `slotted` without proofs on the eight multipattern SDQL inputs and selects its
+  cohort by slotted's serial mean. Normalize each mode to its own serial mean and
+  report medians and workload IQR, not population confidence intervals.
   Native slotted is a workload driver with no self-timing or phase-summary path.
 - Local allocation protection uses the existing allocator/address-space cap only.
   Do not add host-reserve, host-pressure, or RSS-ceiling supervisors. Use

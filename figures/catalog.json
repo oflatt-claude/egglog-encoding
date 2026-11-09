@@ -116,11 +116,29 @@
         "../benchmarks/corpus/misaal/*.egg",
         "../benchmarks/corpus/churchroad/*.egg",
         "../benchmarks/corpus/dialegg/*.egg",
-        "../benchmarks/corpus/luminal/*.egg"
+        "../benchmarks/corpus/luminal/*.egg",
+        "../benchmarks/corpus/math/math-iteration-12.egg"
       ],
       "treatments": [
         "off",
         "proofs"
+      ],
+      "threads": [
+        1,
+        2,
+        4,
+        8
+      ]
+    },
+    "slotted-parallel-scaling": {
+      "spec": "eval/parallel-scaling.vl.json",
+      "files": [
+        "../benchmarks/slotted/inputs/sdql/*.egg",
+        "!../benchmarks/slotted/inputs/sdql/batax_2nd-44rules.egg",
+        "!../benchmarks/slotted/inputs/sdql/mttkrp_2nd-44rules.egg"
+      ],
+      "treatments": [
+        "slotted"
       ],
       "threads": [
         1,

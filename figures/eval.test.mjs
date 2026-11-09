@@ -64,8 +64,28 @@ test('parallel panels preserve project counts, exported medians, IQR and shared 
   assert.equal(references.length,2);
   assert.ok(references.every(m=>m.x===0&&m.x2===205));
   assert.match(result.svg,/Egglog \+ proof recording/);
-  assert.match(result.svg,/All projects \(n = 5\)/);
+  assert.match(result.svg,/All workloads \(n = 5\)/);
   assert.match(result.svg,/Eggcc \(n = 3\)/);
+});
+
+test('Math and slotted scaling label their modes without introducing proof results for slotted',async()=>{
+  for(const [name,family,treatments,label] of [
+    ['parallel-scaling','math-growth',['off','proofs'],'Math'],
+    ['slotted-parallel-scaling','slotted',['slotted'],'Slotted']
+  ]) {
+    const spec=JSON.parse(await readFile(new URL(figures[name].spec,import.meta.url),'utf8'));
+    spec.params.find(p=>p.name==='scaling').value=treatments.flatMap(treatment=>[1,2,4,8].map(threads=>({
+      family,treatment,threads,workloads:1,speedup:threads,q25:threads,q75:threads
+    })));
+    const result=await evaluate(name,[],[],3,spec);
+    assert.equal(result.marks.filter(m=>m.mark.marktype==='symbol'&&m.datum.point).length,4*treatments.length);
+    assert.ok(result.svg.includes(label+' (n = 1)'));
+    assert.doesNotMatch(result.svg,/All workloads/);
+    if(name==='slotted-parallel-scaling') {
+      assert.match(result.svg,/Slotted Egglog \(no proofs\)/);
+      assert.doesNotMatch(result.svg,/proof recording|checked proofs/);
+    }
+  }
 });
 
 test('serial figures ignore parallel observations from the same cache',async()=>{
@@ -163,7 +183,7 @@ test('missing or zero RSS and strict validation veto only affected boxes and est
 test('all figure designs preserve missing conditions and render without warnings',async()=>{
   for(const name of Object.keys(figures)) {
     // Scaling requires a nonempty, complete cohort before invoking Vega.
-    if(name==='parallel-scaling') continue;
+    if(name.endsWith('parallel-scaling')) continue;
     const result=await evaluate(name,figures[name].treatments.map(t=>input('case',t)),[]);
     if(name==='disequality-runtime') {
       assert.equal(find(result,'absolute_status').length,6);

@@ -61,7 +61,7 @@ def test_public_dispatch_is_lazy(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_complete_multipattern_catalog_selects_original_sdql_pairs_without_resource_failures() -> None:
     args, config = figures.parse_args(["slotted-multipattern-runtime", "--rounds", "3"])
     assert args.names == ["slotted-multipattern-runtime"] and config.rounds == 3
-    assert len(config.figures) == 8
+    assert len(config.figures) == 9
     nested, complete = figures.resolve_figures(
         config, ["slotted-runtime", "slotted-multipattern-runtime"], figures.ROOT
     )

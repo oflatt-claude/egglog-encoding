@@ -11,7 +11,7 @@ import pytest
 
 from benchmarking import benchmark, collection, figures, models, processes, targets
 from benchmarking.engines import Treatment
-from benchmarking.figure_results import figure_results, latex_results
+from benchmarking.figure_results import figure_results, latex_results, scaling_points
 from benchmarking.reports.interactive_runtime import InteractiveRuntime, scope_for_comparison
 from benchmarking.reports.store import CacheKey, ReportStore
 
@@ -86,17 +86,19 @@ def test_parallel_worker_uses_whole_process_metrics_without_serial_phase_summary
     assert store.records[0]["threads"] == 4 and store.records[0]["timing_summary"] is None
 
 
-def scaling_data(tmp_path: Path) -> tuple[list[dict[str, Any]], ReportStore]:
+def scaling_data(tmp_path: Path, *, slotted: bool = False) -> tuple[list[dict[str, Any]], ReportStore]:
     store = ReportStore(tmp_path / "report.jsonl")
     inputs = []
     modes: tuple[tuple[Treatment, int], ...] = (("off", 1), ("off", 2), ("proofs", 1), ("proofs", 2))
+    if slotted:
+        modes = (("slotted", 1), ("slotted", 2))
     for name, means in (
         ("a", (4, 2, 12, 3)),
         ("b", (2, 2, 4, 2)),
-        # Excluded solely by serial proofs-off time, even though its other modes are slow.
+        # Serial time chooses the cohort even when parallel or proof modes are slow.
         ("fast", (0.1, 20, 999, 0.1)),
     ):
-        for (treatment, threads), mean in zip(modes, means, strict=True):
+        for (treatment, threads), mean in zip(modes, means[: len(modes)], strict=True):
             indices = []
             for _ in range(2):
                 indices.append(store.row_count)
@@ -115,7 +117,7 @@ def scaling_data(tmp_path: Path) -> tuple[list[dict[str, Any]], ReportStore]:
                 {
                     "logical_id": name,
                     "label": name,
-                    "family": "eggcc" if name == "a" else "misaal",
+                    "family": "slotted" if slotted else "eggcc" if name == "a" else "misaal",
                     "file_sha256": name,
                     "binary_sha256": "sha256:bin",
                     "treatment": treatment,
@@ -144,39 +146,85 @@ def test_scaling_uses_each_modes_own_serial_mean_and_one_fixed_cohort(tmp_path: 
     assert family_points["misaal", "off", 2]["speedup"] == 1
     assert all(p["workloads"] == 1 for p in family_points.values())
     macros, table = latex_results(result)
-    assert "All projects & Recording & 2 & 1.000 & 3.000" in table
+    assert "All workloads & Recording & 2 & 1.000 & 3.000" in table
     assert "Eggcc & Off & 1 & 1.000 & 2.000" in table
     assert "off-2threads" in macros and "proofs-2threads" in macros
 
 
-def test_scaling_refuses_incomplete_cohort_instead_of_selecting_only_successes(tmp_path: Path) -> None:
+def test_slotted_scaling_uses_its_own_cohort_without_proof_or_ordinary_rows(tmp_path: Path) -> None:
+    inputs, store = scaling_data(tmp_path, slotted=True)
+    result = figure_results("slotted-parallel-scaling", inputs, store.grouped_report(), 2, 12.7062)
+    assert result["cohort_n"] == 2
+    assert [(p["threads"], p["speedup"]) for p in result["scaling"]] == [(1, 1), (2, 1.5)]
+    assert all(p["family"] == "slotted" and p["treatment"] == "slotted" for p in scaling_points(result))
+    assert len(scaling_points(result)) == 2
+    macros, table = latex_results(result)
+    assert "Slotted & No proofs & 2 & 1.000 & 1.500" in table
+    assert "All workloads" not in table and "Recording" not in table
+    assert "slotted-2threads" in macros
+
+
+def test_math_only_scaling_has_one_panel_and_table_row_per_mode(tmp_path: Path) -> None:
     inputs, store = scaling_data(tmp_path)
+    inputs = [{**item, "family": "math-growth"} for item in inputs if item["logical_id"] == "a"]
+    result = figure_results("parallel-scaling", inputs, store.grouped_report(), 2, 12.7062)
+    assert len(scaling_points(result)) == 4
+    _, table = latex_results(result)
+    assert "Math & Recording & 1 & 1.000 & 4.000" in table
+    assert "All workloads" not in table
+
+
+@pytest.mark.parametrize("slotted", [False, True])
+def test_scaling_refuses_incomplete_cohort_instead_of_selecting_only_successes(tmp_path: Path, slotted: bool) -> None:
+    inputs, store = scaling_data(tmp_path, slotted=slotted)
     inputs[1]["selected_row_indices"] = []
     with pytest.raises(ValueError, match="incomplete cohort"):
-        figure_results("parallel-scaling", inputs, store.grouped_report(), 2, 12.7062)
+        figure_results(
+            "slotted-parallel-scaling" if slotted else "parallel-scaling", inputs, store.grouped_report(), 2, 12.7062
+        )
 
 
-def test_scaling_catalog_uses_rq2_inputs_and_recording_only() -> None:
+def test_scaling_catalog_uses_rq2_and_math_with_recording_and_slotted_without_proofs() -> None:
     config = figures.load_config(figures.DEFAULT_CONFIG)
     catalog = {figure.name: figure for figure in config.figures}
     scaling = catalog["parallel-scaling"]
-    assert scaling.patterns == catalog["corpus-proof-recording-cdf"].patterns
+    assert scaling.patterns == catalog["corpus-proof-recording-cdf"].patterns + catalog["math-runtime"].patterns
     assert scaling.treatments == ("off", "proofs")
     assert scaling.threads == (1, 2, 4, 8)
+    slotted = catalog["slotted-parallel-scaling"]
+    assert slotted.patterns == catalog["slotted-multipattern-runtime"].patterns
+    assert slotted.treatments == ("slotted",)
+    assert slotted.threads == scaling.threads
+
+
+def test_slotted_scaling_catalog_rejects_unrelated_proof_modes(tmp_path: Path) -> None:
+    data = json.loads(figures.DEFAULT_CONFIG.read_text())
+    slotted = data["figures"]["slotted-parallel-scaling"]
+    slotted["treatments"] = ["slotted", "proofs"]
+    data["figures"] = {"slotted-parallel-scaling": slotted}
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="requires thread count 1 and treatments"):
+        figures.load_config(path)
 
 
 @pytest.mark.parametrize("threads", [[], [1, 1], [0, 2], [True], [2, 4]])
-def test_scaling_catalog_rejects_ambiguous_or_missing_serial_reference(tmp_path: Path, threads: list[int]) -> None:
+@pytest.mark.parametrize(
+    "name,treatments", [("parallel-scaling", ["off", "proofs"]), ("slotted-parallel-scaling", ["slotted"])]
+)
+def test_scaling_catalog_rejects_ambiguous_or_missing_serial_reference(
+    tmp_path: Path, threads: list[int], name: str, treatments: list[str]
+) -> None:
     config = tmp_path / "catalog.json"
     config.write_text(
         json.dumps(
             {
                 "rounds": 1,
                 "figures": {
-                    "parallel-scaling": {
+                    name: {
                         "spec": "chart.json",
                         "files": ["*.egg"],
-                        "treatments": ["off", "proofs"],
+                        "treatments": treatments,
                         "threads": threads,
                     }
                 },

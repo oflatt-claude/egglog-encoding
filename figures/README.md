@@ -7,7 +7,7 @@ From the code repository root:
 cp -R figures/output/eval ../extended-egglog-paper/figures/
 ./bench.py figures --help
 ./bench.py figures math-runtime slotted-runtime
-./bench.py figures parallel-scaling
+./bench.py figures parallel-scaling slotted-parallel-scaling
 ./bench.py figures slotted-multipattern-runtime
 ./bench.py figures --rounds 3 --memory-limit --report /tmp/figures-quick.jsonl --output-dir /tmp/figure-previews
 ./bench.py figures --config path/to/catalog.json
@@ -22,7 +22,7 @@ embedded font subsets. The first run may download the pinned renderer packages.
 
 Bare `./bench.py figures` writes one ignored output folder at
 `figures/output/eval/` in this checkout, independent of the invocation directory.
-Each of the eight figures has seven companions: PDF, SVG, 3x PNG, `.bound.vl.json`,
+Each of the nine figures has seven companions: PDF, SVG, 3x PNG, `.bound.vl.json`,
 `.results.json`, `.numbers.tex` and `.table.tex`. Authored specifications remain
 under `figures/eval/`. Absolute artifact paths are printed on stderr.
 
@@ -47,10 +47,11 @@ before copying it, and remove obsolete artifacts explicitly when needed.
 | `corpus-proof-recording-cdf` | Recording-only proof time and peak-RSS overhead across the same replays; strict correctness coverage retained |
 | `corpus-proofs-cdf` | Full proof recording, extraction and checking time and peak-RSS overhead across the same replays |
 | `slotted-runtime` | Full 44-rule SDQL kernels/phases; aligned runtime/RSS encoding-to-native ratio panels and a table of both metrics |
-| `parallel-scaling` | Ordinary and proof-recording Egglog speedup at 1, 2, 4 and 8 threads; full-cohort and per-project panels, workload IQR, and a table |
+| `parallel-scaling` | Ordinary and proof-recording Egglog scaling on the RQ2 corpus and Math12; 1, 2, 4 and 8 threads, workload IQR, and a table |
+| `slotted-parallel-scaling` | Slotted Egglog scaling without proofs on the eight SDQL multipattern inputs; the same thread counts and summaries |
 | `slotted-multipattern-runtime` | Complete multipattern matching on the original SDQL kernels/phases, omitting pairs with a resource-failing endpoint |
 
-The two Slotted figures share the authored `eval/slotted-runtime.vl.json`
+The two Slotted runtime figures share the authored `eval/slotted-runtime.vl.json`
 specification. `slotted-runtime` keeps its ten original SDQL inputs, restricted
 matcher and syntactic native substitution baseline. The complete comparison uses
 `slotted` and `slotted-ref-multi`, with snapshot substitution in both systems.
@@ -75,7 +76,8 @@ its source revision and hashes.
 [`catalog.json`](catalog.json) contains global `rounds` and `timeout_sec` settings
 and a `figures` object. Each figure declares `spec`, `files` and
 `treatments`, with optional correctness-only `checks` and worker `threads`
-(default `[1]`; sweeps are supported by `parallel-scaling`), using shared treatment strings:
+(default `[1]`; sweeps are supported by `parallel-scaling` and
+`slotted-parallel-scaling`), using shared treatment strings:
 
 ```json
 {
@@ -198,30 +200,37 @@ sample variances, ratios, Fieller calculations, cohort selection and ranking.
 The companion exports use the existing Python report estimators; a shared
 fixture checks numerical parity against executed Vega transforms.
 
-For `parallel-scaling`, each file's speedup is its one-thread arithmetic
+For both scaling figures, each file's speedup is its one-thread arithmetic
 mean divided by its N-thread arithmetic mean. Panels show the full cohort and each
-project, with input counts and a shared y-axis. The lines show medians across files;
-the bands show the 25th–75th percentiles across files (inclusive interpolation),
-not confidence intervals. Both modes use the same cohort, chosen solely by the
-ordinary one-thread mean >= 0.2 seconds, with no upper cutoff. Each mode starts at
-exactly 1x because its serial reference reuses the same observations. All selected
+benchmark family, with input counts and a shared y-axis. A single family needs
+only one panel. Lines show medians across files; bands show the 25th–75th
+percentiles across files (inclusive interpolation),
+not confidence intervals. `parallel-scaling` uses one cohort for both modes, chosen
+solely by the ordinary one-thread mean >= 0.2 seconds, with no upper cutoff.
+`slotted-parallel-scaling` uses the slotted one-thread mean for the same cutoff.
+Each mode starts at exactly 1x because its serial reference reuses the same
+observations. All selected
 conditions must be complete; failed parallel runs never silently drop from the
-curves. The TeX table reports median speedups for the full cohort and each project;
+curves. The TeX table reports median speedups for the full cohort and each family;
 the results JSON retains per-file means, Fieller speedup intervals and observations.
 Normalizing each mode separately measures scaling, not
 absolute proof overhead; a matching curve alone does not imply equal runtimes.
 
-The default comparison is `off` versus `proofs`: recording includes congruence
-maintenance and excludes proof extraction and checking. A custom catalog can
-instead pair `off` with `proof-testing`; the legend distinguishes checked proofs.
-Both configurations measure whole-process wall time, including startup and
+For `parallel-scaling`, the default comparison is `off` versus `proofs`: recording
+includes congruence maintenance and excludes proof extraction and checking.
+A custom catalog can instead pair `off` with `proof-testing`; the legend
+distinguishes checked proofs.
+`slotted-parallel-scaling` accepts only `slotted`, without proofs.
+Both figures measure whole-process wall time, including startup and
 lowering, and exclude compilation. Parallel runs have no additive phase summary
 because search and apply overlap.
 
 The inputs are saved `.egg` replays from Eggcc, HardBoiled, MISAAL, Churchroad,
-DialEgg, and Luminal; measurements do not run the original application pipelines.
-The default catalog collects the entire saved application corpus with ten
-observations per configuration. A shorter preview can use `--config` with a
+DialEgg, and Luminal, plus the fixed twelve-round Math workload. The slotted
+figure uses the same eight SDQL inputs as `slotted-multipattern-runtime`, with
+their recorded iteration budgets and goal checks. Measurements do not run
+the original application pipelines. The default catalog collects these inputs
+with ten observations per configuration. A shorter preview can use `--config` with a
 declared subset and `--rounds 3`, retaining explicit input provenance. Preview
 curves do not establish full-suite scaling or the paper's result.
 
@@ -285,7 +294,7 @@ parameters and grouped JSON URL in a temporary copy. The standard parameters are
 `target_label`, `timeout_sec`, `rounds`, `t_critical`, `selected_inputs` and
 `source_blockers`. Expected inputs include physical identities, selected row IDs
 and corpus metadata. They scope subset configurations; distribution statistics remain in
-the authored Vega transforms, while `parallel-scaling` binds its exported `scaling`
+the authored Vega transforms, while the scaling figures bind their exported `scaling`
 points. Vega resolves other
 relative assets from the authored specification's directory.
 
@@ -328,7 +337,7 @@ make check
 
 The figure tests use synthetic snapshots without writing the benchmark cache.
 They cover sample counts, means/intervals, missing/failing outcomes, label and
-subset selection, cohort boundaries and coverage. Inspect all eight PDFs/PNGs at
+subset selection, cohort boundaries and coverage. Inspect all nine PDFs/PNGs at
 manuscript width for unclipped labels, tails and uncertainty; use `pdffonts` to
 verify embedding. `make check` includes the catalog-driven Rust correctness suite:
 visible table sizes, stable source results, extraction correspondence and strict proof
