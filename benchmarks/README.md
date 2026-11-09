@@ -132,5 +132,6 @@ final collection uses a clean environment with allocator and thread overrides
 unset; retain its machine/environment description with the data. The
 three-round preview is implementation validation and does not replace paper
 figures or performance numbers. Outputs are `disequality-runtime`,
-`math-runtime`, `corpus-congruence-cdf`, `corpus-proofs-cdf`, and
-`slotted-runtime`, each in PDF/SVG/PNG form.
+`math-runtime`, `corpus-congruence-cdf`, `corpus-proof-recording-cdf`,
+`corpus-proofs-cdf`, `slotted-runtime`, and `slotted-multipattern-runtime`,
+each in PDF/SVG/PNG form.

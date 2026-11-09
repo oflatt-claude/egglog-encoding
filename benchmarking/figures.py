@@ -282,50 +282,60 @@ def resolve_figures(config: FigureConfig, names: Sequence[str], invocation_cwd: 
             specs[figure.spec] = spec
         paths: dict[Path, None] = {}
         for pattern in figure.patterns:
-            matches = sorted(glob.glob(str(config.path.parent / pattern), recursive=True))
+            exclude = pattern.startswith("!")
+            glob_pattern = pattern[1:] if exclude else pattern
+            if not glob_pattern:
+                raise ValueError(f"{figure.name}: empty file pattern: {pattern!r}")
+            matches = sorted(glob.glob(str(config.path.parent / glob_pattern), recursive=True))
             if not matches:
                 raise ValueError(f"{figure.name}: file pattern matched nothing: {pattern}")
             for match in matches:
                 path = Path(match).resolve()
-                if path not in inputs:
-                    if not path.is_file():
-                        raise ValueError(f"{figure.name}: not a workload file: {path}")
-                    inputs[path] = resolve_files([os.path.relpath(path, invocation_cwd)], invocation_cwd)[0]
-                    file = inputs[path]
-                    # Table-size expectations belong to the correctness oracle;
-                    # figure timings still include these executable workloads.
-                    file = replace(
-                        file,
-                        exclusions=tuple(rule for rule in file.exclusions if rule.kind != "expected-failure"),
-                        binary_inputs=tuple(
-                            (
-                                binary,
-                                replace(
-                                    physical,
-                                    exclusions=tuple(
-                                        rule for rule in physical.exclusions if rule.kind != "expected-failure"
-                                    ),
+                if not path.is_file():
+                    raise ValueError(f"{figure.name}: not a workload file: {path}")
+                if exclude:
+                    paths.pop(path, None)
+                else:
+                    paths[path] = None
+        if not paths:
+            raise ValueError(f"{figure.name}: file patterns selected no workloads")
+        for path in paths:
+            if path not in inputs:
+                inputs[path] = resolve_files([os.path.relpath(path, invocation_cwd)], invocation_cwd)[0]
+                file = inputs[path]
+                # Table-size expectations belong to the correctness oracle;
+                # figure timings still include these executable workloads.
+                file = replace(
+                    file,
+                    exclusions=tuple(rule for rule in file.exclusions if rule.kind != "expected-failure"),
+                    binary_inputs=tuple(
+                        (
+                            binary,
+                            replace(
+                                physical,
+                                exclusions=tuple(
+                                    rule for rule in physical.exclusions if rule.kind != "expected-failure"
                                 ),
+                            ),
+                        )
+                        for binary, physical in file.binary_inputs
+                    ),
+                )
+                inputs[path] = replace(
+                    file,
+                    exclusions=file.exclusions
+                    + tuple(
+                        replace(rule, treatments=aliases)
+                        for rule in file.exclusions
+                        if (
+                            aliases := tuple(
+                                mode
+                                for mode, oracle in PROOF_ORACLES.items()
+                                if oracle in rule.treatments and mode not in rule.treatments
                             )
-                            for binary, physical in file.binary_inputs
-                        ),
-                    )
-                    inputs[path] = replace(
-                        file,
-                        exclusions=file.exclusions
-                        + tuple(
-                            replace(rule, treatments=aliases)
-                            for rule in file.exclusions
-                            if (
-                                aliases := tuple(
-                                    mode
-                                    for mode, oracle in PROOF_ORACLES.items()
-                                    if oracle in rule.treatments and mode not in rule.treatments
-                                )
-                            )
-                        ),
-                    )
-                paths[path] = None
+                        )
+                    ),
+                )
         files = tuple(inputs[path] for path in paths)
         validate_unique_file_identities(files)
         result.append(ResolvedFigure(figure, files, specs[figure.spec]))

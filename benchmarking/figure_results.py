@@ -113,7 +113,7 @@ def figure_results(
             pairs = [("egg-de", t) for t in treatments if t != "egg-de"]
         elif name == "math-runtime":
             pairs = [("egg", "egg-proof-testing"), ("off", "proof-testing")]
-        elif name == "slotted-runtime":
+        elif name in ("slotted-runtime", "slotted-multipattern-runtime"):
             pairs = [(b, c) for b in treatments if "ref-" in b for c in treatments if "ref-" not in c]
         else:
             pairs = [("off", t) for t in treatments if t != "off"]
@@ -301,14 +301,17 @@ def latex_results(result: dict[str, Any]) -> tuple[str, str]:
         r"\providecommand{\EgglogFigureNumber}[1]{\ifcsname egglogfigure@#1\endcsname"
         r"\csname egglogfigure@#1\endcsname\else\textnormal{unavailable}\fi}"
     ]
-    slotted = result["figure"] == "slotted-runtime"
+    slotted = result["figure"] in ("slotted-runtime", "slotted-multipattern-runtime")
     table = [
         r"\begin{tabular}{lrr}" if slotted else r"\begin{tabular}{llrr}",
         ("Kernel/phase" if slotted else "Workload & Comparison")
         + r" & Runtime ratio [95\% CI] & Peak RSS ratio [95\% CI] \\",
         r"\hline",
     ]
-    numbers: dict[str, Any] = {}
+    numbers: dict[str, Any] = {
+        f"{figure_key}/rounds": result["rounds"],
+        f"{figure_key}/workload-count": len({row["logical_id"] for row in result["conditions"]}),
+    }
     for row in result["conditions"]:
         prefix = f"{figure_key}/{row['workload']}/{row['condition']}"
         numbers[f"{prefix}/n"] = row["sample_n"]
