@@ -5,7 +5,6 @@ from __future__ import annotations
 import itertools
 import json
 import os
-import random
 import signal
 import subprocess
 import sys
@@ -21,7 +20,6 @@ import pytest
 
 from benchmarking.lmfao import cli, model
 from benchmarking.lmfao.optimizer import extractor_path, seconds_summary
-from benchmarking.native_memory import native_memory_command
 
 ROOT = Path(__file__).resolve().parents[2]
 QUERIES = [
@@ -89,66 +87,6 @@ def extractor_binary() -> Path:
     return extractor_path("debug")
 
 
-@pytest.mark.parametrize(
-    ("mode", "binding"),
-    [
-        ("single-root", "slotted"),
-        ("roots", "slotted"),
-        ("shared", "slotted"),
-        ("shared", "named"),
-        ("shared", "canonical"),
-    ],
-)
-def test_extracted_dag_preserves_original_queries(
-    mode: str, binding: str, extractor_binary: Path, tmp_path: Path
-) -> None:
-    from benchmarks.reproduction.slotted.lmfao import ordinary, workload
-
-    plans = []
-    roots = ["Sales"] if mode == "single-root" else list(model.WORKLOAD.relations)
-    for root in [None, *roots]:
-        source = tmp_path / "input.egg"
-        program = workload(mode, qs=QUERIES, roots=None if root is None else [root]).program
-        source.write_text(program if binding == "slotted" else ordinary(program, canonical=binding == "canonical"))
-        destination = tmp_path / "plan.json"
-        command, env = native_memory_command(
-            [str(extractor_binary), "slotted" if binding == "slotted" else "off", str(source), str(destination), "5"],
-            os.environ,
-        )
-        subprocess.run(command, env=env, check=True, timeout=30)
-        plan = json.loads(destination.read_text())
-        assert len(plan["outputs"]) == len(QUERIES)
-        if root is not None:
-            assert {o["root"] for o in plan["outputs"]} == {list(model.WORKLOAD.relations).index(root)}
-        assert json.loads((tmp_path / "extraction.json").read_text())["solver"]["optimal"]
-        plans.append(plan)
-    rng = random.Random(804)
-    for trial in range(8):
-        data = {}
-        for name, fields in model.WORKLOAD.relations.items():
-            rows = [
-                {
-                    k: Fraction(rng.randrange(-3, 4), 2)
-                    if k in {"unit_sales", "oilprize", "transactions"}
-                    else rng.randrange(2)
-                    for k in fields
-                }
-                for _ in range(trial % 4 + 1)
-            ]
-            data[name] = rows + [rows[0]]  # Preserve bag multiplicities in every relation.
-        expected = []
-        for q in QUERIES:
-            answer: dict[tuple[Any, ...], Fraction] = defaultdict(Fraction)
-            for row in join(list(data.values())):
-                weight = Fraction(1)
-                for f in q.factors:
-                    weight *= row[f]
-                answer[tuple(row[k] for k in q.groups)] += weight
-            expected.append(answer)
-        for plan in plans:
-            assert evaluate(plan, data) == expected
-
-
 @pytest.mark.parametrize("target", [None, "custom-target", "/tmp/lmfao-custom-target"])
 def test_extractor_path_honors_cargo_target_dir(target: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
     if target is None:
@@ -164,14 +102,6 @@ def test_fixed_workload_is_original_covariance_configuration() -> None:
     assert len(model.WORKLOAD.relations) == 6
 
 
-def test_frozen_inputs_match_upstream_frontend_export() -> None:
-    from benchmarks.reproduction.slotted.lmfao import frozen
-
-    for folder, queries in [("inputs", None), ("correctness", QUERIES)]:
-        for name, contents in frozen(qs=queries).items():
-            assert (model.FIXTURES / folder / name).read_text() == contents
-
-
 def test_cli_limits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: list[Any] = []
     monkeypatch.setattr(cli, "run", calls.append)
@@ -181,9 +111,11 @@ def test_cli_limits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     for value in ["0", "-1", "nan", "inf"]:
         with pytest.raises(SystemExit):
             cli.main([*argv, "--dag-timeout", value])
-    for name, value in [("treatment", "slotted"), ("variant", "shared"), ("binding-control", "named")]:
+    for option in ("--rounds", "--rewrite-rounds", "--timeout-sec", "--jobs"):
         with pytest.raises(SystemExit):
-            cli.main([*argv, f"--{name}", value, f"--{name}", value])
+            cli.main([*argv, option, "0"])
+    with pytest.raises(SystemExit):
+        cli.main([*argv, "--report", "-"])
     assert seconds_summary([]) is None
 
 
@@ -246,7 +178,7 @@ def test_backend_timeout_stops_optimizer_and_compiler_children(tmp_path: Path, n
         config.write_text(
             json.dumps(
                 dict(
-                    variant="shared",
+                    rewrite_rounds=192,
                     treatment="slotted",
                     extractor=str(extractor),
                     timeout=60,
@@ -296,14 +228,16 @@ def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
         now += seconds
 
     monkeypatch.setattr(cli, "time", SimpleNamespace(perf_counter=lambda: now))
-    documents: dict[str, Any] = {"shared-slotted": {}, "shared-slotted-ref-multi": {}}
+    documents: dict[str, Any] = {"slotted": {"treatment": "slotted"}, "debruijn": {"treatment": "off"}}
 
     def collect(output: Path, *args: Any, **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         spend(999)
         return documents, {
-            "optimizer": {label: {"process_seconds": 999} for label in documents},
-            "graph_collection": {label: {"seconds": 999} for label in documents},
-            "binary_paths": {"slotted": "/encoded", "slotted-ref-multi": "/native"},
+            "optimizer": {
+                label: {"process_seconds": {"median_seconds": 999}, "completed_samples": 2} for label in documents
+            },
+            "rewrite_round_budget": 192,
+            "optimizer_memory_limit_bytes": 16 * 1024**3,
             "extractor_path": "/lmfao-extract",
         }
 
@@ -370,10 +304,8 @@ def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
                 str(output),
                 "--rounds",
                 "2",
-                "--binding-control",
-                "named",
-                "--binding-control",
-                "canonical",
+                "--format",
+                "json",
             ]
         )
         == 0
@@ -382,25 +314,20 @@ def test_pipeline_charges_hook_once_and_excludes_validation_and_diagnostics(
     assert report == json.loads((output / "pipeline.json").read_text())
     costs = report["accounted_pipeline"]
     assert costs["original"]["one_time_phase_sum_seconds"] == 42
-    assert costs["shared-slotted"]["one_time_phase_sum_seconds"] == 67
-    assert costs["shared-slotted-ref-multi"]["one_time_phase_sum_seconds"] == 69
-    assert costs["shared-slotted-ref-multi"]["execution_label"] == "shared-slotted"
+    assert costs["slotted"]["one_time_phase_sum_seconds"] == 67
+    assert costs["debruijn"]["one_time_phase_sum_seconds"] == 69
+    assert costs["debruijn"]["execution_label"] == "slotted"
     assert costs["original"]["optimization_and_generation_seconds"] == 2
-    assert costs["shared-slotted"]["optimization_and_generation_seconds"] == 27
-    assert costs["shared-slotted"]["compilation_seconds"] == 40
+    assert costs["slotted"]["optimization_and_generation_seconds"] == 27
+    assert costs["slotted"]["compilation_seconds"] == 40
     assert report["metadata"]["validation_preparation_seconds"] == 2011
-    assert len(report["builds"]) == 5 and len(report["validation"]) == 2
-    for binding in ["named", "canonical"]:
-        label = f"shared-ordinary-{binding}"
-        assert costs[label]["execution_label"] == "shared-slotted"
-        assert costs[label]["one_time_phase_sum_seconds"] == 69
-        assert report["binding_controls"][label] == binding
-    assert "compilation_seconds" not in report["builds"]["shared-slotted-ref-multi"]
+    assert len(report["builds"]) == 4 and len(report["validation"]) == 3
+    assert "compilation_seconds" not in report["builds"]["debruijn"]
     assert "not a measured end-to-end" in report["phase_scope"]
     comparison = (output / "comparison.md").read_text()
-    assert "| shared / egglog | All six | Enabled | 0.2750 | 2 |" in comparison
-    assert "| shared / native multipattern | All six | Enabled | 0.2750 | 2 |" in comparison
-    assert "| shared / egglog | 27.0000 | 40.0000 |" in comparison
+    assert "Slotted egglog" in comparison and "Ordinary egglog (de Bruijn)" in comparison
+    assert "27.000 | 40.000 | 0.2750" in comparison
+    assert "2 egraph / 2 execution" in comparison
 
 
 def test_optimizer_rejects_workload_drift_before_rewriting(tmp_path: Path) -> None:
@@ -414,19 +341,19 @@ def test_optimizer_rejects_workload_drift_before_rewriting(tmp_path: Path) -> No
     assert not (tmp_path / "plan.json").exists()
 
 
-def test_comparison_caption_names_ablation_pairs_and_preserves_missing_results() -> None:
+def test_report_distinguishes_replication_and_resource_failures() -> None:
     from benchmarking.lmfao.report import comparison_markdown
 
-    labels = ("original", "single-root-slotted", "roots-slotted", "shared-slotted-ref-multi")
     result = comparison_markdown(
         {
-            "optimizer": dict.fromkeys(labels[1:]),
+            "rewrite_round_budget": 192,
+            "optimizer": {"debruijn": {"failures": [{"status": "memory-limit"}]}},
+            "optimizer_memory_limit_bytes": 16 * 1024**3,
             "accounted_pipeline": {},
         }
     )
-    assert "| single-root / egglog | Sales only | Enabled | unavailable | — |" in result
-    assert "| roots / egglog | All six | Disabled | unavailable | — |" in result
-    assert "| shared / native multipattern | All six | Enabled | unavailable | — |" in result
-    assert "compare shared with single-root" in result and "shared with roots" in result
-    assert "identical-subexpression reuse" in result and "loading and sorting" in result
-    assert "N × execution" in result
+    assert "LMFAO configured roots" in result
+    assert "LMFAO + paper root heuristic" in result
+    assert "Ordinary egglog (de Bruijn) (memory-limit)" in result
+    assert "not the paper's full 127M-row experiment" in result
+    assert "our implementation" in result and "allocator/address-space cap" in result

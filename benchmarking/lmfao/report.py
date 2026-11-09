@@ -9,7 +9,7 @@ from . import model
 
 def preparation_costs(plans: dict[str, Any], builds: dict[str, Any], aliases: dict[str, str]) -> dict[str, Any]:
     result = {}
-    for label in ["original", *plans]:
+    for label in ["original", *(["paper"] if "paper" in builds else []), *plans]:
         executed = aliases.get(label, label)
         generation = builds[label]["generation_seconds"]
         compilation = builds[executed]["compilation_seconds"]
@@ -24,79 +24,67 @@ def preparation_costs(plans: dict[str, Any], builds: dict[str, Any], aliases: di
 
 def comparison_markdown(report: dict[str, Any]) -> str:
     lines = [
-        "| Variant / engine | Allowed roots | Shared producers | Computation median (s) | Runs |",
-        "|---|---|---|---:|---:|",
+        "| Method | Egraph (s) | Peak RSS (MiB) | Optimization + generation (s) | "
+        "C++ compilation (s) | Computation (s) | Views / columns | Samples |",
+        "|---|---:|---:|---:|---:|---:|---:|---|",
     ]
-    costs = [
-        "| Variant / engine | Optimization + generation (s) | C++ compilation (s) |",
-        "|---|---:|---:|",
-    ]
-    configurations = {
-        "single-root": ("Sales only", "Enabled"),
-        "roots": ("All six", "Disabled"),
-        "shared": ("All six", "Enabled"),
+    names = {
+        "original": "LMFAO configured roots",
+        "paper": "LMFAO + paper root heuristic",
+        "slotted": "Slotted egglog",
+        "debruijn": "Ordinary egglog (de Bruijn)",
     }
-    controls = report.get("binding_controls", {})
-    quality = ["| Variant / engine | Views | Aggregate columns | Structural cost |", "|---|---:|---:|---:|"]
-    for label in ["original", *report["optimizer"], *controls]:
-        if label == "original":
-            name, roots, sharing = "Original LMFAO", "Original policy", "Original merging"
-        elif label in controls:
-            name, roots, sharing = f"shared / ordinary {controls[label]}", "All six", "Enabled"
-        else:
-            variant, _, engine = label.partition("-slotted")
-            name = f"{variant} / {'native multipattern' if engine else 'egglog'}"
-            roots, sharing = configurations[variant]
-        if summary := report.get("plan_summaries", {}).get(label):
-            quality.append(
-                f"| {name} | {summary['views']} | {summary['aggregate_columns']} | "
-                f"{summary.get('structural_cost', '—')} |"
-            )
+    for label, name in names.items():
+        optimization = report["optimizer"].get(label, {})
+        timing = optimization.get("process_seconds")
+        runtime = f"{timing['median_seconds']:.3f}" if timing else "—"
+        memory = optimization.get("max_rss_bytes")
+        rss = f"{memory / 1024**2:.1f}" if memory is not None else "—"
         if label not in report["accounted_pipeline"]:
-            lines.append(f"| {name} | {roots} | {sharing} | unavailable | — |")
-            costs.append(f"| {name} | — | — |")
+            failures = sorted({row["status"] for row in optimization.get("failures", [])})
+            reason = (
+                ", ".join(failures) or optimization.get("pipeline_issue") or optimization.get("issue") or "unavailable"
+            )
+            lines.append(
+                f"| {name} ({reason}) | {runtime} | {rss} | — | — | — | — | "
+                f"{optimization.get('completed_samples', 0)} completed, "
+                f"{len(optimization.get('failures', []))} failed |"
+            )
             continue
         preparation = report["accounted_pipeline"][label]
         timing = report["execution"][preparation["execution_label"]]["computation_seconds"]
-        lines.append(f"| {name} | {roots} | {sharing} | {timing['median_seconds']:.4f} | {timing['samples']} |")
-        values = [preparation[key] for key in ("optimization_and_generation_seconds", "compilation_seconds")]
-        costs.append(f"| {name} | " + " | ".join(f"{v:.4f}" for v in values) + " |")
-    lines.extend(
-        [
-            "",
-            "Table: Execution of the original 140-query Favorita covariance workload through the same corrected "
-            "LMFAO C++ backend. Within each egraph engine, compare shared with single-root to isolate the benefit "
-            "of root choice, and shared with roots to isolate shared-producer merging. Queries, data, cost model "
-            "and backend are fixed across these ablations. All variants retain identical-subexpression reuse and "
-            "backend multi-output optimization. Times are medians of warm executions, excluding "
-            "optimization, code generation, compilation, data loading and sorting. This matches the paper's "
-            "computation timing scope, but uses medians rather than its means; dataset size and CPU affinity "
-            "are recorded in metadata.json. Only selected variants are shown. Unavailable plans are not timings; "
-            "see pipeline.json for failure details. "
-            "Identical plans reuse execution observations as recorded by execution_aliases.",
-            "",
-            "Preparation costs are separate observations, one per phase:",
-            "",
-            *costs,
-            "",
-            "Optimization + generation measures the LMFAO compiler process, including its frontend, "
-            "the optimizer subprocess (translation, rewriting/export, decoding, extraction and serialization), "
-            "and C++ generation. Independent correctness checks and separate optimizer-only samples/graph "
-            "diagnostics are excluded for both. Whole-process execution, including loading and sorting, "
-            "remains in pipeline.json.",
-            "",
-            "For N executions of a reused plan, the estimated cost is optimization/generation + "
-            "compilation + N × execution. This is an amortization model, not a measured end-to-end runtime; "
-            "state whether execution includes loading and sorting.",
-            "",
-            *quality,
-            "",
-            "Ordinary binding controls use the same shared-view rules, cost function, joint extractor and backend. "
-            "Named retains each source binder as constructor data; canonical uses one name for these closed kernels. "
-            "Their preparation includes translation/canonicalization and extraction. All selected plans pass "
-            "the same output checks; plan.json and plan.txt retain the selected queries and roots.",
-        ]
-    )
+        execution = timing["median_seconds"]
+        egraph_samples = optimization.get("completed_samples", "—")
+        plan = report["plan_summaries"][label]
+        lines.append(
+            f"| {name} | {runtime} | {rss} | {preparation['optimization_and_generation_seconds']:.3f} | "
+            f"{preparation['compilation_seconds']:.3f} | {execution:.4f} | "
+            f"{plan['views']} / {plan['aggregate_columns']} | "
+            f"{egraph_samples} egraph / {timing['samples']} execution |"
+        )
+    limit = report["optimizer_memory_limit_bytes"]
+    bound = f"{limit / 1024**3:g} GiB allocator/address-space cap" if limit is not None else "no memory cap"
+    lines += [
+        "",
+        "The original 140-query Favorita covariance workload on the public 2M-Sales-row fragment, using the "
+        "same pinned frontend and corrected C++ backend. This replicates the workload and pipeline, not the "
+        "paper's full 127M-row experiment. The paper-root row uses our implementation of its section 3.3 "
+        "coverage heuristic; it is distinct from the roots shipped in the artifact.",
+        "",
+        "Both egraph modes use hoisting, independent-loop interchange and tuple fusion on the same nested bag sums. "
+        "Shared views are derived from fused reductions; the same joint DAG extractor selects the plan. "
+        f"Both modes have the same {report['rewrite_round_budget']}-round budget and {bound}. "
+        "Ordinary egglog uses de Bruijn indices with explicit shift/swap rules. "
+        "A resource failure is reported as a failure, never as an execution speedup.",
+        "",
+        "Samples lists completed egraph/execution runs; collection stops after a resource failure at unchanged bounds. "
+        "Egraph time and peak RSS are medians of separate optimizer processes, including parsing and rewriting "
+        "but excluding extraction. Optimization + generation is one measured LMFAO compiler invocation, "
+        "including translation, rewriting, DAG extraction and code generation. C++ compilation is separate. "
+        "Computation is the median of warm runs, excluding loading, sorting and checking, as in the paper's "
+        "timing scope. Identical selected plans reuse compilation/execution observations, charged in full; "
+        "pipeline.json records those aliases, samples, hashes and all output checks.",
+    ]
     return "\n".join(lines) + "\n"
 
 

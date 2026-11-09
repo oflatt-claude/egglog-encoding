@@ -7,7 +7,6 @@ publish = false
 [dependencies]
 anyhow = { workspace = true }
 benchmark-memory = { path = "../../benchmark-memory" }
-egraph-isomorphism = { path = "../../egraph-isomorphism" }
 egglog = { workspace = true }
 egglog-experimental = { path = "../../egglog-experimental" }
 highs = "=2.4.0"

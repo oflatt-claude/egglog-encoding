@@ -53,6 +53,7 @@ def generate(
     optimizer: dict[str, Any] | None = None,
     *,
     timeout: int = 300,
+    root_policy: str | None = None,
 ) -> dict[str, Any]:
     directory.mkdir(parents=True, exist_ok=True)
     for name in ("workload.json", "plan.json", "extraction.json"):
@@ -60,6 +61,10 @@ def generate(
     env = {k: v for k, v in os.environ.items() if not k.startswith("LMFAO_")}
     env["LMFAO_WORKLOAD_FILE"] = str(directory / "workload.json")
     env["LMFAO_PLAN_FILE"] = str(directory / "plan.json")
+    if root_policy is not None:
+        if root_policy != "paper" or optimizer is not None:
+            raise ValueError("paper roots require the original LMFAO compiler")
+        env["LMFAO_ROOT_POLICY"] = root_policy
     if optimizer is not None:
         config = directory / "optimizer.json"
         config.write_text(json.dumps({"command": [sys.executable, "-m", "benchmarking.lmfao.optimize"], **optimizer}))
@@ -88,6 +93,8 @@ def generate(
     )
     if optimizer is not None and "LMFAO imported selected DAG:" not in (directory / "generate.log").read_text():
         raise ValueError("backend did not acknowledge plan import; install the pinned optimizer bridge")
+    if root_policy == "paper" and "LMFAO paper coverage roots:" not in (directory / "generate.log").read_text():
+        raise ValueError("backend did not acknowledge paper root selection; prepare the current bridge")
     if not (directory / "workload.json").exists() or not (directory / "plan.json").exists():
         raise ValueError("backend did not export its workload and plan; install the pinned optimizer bridge")
     if model.Workload.read(directory / "workload.json").document != model.WORKLOAD.document:
@@ -95,7 +102,7 @@ def generate(
     return {
         "generation_seconds": generated,
         "compiler_counts": (directory / "compiler-data.out").read_text(),
-        "logical_optimizer": "original LMFAO" if optimizer is None else "egraph subprocess",
+        "logical_optimizer": f"LMFAO {root_policy or 'configured'} roots" if optimizer is None else "egraph subprocess",
     }
 
 

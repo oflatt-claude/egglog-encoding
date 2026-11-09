@@ -84,10 +84,12 @@ The Python suite includes a real CLI integration test on small Math and
 disequality fixtures. It uses a temporary report and checks successful runtime/RSS
 observations through the same public runner.
 
-The [LMFAO batching case study](lmfao/README.txt) has three frozen optimizer
-pairs under `lmfao/inputs/`, outside the default figure catalog. It uses the
-shared runner/cache. Its six small rule cases run in
-`paper-tests/tests/lmfao.rs`; Python tests cover DAG extraction and SQL semantics.
+The [LMFAO case study](lmfao/README.md) runs through `./bench.py lmfao` with the
+shared collector, cache and resource guards. It compares slotted/ordinary egglog
+with two LMFAO root policies, then checks and times generated C++ programs.
+Python bag-semantics/integration tests and Rust DAG solver tests run in `make check`.
+Its external frontend/backend and data are prepared explicitly; it is outside
+the default figure catalog.
 
 For a disposable three-round verification preview:
 

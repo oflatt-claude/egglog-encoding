@@ -2,12 +2,11 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Result, bail, ensure};
 use egglog::{
     EGraph, Value,
     sort::{MapContainer, S},
 };
-use egraph_isomorphism::{AnnotatedEGraph, Argument};
 
 pub type Id = usize;
 
@@ -148,61 +147,6 @@ impl Terms {
             if let Some(error) = error {
                 return Err(error);
             }
-        }
-        result.deduplicate();
-        Ok(result)
-    }
-
-    // The native reference remains a separate process. Its diagnostic export
-    // feeds the same planner; egglog uses live constructor tables above.
-    pub fn exported(source: &str) -> Result<Self> {
-        let doc: AnnotatedEGraph = serde_json::from_str(source)?;
-        let slots = doc.slotted.context("expected slotted graph annotations")?;
-        let mut ids = BTreeMap::new();
-        for node in doc.egraph.nodes.values() {
-            let next = ids.len();
-            ids.entry(&node.eclass).or_insert(next);
-        }
-        let mut result = Self(vec![vec![]; ids.len()]);
-        for (id, node) in doc.egraph.nodes.iter().filter(|(_, n)| !n.subsumed) {
-            if !OPERATORS.contains(&node.op.as_str()) && !node.op.starts_with("sym:") {
-                continue;
-            }
-            ensure!(
-                slots
-                    .classes
-                    .get(&node.eclass)
-                    .is_some_and(|c| c.slots.is_empty()),
-                "expected closed planning class"
-            );
-            ensure!(
-                slots
-                    .nodes
-                    .get(id)
-                    .is_some_and(|n| n.arguments.len() == node.children.len()
-                        && n.arguments.iter().all(
-                            |a| matches!(a, Argument::Child { renaming } if renaming.is_empty())
-                        )),
-                "planning edges must have empty slot maps"
-            );
-            let children = if node.op == "Scalar" {
-                vec![]
-            } else {
-                node.children
-                    .iter()
-                    .map(|id| {
-                        doc.egraph
-                            .nodes
-                            .get(id)
-                            .map(|n| ids[&n.eclass])
-                            .ok_or_else(|| anyhow::anyhow!("dangling graph edge"))
-                    })
-                    .collect::<Result<_>>()?
-            };
-            result.0[ids[&node.eclass]].push(Term {
-                op: node.op.clone(),
-                children,
-            });
         }
         result.deduplicate();
         Ok(result)

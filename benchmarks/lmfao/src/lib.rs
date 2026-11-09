@@ -43,7 +43,7 @@ impl Alternative {
     }
 }
 
-/// Executable alternatives read from the live egraph or the native reference export.
+/// Executable alternatives read from the live egraph.
 /// Scalar functions are the immutable, indexed kernels supplied by the frontend.
 struct Planner {
     regions: BTreeMap<Id, Region>,
@@ -367,16 +367,10 @@ pub fn extract_live(graph: &egglog::EGraph, timeout: f64) -> Result<Extraction> 
     extract(Terms::live(graph, true)?, timeout)
 }
 
-/// Extract the same planning IR from ordinary egglog with names as constructor data.
+/// Extract the same planning IR from ordinary egglog with de Bruijn indices.
 /// Requires the same generated-input and immutable-kernel contract as extract_live.
 pub fn extract_plain(graph: &egglog::EGraph, timeout: f64) -> Result<Extraction> {
     extract(Terms::live(graph, false)?, timeout)
-}
-
-/// Extract from the native reference's annotated graph export.
-/// Requires the same generated-input and immutable-kernel contract as extract_live.
-pub fn extract_export(source: &str, timeout: f64) -> Result<Extraction> {
-    extract(Terms::exported(source)?, timeout)
 }
 
 fn extract(terms: Terms, timeout: f64) -> Result<Extraction> {

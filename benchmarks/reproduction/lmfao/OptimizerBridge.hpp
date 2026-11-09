@@ -4,6 +4,7 @@
 #include <fstream>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <boost/rational.hpp>
 
 namespace lmfao_bridge {
 using boost::property_tree::ptree;
@@ -21,6 +22,36 @@ template<size_t N> static ptree indices(const std::bitset<N>& bits) {
 }
 static void require(bool ok) {
     if (!ok) throw std::runtime_error("Unsupported LMFAO optimizer bridge input");
+}
+// Paper section 3.3, on the supplied join tree. The pinned Favorita workload
+// has a strict winner for every query, so its size-based tie break is unused.
+static void coverageRoots(std::shared_ptr<TreeDecomposition> td,
+                          const std::vector<Query*>& queries) {
+    using Weight = boost::rational<size_t>;
+    const size_t count = td->numberOfRelations();
+    std::vector<Weight> weights(count, Weight(0));
+    for (const Query* q : queries) {
+        for (size_t i = 0; i < count; ++i) {
+            const size_t overlap = (q->_fVars & td->getRelation(i)->_bag).count();
+            weights[i] += q->_fVars.none() ? Weight(1, count) : Weight(overlap, q->_fVars.count());
+        }
+    }
+    for (Query* q : queries) {
+        size_t best = count;
+        bool tied = false;
+        for (size_t i = 0; i < count; ++i) {
+            if (q->_fVars.any() && (q->_fVars & td->getRelation(i)->_bag).none()) continue;
+            if (best == count || weights[i] > weights[best]) {
+                best = i;
+                tied = false;
+            } else if (weights[i] == weights[best]) {
+                tied = true;
+            }
+        }
+        require(best != count && !tied);
+        q->_rootID = best;
+    }
+    std::cerr << "LMFAO paper coverage roots: " << queries.size() << " queries\n";
 }
 static ptree aggregate(const Aggregate* agg) {
     require(agg->_agg.size() == 1);

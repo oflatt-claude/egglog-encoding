@@ -46,11 +46,12 @@ regeneration live under [`benchmarks/reproduction/`](benchmarks/reproduction/).
 The [source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also
 included in the Rust documentation for `egglog_experimental::slotted`.
 
-The [LMFAO case study](benchmarks/lmfao/README.txt) uses egraph rules and joint
-DAG extraction for root selection, aggregate pushdown and view sharing on the
-artifact's 140-query covariance workload. `./bench.py lmfao` compares the selected
-plans with the original logical optimizer using the same upstream frontend and
-C++ backend. LMFAO calls the egraph optimizer through a subprocess bridge.
+The [LMFAO case study](benchmarks/lmfao/README.md) uses bag-sum rewrites and joint
+DAG extraction to optimize the artifact's 140 covariance queries. `./bench.py lmfao`
+compares slotted and ordinary egglog with LMFAO's configured roots and the paper's
+root heuristic, retaining the upstream query frontend and C++ backend. It uses
+the shared benchmark collector and reports query execution separately from
+optimization and compilation.
 
 The reusable Rust checker accepts `egraph-serialize` JSON from either engine,
 with optional annotations for slotted graphs:

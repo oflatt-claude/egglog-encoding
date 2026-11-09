@@ -20,7 +20,8 @@ from benchmarks.reproduction.lmfao.prepare import verify_backend
 
 from . import backend, model
 from .data import load_data, reference_results
-from .optimizer import TREATMENTS, collect_optimizers, seconds_summary, write_json
+from .optimizer import collect_optimizers, seconds_summary, write_json
+from .program import DEFAULT_ROUNDS
 from .report import comparison_markdown, plan_text, preparation_costs
 
 
@@ -35,16 +36,8 @@ def run(args: argparse.Namespace) -> None:
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
     documents, optimizer = collect_optimizers(
-        out,
-        args.samples,
-        args.timeout,
-        args.report,
-        args.memory_limit_bytes,
-        treatments=tuple(args.treatment or TREATMENTS),
-        variants=tuple(args.variant or ("single-root", "roots", "shared")),
+        out, args.samples, args.timeout, args.report, args.memory_limit_bytes, rewrite_rounds=args.rewrite_rounds
     )
-    if not documents:
-        raise RuntimeError("the logical experiment requires at least one successfully exported graph")
     metadata: dict[str, Any] = {
         "cpu_affinity": sorted(os.sched_getaffinity(0)),
         "backend_sha256": sha256_file(args.backend),
@@ -64,29 +57,37 @@ def run(args: argparse.Namespace) -> None:
     aliases: dict[str, str] = {}
     signatures: dict[str, str] = {}
     builds: dict[str, Any] = {}
-    canonical = ["original"]
-    controls = {f"shared-ordinary-{name}": name for name in args.binding_control or []}
-    for label in ["original", *documents, *controls]:
+    baselines = ["original", "paper"]
+    canonical = baselines.copy()
+    for label in [*baselines, *documents]:
         settings = None
-        if label != "original":
-            if label in controls:
-                variant, treatment = "shared", "off"
-            else:
-                variant, treatment = label.split("-slotted", 1)
-                treatment = "slotted" + treatment
+        if label not in baselines:
+            treatment = documents[label]["treatment"]
             settings = {
-                "variant": variant,
                 "treatment": treatment,
-                "binary": optimizer["binary_paths"].get(treatment),
                 "extractor": optimizer["extractor_path"],
-                "binding_control": controls.get(label),
                 "timeout": args.timeout,
                 "memory_limit_bytes": args.memory_limit_bytes,
                 "dag_timeout": args.dag_timeout,
+                "rewrite_rounds": args.rewrite_rounds,
             }
         status(f"Running LMFAO frontend, logical optimizer and code generation: {label}")
         directory = out / label
-        builds[label] = backend.generate(args.backend, args.data, directory, settings, timeout=args.build_timeout)
+        try:
+            builds[label] = backend.generate(
+                args.backend,
+                args.data,
+                directory,
+                settings,
+                timeout=args.build_timeout,
+                root_policy="paper" if label == "paper" else None,
+            )
+        except RuntimeError as error:
+            if label in baselines:
+                raise
+            optimizer["optimizer"][label]["pipeline_issue"] = str(error)
+            status(f"  {label}: plan unavailable; see {directory / 'generate.log'}")
+            continue
         plan = model.read_plan(directory / "plan.json")
         plan_summaries[label] = {
             "views": len(plan["views"]),
@@ -94,7 +95,7 @@ def run(args: argparse.Namespace) -> None:
             "query_roots": [o["root"] for o in plan["outputs"]],
         }
         (directory / "plan.txt").write_text(plan_text(plan))
-        if label == "original":
+        if label in baselines:
             continue
         plans[label] = json.loads((directory / "extraction.json").read_text())
         plan_summaries[label]["structural_cost"] = plans[label]["estimated_cost"]
@@ -143,7 +144,6 @@ def run(args: argparse.Namespace) -> None:
                 status(f"  {label}: {row['process_seconds']:.3f}s")
     report = {
         **optimizer,
-        "binding_controls": controls,
         "metadata": metadata,
         "plans": plans,
         "plan_summaries": plan_summaries,
@@ -165,13 +165,13 @@ def run(args: argparse.Namespace) -> None:
             "Generation includes the frontend, optimizer subprocess and backend. Identical plans reuse compilation "
             "and execution observations, charged in full. "
             "Original logical optimization is included in its code-generation phase. Independent validation, "
-            "isomorphism checks and tool builds are excluded for both. Separate optimizer-only benchmark "
-            "samples and diagnostic graph exports are excluded; the hook reruns rewriting for the exported workload."
+            "tool builds are excluded for both. Separate optimizer-only benchmark "
+            "samples are excluded; the hook reruns rewriting for the exported workload."
         ),
     }
     write_json(out / "pipeline.json", report)
     (out / "comparison.md").write_text(comparison_markdown(report))
-    print(json.dumps(report, indent=2))
+    print(json.dumps(report, indent=2) if args.format == "json" else comparison_markdown(report), end="\n")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -179,21 +179,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--backend", type=Path, required=True, help="Pinned multifaq executable with optimizer bridge")
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument(
-        "--treatment", choices=TREATMENTS, action="append", help="Repeat to select engines; default both"
-    )
-    parser.add_argument(
-        "--variant",
-        choices=("single-root", "roots", "shared"),
-        action="append",
-        help="Repeat to select variants; default all",
-    )
-    parser.add_argument(
-        "--binding-control",
-        choices=("named", "canonical"),
-        action="append",
-        help="Also extract and execute ordinary-egglog shared plans with literal or canonical binder names",
-    )
+    parser.add_argument("--rewrite-rounds", type=int, default=DEFAULT_ROUNDS, help="Egraph rewrite-round budget")
+    parser.add_argument("--format", choices=("markdown", "json"), default="markdown", help="Final report on stdout")
     parser.add_argument(
         "--rounds", "--samples", dest="samples", type=int, default=5, help="Measured executions, not rewrite rounds"
     )
@@ -206,13 +193,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cxxflags", default=backend.FLAGS)
     parser.add_argument("--cpu", type=int)
     args = parser.parse_args(argv)
-    for name in ("treatment", "variant", "binding_control"):
-        values = getattr(args, name)
-        if values and len(values) != len(set(values)):
-            parser.error(f"duplicate --{name.replace('_', '-')} selection")
     if args.report == Path("-"):
         parser.error("--report requires a filesystem path, not '-'")
-    if min(args.samples, args.timeout, args.build_timeout, args.jobs) < 1:
+    if min(args.samples, args.rewrite_rounds, args.timeout, args.build_timeout, args.jobs) < 1:
         parser.error("rounds, timeouts and jobs must be positive")
     if not math.isfinite(args.dag_timeout) or args.dag_timeout <= 0:
         parser.error("DAG timeout must be finite and positive")

@@ -10,7 +10,7 @@ fn run() -> Result<()> {
         .into_iter()
         .collect();
     let [_, mode, input, destination, timeout] = args.as_slice() else {
-        bail!("usage: lmfao-extract <slotted|off|graph> INPUT PLAN.json DAG_TIMEOUT_SECONDS");
+        bail!("usage: lmfao-extract <slotted|off> INPUT PLAN.json DAG_TIMEOUT_SECONDS");
     };
     let timeout: f64 = timeout
         .to_str()
@@ -44,8 +44,6 @@ fn run() -> Result<()> {
             lmfao_extract::extract_plain(&graph, timeout)?
         };
         (result, rewriting)
-    } else if mode == "graph" {
-        (lmfao_extract::extract_export(&source, timeout)?, 0.0)
     } else {
         bail!("unknown input mode")
     };
