@@ -27,9 +27,16 @@ pub(in crate::slotted) fn lift(
         let proposition = proof.proposition().clone();
         let result = match &proof {
             SlottedProof::Alpha { proof, .. } => {
-                let premise = out.proof(lifted[proof]);
-                let proof = out.alpha(premise, proposition.rhs);
-                out.plain(proof)
+                let view = lifted[proof];
+                let renaming = out.edge(view).renaming.clone();
+                let target = crate::slotted::proofs::terms::rename(
+                    &mut out.term_dag,
+                    &renaming,
+                    proposition.rhs,
+                );
+                let premise = out.proof(view);
+                let proof = out.alpha(premise, target);
+                out.view(proof, proposition.rhs, renaming)
             }
             SlottedProof::Equivariance {
                 proof, renaming, ..

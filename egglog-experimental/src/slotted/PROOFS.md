@@ -96,8 +96,11 @@ rule declaration.
 
 RHS-only slot literals must be fresh for every other binding and the globals
 in scope at the rule declaration. The conclusion is
-`L[σ] = R[σ]`, its reverse, or reflexivity of a subterm of either side. A
-right-hand side using `subst` is unsupported.
+`L[σ] = R[σ]`, its reverse, or reflexivity of a subterm of either side.
+For `(subst body slot replacement)`, a source primitive validator computes
+capture-avoiding substitution on the instantiated terms. It respects the declared
+binder scopes and leaves payloads unchanged. The rule's premises must establish
+its instantiated input terms; substitution does not introduce a new axiom.
 
 **RenamingEq premise.** Holds two ordinary equality proof references,
 `left` and `right`. For `(renaming-= a b)`, they establish `a[σ] = ar` and
@@ -227,9 +230,27 @@ The proof-compatible encoding represents these operations as follows:
   Source-term extraction uses the same cost model and decoder in both modes.
 - *Claims.* Supported equality checks compile to `slotted-prove` over the shared
   query compiler's facts. The command extracts an existence proof, reconstructs
-  the matched source terms, and checks their equality. Other checks use the same
+  one shared substitution for every fact, and checks the instantiated equalities.
+  Constructor-existence facts use reflexivity of the witnessed term.
+  Other checks use the same
   queries without proof extraction. `--slotted-proof-checks` runs this encoding
   with ordinary checks for comparison.
+- *Extraction.* The selected source term is returned together with a checked
+  proof relating it to the input. Certification queries the selected term without
+  inserting it as a source axiom. Extraction's construction of its input is
+  retained in the checking program.
+- *Substitution.* A separate application phase records matched requests. Before
+  ordinary rule heads write results, it uses the native substitution extractor's
+  round snapshot to select representatives. `prove_existing_terms` certifies those
+  exact representatives through the requests' row proofs in one shared batch.
+  Execution decodes the selected inputs, evaluates capture-avoiding substitution,
+  and inserts the result. It retains ordinary extraction proofs, without running
+  source proof reconstruction. When a query requests a proof, slot lifting
+  transports each match to its recorded representatives and applies the source
+  rewrite with the substitution validator. Generated insertions are therefore
+  justified by source rules, never new source axioms. Recorded evidence follows
+  graph cloning and `push`/`pop`. Freezing input evidence before output insertion
+  prevents circular justification.
 
 **Retained programs.** `Compiler::compile_program` returns lowered commands with
 resolved source programs and flattened rewrites. Each proof request captures the
@@ -352,10 +373,11 @@ and [fresh names avoiding source and rule variables](../../tests/snapshots/slott
 They run with `make check` or
 `cargo test -p egglog-experimental --test slotted_proofs demo_proof_snapshots`.
 
-`egglog-experimental --slotted --proofs source.egg` prints a proof for a check
-containing one positive `=` or `renaming-=` fact. Its terms may contain constructors,
-globals, slots, and literal payloads. Checks with term or payload pattern variables,
-multiple facts, negation, or other predicates are checked without printing a proof.
+`egglog-experimental --slotted --proofs source.egg` prints proofs for checks
+containing positive `=`, `renaming-=`, and constructor-existence facts. These may
+use term and payload pattern variables, constructors, globals, and slots. All
+facts in one check share a matched witness. Extraction also prints a checked
+source proof. Negation and other predicates use ordinary checks.
 
 To replay lowered code, use
 `egglog-experimental --slotted-encoded --proofs --slotted-source source.egg encoded.egg`.
@@ -373,9 +395,9 @@ ordinary execution and checks a source proof for every probe. Nested fixtures
 use the no-aliasing matcher. These tests run in the normal workspace suite and
 `make check`; they use committed inputs without Python orchestration or live
 fixture generation.
-Sources using `subst` are ignored because it has no proof translation;
-the CLI refuses them. `--slotted-proof-checks` runs the same encoding with ordinary
-checks for comparison.
+Substitution fixtures participate in the same suite.
+`--slotted-proof-checks` runs the proof-compatible encoding with ordinary checks
+for comparison.
 
 The CLI accepts compiled inputs through egglog's `CliProgram` interface.
 The core crate has no slotted commands, claim types, proof state, or CLI flags.

@@ -79,7 +79,10 @@ impl SlotLifter<'_> {
                     .app(base_row)
                     .and_then(|(_, a)| a.get(*child_index).copied())
                     .unwrap_or(self.egg.get(*child_proof).lhs());
-                bridges.push((old, *child_proof));
+                let child = self.egg.get(*child_proof);
+                if child.lhs() != child.rhs() {
+                    bridges.push((old, *child_proof));
+                }
                 Ok((firing, bridges))
             }
             Justification::Trans(a, b) => self.unwrap_match(*a).or_else(|_| self.unwrap_match(*b)),
@@ -164,6 +167,14 @@ impl SlotLifter<'_> {
             let s = self.out.sym(e);
             expanded.proof = self.trans(s, expanded.proof)?;
             current = new;
+        }
+        if let Term::Var(variable) = self.out.term_dag.get(pattern)
+            && !variable.starts_with('$')
+        {
+            // The apply frame describes the current class. Retaining the
+            // match-time class here would interpret its old slots with the new
+            // frame, losing binder connections after a match is re-keyed.
+            expanded.variables.insert(variable.clone(), current);
         }
         // A flattened atom retains the symmetry selected for this occurrence.
         if let Some(name) = ctx.names.get(path)
@@ -296,6 +307,12 @@ impl SlotLifter<'_> {
             .find(|q| {
                 let pr = self.egg.get(*q);
                 pr.lhs() == cls
+                    && ctx
+                        .names
+                        .get(path)
+                        .and_then(|name| ctx.rows.get(name))
+                        .and_then(Option::as_ref)
+                        .is_none_or(|row| self.matches_row(row, pr.rhs(), ctx.subst))
                     && self.app(pr.rhs()).is_some_and(|(h, args)| {
                         h == ctor
                             && self.columns_match(args, &columns, &kids, path, ctx, &variables)
@@ -396,6 +413,32 @@ impl SlotLifter<'_> {
             variables,
             occurrences,
         })
+    }
+
+    /// Several matched nodes can have identical canonical child classes while
+    /// their edges and binder markers differ. Identify the node by all physical
+    /// columns captured by the compiler, not just its constructor and classes.
+    fn matches_row(
+        &self,
+        expression: &egglog::ast::Expr,
+        term: TermId,
+        bindings: &IndexMap<String, TermId>,
+    ) -> bool {
+        use egglog::ast::Expr;
+        match expression {
+            Expr::Var(_, name) => bindings.get(name).copied() == Some(term),
+            Expr::Lit(_, literal) => {
+                matches!(self.egg().get(term), Term::Lit(value) if value == literal)
+            }
+            Expr::Call(_, head, args) => self.app(term).is_some_and(|(actual, children)| {
+                actual == head
+                    && args.len() == children.len()
+                    && args
+                        .iter()
+                        .zip(children)
+                        .all(|(arg, &child)| self.matches_row(arg, child, bindings))
+            }),
+        }
     }
 
     /// A pattern the flattener reaches through its class rather than by an atom

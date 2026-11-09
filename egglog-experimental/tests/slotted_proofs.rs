@@ -476,15 +476,15 @@ fn quoted_source_payloads_round_trip() {
 }
 
 #[test]
-fn unsupported_substitution_does_not_change_compiler_state() {
+fn malformed_substitution_does_not_change_compiler_state() {
     let mut compiler = compiler(ProofMode::Prove);
     let error = compiler
         .compile(
             None,
-            "(datatype U (V Var) (F U)) (rewrite (F x) (subst x $0 x))",
+            "(datatype U (V Var) (F U)) (rewrite (F x) (subst (F x) $0 x))",
         )
         .unwrap_err();
-    assert!(error.to_string().contains("no proof translation"));
+    assert!(error.to_string().contains("subst"));
     assert!(
         compiler
             .compile(None, "(datatype U (V Var) (F U U))")

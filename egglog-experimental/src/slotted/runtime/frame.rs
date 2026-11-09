@@ -1007,6 +1007,16 @@ impl BaseSort for FrameSort {
 
     #[rustfmt::skip]
     fn register_primitives(&self, eg: &mut EGraph) {
+        // Ground-term certification needs a typed expression for a frame value;
+        // its canonical proof representation remains the JSON literal.
+        let value_validator = |dag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [value] = args else { return None; };
+            let frame = frame_from_term(dag, *value)?;
+            Some(frame_to_term(dag, &frame))
+        };
+        add_primitive_with_validator!(eg, "frame-from-json" = |value: S| -?> Fr {
+            serde_json::from_str::<Frame>(&value).ok().map(Fr::new)
+        }, value_validator);
         // Validators and runtime primitives use the same Frame operations.
         let frame_validator = |termdag: &mut TermDag, _: &[TermId]| -> Option<TermId> {
             Some(frame_to_term(termdag, &Frame::default()))

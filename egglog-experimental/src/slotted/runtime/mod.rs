@@ -10,7 +10,7 @@ mod frame;
 mod group;
 mod primitives;
 pub(crate) mod renaming;
-mod subst;
+pub(in crate::slotted) mod subst;
 pub(crate) mod terms;
 mod types;
 pub(crate) use frame::*;

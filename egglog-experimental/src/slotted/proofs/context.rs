@@ -1,6 +1,7 @@
 //! Native source rules, declaration scopes, and binding semantics for proof checking.
 
 use super::bindings::GlobalNames;
+#[cfg(test)]
 use super::format::{Claim, ClaimKind};
 use super::terms::{FreshSlots, Renaming, slot_of};
 use super::{HashMap, HashSet};
@@ -160,7 +161,19 @@ impl SourceRule {
                 .iter()
                 .map(|(name, &term)| (name.clone(), term)),
         );
-        super::terms::instantiate(dag, term, &bindings)
+        let term = super::terms::instantiate(dag, term, &bindings)?;
+        let (_, rhs) = self.endpoints();
+        if let ResolvedExpr::Call(_, ResolvedCall::Primitive(primitive), _) = rhs
+            && let Term::App(head, args) = dag.get(term).clone()
+            && head == primitive.name()
+        {
+            primitive
+                .validator()
+                .and_then(|validate| validate(dag, &args))
+                .ok_or_else(|| format!("could not validate source operation {head}"))
+        } else {
+            Ok(term)
+        }
     }
 
     /// Variables of a source pattern; global references are not variables.
@@ -173,6 +186,7 @@ impl SourceRule {
 }
 
 impl ProofContext {
+    #[cfg(test)]
     pub(super) fn claim_expr(
         &self,
         dag: &mut TermDag,
@@ -206,6 +220,91 @@ impl ProofContext {
                     .collect::<Result<_, _>>()?;
                 Ok(dag.app(head.clone(), args))
             }
+        }
+    }
+
+    /// Resolve globals and slot names while retaining local query variables.
+    pub(super) fn query_pattern(
+        &self,
+        dag: &mut TermDag,
+        expr: &Expr,
+    ) -> Result<TermId, SourceError> {
+        match expr {
+            Expr::Var(_, name) if !name.starts_with('$') && !self.lets.contains_key(name) => {
+                Ok(dag.var(name.clone()))
+            }
+            Expr::Call(_, head, args) => {
+                let args = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, arg)| {
+                        if matches!(self.constructors[head].columns[i], ColumnKind::Payload(_))
+                            && let Expr::Var(_, name) = arg
+                        {
+                            Ok(dag.var(name.clone()))
+                        } else {
+                            self.query_pattern(dag, arg)
+                        }
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(dag.app(head.clone(), args))
+            }
+            _ => self.ground_term(dag, expr),
+        }
+    }
+
+    pub(super) fn query_variables(&self, expr: &Expr) -> BTreeSet<String> {
+        match expr {
+            Expr::Var(_, name) if !name.starts_with('$') && !self.lets.contains_key(name) => {
+                [name.clone()].into()
+            }
+            Expr::Call(_, head, args) => args
+                .iter()
+                .enumerate()
+                .flat_map(|(i, arg)| {
+                    if matches!(self.constructors[head].columns[i], ColumnKind::Payload(_)) {
+                        arg.vars().collect()
+                    } else {
+                        self.query_variables(arg)
+                    }
+                })
+                .collect(),
+            _ => BTreeSet::new(),
+        }
+    }
+
+    pub(super) fn query_instance(
+        &self,
+        dag: &mut TermDag,
+        expr: &Expr,
+        witnesses: &HashMap<String, TermId>,
+    ) -> Result<TermId, SourceError> {
+        match expr {
+            Expr::Var(_, name) if !name.starts_with('$') && !self.lets.contains_key(name) => {
+                witnesses
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| SourceError(format!("missing query witness {name}")))
+            }
+            Expr::Call(_, head, args) => {
+                let args = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, arg)| {
+                        if matches!(self.constructors[head].columns[i], ColumnKind::Payload(_))
+                            && let Expr::Var(_, name) = arg
+                        {
+                            witnesses.get(name).copied().ok_or_else(|| {
+                                SourceError(format!("missing payload witness {name}"))
+                            })
+                        } else {
+                            self.query_instance(dag, arg, witnesses)
+                        }
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(dag.app(head.clone(), args))
+            }
+            _ => self.ground_term(dag, expr),
         }
     }
 
@@ -322,12 +421,23 @@ impl ProofContext {
     /// Give each binder a name distinct from other binders and free slots,
     /// preserving names that are already distinct.
     pub fn refresh_binders(&self, dag: &mut TermDag, term: TermId) -> TermId {
+        self.refresh_binders_avoiding(dag, term, &BTreeSet::new())
+    }
+
+    pub(super) fn refresh_binders_avoiding(
+        &self,
+        dag: &mut TermDag,
+        term: TermId,
+        avoid: &BTreeSet<i64>,
+    ) -> TermId {
         let mut slots = FreshSlots::new(
             super::terms::all_slots(dag, term)
                 .into_iter()
-                .chain(self.slot_names.values().copied()),
+                .chain(self.slot_names.values().copied())
+                .chain(avoid.iter().copied()),
         );
-        let free = self.free_slots(dag, term);
+        let mut free = self.free_slots(dag, term);
+        free.extend(avoid);
         let mut binders = HashMap::<i64, usize>::default();
         let mut pending = vec![term];
         while let Some(t) = pending.pop() {
