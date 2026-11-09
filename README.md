@@ -576,8 +576,8 @@ Unchanged output keeps its modification time. For another report path, `.jsonl`
 becomes `-grouped.json`; other names gain `-grouped.json`.
 
 Cache reuse is keyed by binary SHA-256, physical input file SHA-256, treatment,
-disequality encoding, and worker thread count. Target source, path, revision, dirty state, labels,
-and display paths are provenance. Time and memory guards are per-attempt limits,
+disequality encoding, and worker thread count. Target source, path, revision,
+dirty state, labels, and display paths are provenance. Time and memory guards are per-attempt limits,
 not cache identities. Allocator startup settings stay fixed with or without a cap.
 
 The shared `select_records` function in `benchmarking/reports/store.py` selects

@@ -89,7 +89,7 @@ def test_parallel_worker_uses_whole_process_metrics_without_serial_phase_summary
 def scaling_data(tmp_path: Path) -> tuple[list[dict[str, Any]], ReportStore]:
     store = ReportStore(tmp_path / "report.jsonl")
     inputs = []
-    modes: tuple[tuple[Treatment, int], ...] = (("off", 1), ("off", 2), ("proof-testing", 1), ("proof-testing", 2))
+    modes: tuple[tuple[Treatment, int], ...] = (("off", 1), ("off", 2), ("proofs", 1), ("proofs", 2))
     for name, means in (
         ("a", (4, 2, 12, 3)),
         ("b", (2, 2, 4, 2)),
@@ -115,7 +115,7 @@ def scaling_data(tmp_path: Path) -> tuple[list[dict[str, Any]], ReportStore]:
                 {
                     "logical_id": name,
                     "label": name,
-                    "family": "fixture",
+                    "family": "eggcc" if name == "a" else "misaal",
                     "file_sha256": name,
                     "binary_sha256": "sha256:bin",
                     "treatment": treatment,
@@ -132,15 +132,21 @@ def test_scaling_uses_each_modes_own_serial_mean_and_one_fixed_cohort(tmp_path: 
     result = figure_results("parallel-scaling", inputs, store.grouped_report(), 2, 12.7062)
     assert result["cohort_n"] == 2
     points = {(p["treatment"], p["threads"]): p for p in result["scaling"]}
-    assert points["off", 1]["speedup"] == points["proof-testing", 1]["speedup"] == 1
+    assert points["off", 1]["speedup"] == points["proofs", 1]["speedup"] == 1
     assert points["off", 2]["speedup"] == 1.5
-    assert points["proof-testing", 2]["speedup"] == 3
+    assert points["proofs", 2]["speedup"] == 3
     assert points["off", 2]["q25"] == 1.25 and points["off", 2]["q75"] == 1.75
     assert all(p["workloads"] == 2 for p in points.values())
     serial = [c for c in result["comparisons"] if c["threads"] == 1]
     assert all(c["metrics"]["runtime"]["ci_low"] == c["metrics"]["runtime"]["ci_high"] == 1 for c in serial)
-    macros, _ = latex_results(result)
-    assert "off-2threads" in macros and "proof-testing-2threads" in macros
+    family_points = {(p["family"], p["treatment"], p["threads"]): p for p in result["family_scaling"]}
+    assert family_points["eggcc", "off", 2]["speedup"] == 2
+    assert family_points["misaal", "off", 2]["speedup"] == 1
+    assert all(p["workloads"] == 1 for p in family_points.values())
+    macros, table = latex_results(result)
+    assert "All projects & Recording & 2 & 1.000 & 3.000" in table
+    assert "Eggcc & Off & 1 & 1.000 & 2.000" in table
+    assert "off-2threads" in macros and "proofs-2threads" in macros
 
 
 def test_scaling_refuses_incomplete_cohort_instead_of_selecting_only_successes(tmp_path: Path) -> None:
@@ -148,6 +154,15 @@ def test_scaling_refuses_incomplete_cohort_instead_of_selecting_only_successes(t
     inputs[1]["selected_row_indices"] = []
     with pytest.raises(ValueError, match="incomplete cohort"):
         figure_results("parallel-scaling", inputs, store.grouped_report(), 2, 12.7062)
+
+
+def test_scaling_catalog_uses_rq2_inputs_and_recording_only() -> None:
+    config = figures.load_config(figures.DEFAULT_CONFIG)
+    catalog = {figure.name: figure for figure in config.figures}
+    scaling = catalog["parallel-scaling"]
+    assert scaling.patterns == catalog["corpus-proof-recording-cdf"].patterns
+    assert scaling.treatments == ("off", "proofs")
+    assert scaling.threads == (1, 2, 4, 8)
 
 
 @pytest.mark.parametrize("threads", [[], [1, 1], [0, 2], [True], [2, 4]])
@@ -161,7 +176,7 @@ def test_scaling_catalog_rejects_ambiguous_or_missing_serial_reference(tmp_path:
                     "parallel-scaling": {
                         "spec": "chart.json",
                         "files": ["*.egg"],
-                        "treatments": ["off", "proof-testing"],
+                        "treatments": ["off", "proofs"],
                         "threads": threads,
                     }
                 },

@@ -200,8 +200,10 @@ def load_config(path: Path) -> FigureConfig:
         for treatment in item["treatments"]:
             for count in threads:
                 validate_threads(treatment, count)
-        if name == "parallel-scaling" and (1 not in threads or item["treatments"] != ["off", "proof-testing"]):
-            raise ValueError("parallel-scaling requires thread count 1 and treatments off, proof-testing")
+        if name == "parallel-scaling" and (
+            1 not in threads or item["treatments"] not in (["off", "proofs"], ["off", "proof-testing"])
+        ):
+            raise ValueError("parallel-scaling requires thread count 1 and off paired with proofs or proof-testing")
         figures.append(
             Figure(
                 name,

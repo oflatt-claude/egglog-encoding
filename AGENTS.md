@@ -138,8 +138,8 @@ or modify the JSONL.
   not relative to comparison targets. Require self-contained files without
   `(include ...)` or `(input ...)`; expand external inputs before benchmarking.
 - Cache identity includes binary SHA-256, physical file SHA-256, treatment,
-  disequality encoding, and thread count. Reuse completed successes independently of time/memory
-  guards. `select_records` centrally retries timeouts only after raising the
+  disequality encoding, and thread count. Reuse completed successes independently
+  of time/memory guards. `select_records` centrally retries timeouts only after raising the
   timeout, and memory-limited outcomes only after raising/removing the memory
   guard. Ordinary failures require force-run. Classify outcomes once at launch;
   readers use status rather than exit codes or diagnostic parsing.
@@ -153,8 +153,8 @@ or modify the JSONL.
   their exact expectations. Complete successful samples bypass cap-specific
   resource deferrals; unsupported configurations remain excluded.
 - The baseline and candidate must have different endpoint cache identities
-  (binary SHA-256, treatment, disequality encoding, and threads). They may use the same
-  binary when treatment, encoding, or thread count differs.
+  (binary SHA-256, treatment, disequality encoding, and threads). They may use
+  the same binary when treatment, encoding, or thread count differs.
 - A request must not contain duplicate file hashes; those
   selectors would address the same cached workload observations twice.
 
@@ -162,7 +162,9 @@ or modify the JSONL.
 
 - `./bench.py figures` collects and renders the seven paper PDFs through the shared
   benchmark phases. `--config` selects a flat JSON catalog with global `rounds`
-  and optional `timeout_sec` override, and direct per-figure `spec`, `files`, `treatments`, optional correctness-only `checks`, and optional `threads` (default `[1]`).
+  and optional `timeout_sec` override. Each figure declares `spec`, `files`,
+  `treatments`, optional correctness-only `checks`, and optional `threads`
+  (default `[1]`).
 - Resource defaults for all entrypoints come from `benchmarking/config.py`.
   The Rust paper parent reads them once through stdlib-only `python3`; execution
   and worker scheduling stay in Rust. The catalog requests ten observations.
@@ -197,8 +199,9 @@ or modify the JSONL.
 - The shared runner owns whole-process wall time and peak RSS for every engine.
   Parallel Egglog uses `--threads` and omits serial phase summaries; thread counts
   must remain distinct in caches, grouped selection, and interactive endpoints.
-  Scaling uses one fixed proofs-off serial cohort (mean >=0.2 s), normalizes each
-  mode to its own serial mean, and plots the median and workload IQR, not a CI.
+  Scaling compares `off` with recording-only `proofs` on the RQ2 corpus. Select
+  one cohort by off's serial mean (>=0.2 s), normalize each mode to its own serial
+  mean, and report medians and workload IQR, not population confidence intervals.
   Native slotted is a workload driver with no self-timing or phase-summary path.
 - Local allocation protection uses the existing allocator/address-space cap only.
   Do not add host-reserve, host-pressure, or RSS-ceiling supervisors. Use

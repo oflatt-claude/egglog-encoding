@@ -49,7 +49,7 @@ const find=(result,name)=>result.marks.filter(m=>m.mark.name===name+'_marks');
 
 test('parallel curves plot the shared exported medians and workload IQR, with a horizontal serial reference',async()=>{
   const spec=JSON.parse(await readFile(new URL(figures['parallel-scaling'].spec,import.meta.url),'utf8'));
-  const points=['off','proof-testing'].flatMap((treatment,i)=>[1,2,4,8].map(threads=>({
+  const points=['off','proofs'].flatMap((treatment,i)=>[1,2,4,8].map(threads=>({
     treatment,threads,workloads:5,speedup:1+(threads-1)/(i+2),
     q25:1+(threads-1)/(i+3),q75:1+(threads-1)/(i+1)
   })));
@@ -63,7 +63,7 @@ test('parallel curves plot the shared exported medians and workload IQR, with a 
   assert.equal(references.length,1);
   assert.equal(references[0].x,0);
   assert.equal(references[0].x2,480);
-  assert.match(result.svg,/Egglog \+ proofs/);
+  assert.match(result.svg,/Egglog \+ proof recording/);
 });
 
 test('serial figures ignore parallel observations from the same cache',async()=>{

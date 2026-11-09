@@ -108,7 +108,7 @@
       ],
       "treatments": [
         "off",
-        "proof-testing"
+        "proofs"
       ],
       "threads": [
         1,

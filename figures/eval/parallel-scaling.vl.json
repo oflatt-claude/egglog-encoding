@@ -1,6 +1,6 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
-  "description": "Median per-workload speedup for egglog and egglog with fully checked proofs. Each mode is normalized to its own one-thread mean. A fixed cohort is selected only by the proofs-off one-thread mean (at least 0.2 seconds). Bands show the workload interquartile range, not confidence intervals. The shared figure-results estimator supplies exactly the exported values.",
+  "description": "Median per-workload speedup for egglog with and without proof recording. Each mode is normalized to its own one-thread mean. Both modes use the same RQ2 baseline-runtime cohort. Bands show the workload interquartile range, not confidence intervals.",
   "data": {
     "url": "../../.reports-grouped.json",
     "format": {
@@ -27,7 +27,7 @@
       ]
     },
     {
-      "calculate": "datum.point.treatment === 'off' ? 'Egglog' : 'Egglog + proofs'",
+      "calculate": "datum.point.treatment === 'off' ? 'Egglog' : datum.point.treatment === 'proofs' ? 'Egglog + proof recording' : 'Egglog + checked proofs'",
       "as": "Mode"
     }
   ],
@@ -50,10 +50,6 @@
       "field": "Mode",
       "type": "nominal",
       "scale": {
-        "domain": [
-          "Egglog",
-          "Egglog + proofs"
-        ],
         "range": [
           "#0072B2",
           "#D55E00"
@@ -107,10 +103,6 @@
         "strokeDash": {
           "field": "Mode",
           "scale": {
-            "domain": [
-              "Egglog",
-              "Egglog + proofs"
-            ],
             "range": [
               [
                 1,

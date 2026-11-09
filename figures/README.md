@@ -46,7 +46,7 @@ before copying it, and remove obsolete artifacts explicitly when needed.
 | `corpus-proof-recording-cdf` | Recording-only proof time and peak-RSS overhead across the same replays; strict correctness coverage retained |
 | `corpus-proofs-cdf` | Full proof recording, extraction and checking time and peak-RSS overhead across the same replays |
 | `slotted-runtime` | Full 44-rule SDQL kernels/phases; aligned runtime/RSS encoding-to-native ratio panels and a table of both metrics |
-| `parallel-scaling` | One plot of ordinary and checked-proof Egglog speedup at 1, 2, 4 and 8 threads; medians and workload IQR |
+| `parallel-scaling` | Ordinary and proof-recording Egglog speedup at 1, 2, 4 and 8 threads; median curves, workload IQR, and a per-project table |
 
 ## Flat configuration and automatic reuse
 
@@ -170,24 +170,24 @@ sample variances, ratios, Fieller calculations, cohort selection and ranking.
 The companion exports use the existing Python report estimators; a shared
 fixture checks numerical parity against executed Vega transforms.
 
-`parallel-scaling` uses the same shared Python estimates for its exported numbers
-and plotted points. For each file and mode, speedup is its one-thread arithmetic
+For `parallel-scaling`, each file's speedup is its one-thread arithmetic
 mean divided by its N-thread arithmetic mean. The lines show medians across files;
 the bands show the 25th–75th percentiles across files (inclusive interpolation),
 not confidence intervals. Both modes use the same cohort, chosen solely by the
 ordinary one-thread mean >= 0.2 seconds, with no upper cutoff. Each mode starts at
 exactly 1x because its serial reference reuses the same observations. All selected
 conditions must be complete; failed parallel runs never silently drop from the
-curves. Per-file means, Fieller speedup intervals and raw observations remain in
-the companion exports. Normalizing each mode separately measures scaling, not
+curves. The TeX table reports median speedups for the full cohort and each project;
+the results JSON retains per-file means, Fieller speedup intervals and observations.
+Normalizing each mode separately measures scaling, not
 absolute proof overhead; a matching curve alone does not imply equal runtimes.
 
-This figure times `off` and full `proof-testing`, including proof recording,
-extraction and checking. It measures whole-process wall time, including startup
-and lowering. Compilation is outside the boundary. Parallel runs omit the serial
-phase-summary flag because search and apply overlap; wall time and RSS use the
-same shared process runner at every thread count. Thread count is part of cache
-identity, so this change requires a fresh schema-versioned report cache.
+The default comparison is `off` versus `proofs`: recording includes congruence
+maintenance and excludes proof extraction and checking. A custom catalog can
+instead pair `off` with `proof-testing`; the legend distinguishes checked proofs.
+Both configurations measure whole-process wall time, including startup and
+lowering, and exclude compilation. Parallel runs have no additive phase summary
+because search and apply overlap.
 
 The default catalog collects the entire saved application corpus with ten
 observations per configuration. A shorter preview can use `--config` with a
