@@ -59,6 +59,8 @@ import EgglogSemantics.Proofs.Closure
 import EgglogSemantics.Proofs.Completion
 import EgglogSemantics.Proofs.Congruence
 import EgglogSemantics.Proofs.Congruence.Atoms
+import EgglogSemantics.Proofs.Congruence.Firing
+import EgglogSemantics.Proofs.Congruence.Fixpoint
 import EgglogSemantics.Proofs.Congruence.Invariant
 import EgglogSemantics.Proofs.Congruence.Maintenance
 import EgglogSemantics.Proofs.Congruence.Properties
