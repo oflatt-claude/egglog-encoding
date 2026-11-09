@@ -25,13 +25,10 @@ source has settled, but they terminate because the related source states keep on
 and build terms of bounded size. -/
 @[blueprint "thm:congruence"
   (title := /-- Congruence pass correctness -/)
-  (statement := /-- Let $P$ be a well-formed program in the source fragment, and let
-  $P\leadsto P'$. Then for each outcome $o\in\{\kw{ok},\kw{error}\}$,
-  \[
-    \langle P',\emptyset\rangle\Downarrow o\iff\langle P,\emptyset\rangle\Downarrow o,
-  \]
-  and $P'$ has a nonterminating execution, a saturation that never settles, if and only
-  if $P$ has one. -/)
+  (statement := /-- Let $P$ be a well-formed program in the source fragment and
+  $P\leadsto P'$. Then $\langle P',\emptyset\rangle\Downarrow o\iff
+  \langle P,\emptyset\rangle\Downarrow o$ for each outcome $o\in\{\kw{ok},\kw{error}\}$,
+  and $P'$ has a nonterminating execution if and only if $P$ has one. -/)
   (proof := /-- By a simulation between the source and the compiled schedules up to the
   meaning of the source state. A source run corresponds to its compiled run followed by the
   rebuild saturation, which terminates and leaves the union-find canonical: every key has
