@@ -26,6 +26,9 @@ relation**: symmetric and transitive, but reflexive only where an equation makes
   \and
   \ir{Cong}{f(s_1,\ldots,s_n)\sim_E f(s_1,\ldots,s_n)\\\forall i.\ s_i\sim_E t_i}
     {f(s_1,\ldots,s_n)\sim_E f(t_1,\ldots,t_n)}
+  \and
+  \operatorname{terms}(E)\triangleq
+    \bigcup_{(s,t)\in E}\bigl(\operatorname{subterms}(s)\cup\operatorname{subterms}(t)\bigr)
   \end{mathpar}
   -/)
   (latexEnv := "paperfragment")]
@@ -48,16 +51,8 @@ inductive CongList (db : Database) : List Term → List Term → Prop where
 
 end
 
-/-- Terms explicitly occurring in the store, including subterms. -/
-@[blueprint "def:stored-terms"
-  (statement := /--
-  \[
-  \operatorname{terms}(E)\triangleq
-    \bigcup_{(s,t)\in E}
-      \bigl(\operatorname{subterms}(s)\cup\operatorname{subterms}(t)\bigr)
-  \]
-  -/)
-  (latexEnv := "paperfragment")]
+/-- Terms explicitly occurring in the store, including subterms. The paper shows
+`terms(E)` beside the congruence rules (`def:congruence`). -/
 def Database.terms (db : Database) : Set Term :=
   {t | ∃ p ∈ db.eqs, t ∈ p.1.subterms ∨ t ∈ p.2.subterms}
 
