@@ -68,7 +68,7 @@ def comparison_markdown(report: dict[str, Any]) -> str:
         "",
         "The original 140-query Favorita covariance workload on the public 2M-Sales-row fragment, using the "
         "same pinned frontend and corrected C++ backend. This replicates the workload and pipeline, not the "
-        "paper's full 127M-row experiment. The paper-root row uses our implementation of its section 3.3 "
+        "paper's full 127M-row experiment. The paper-heuristic control uses our implementation of its section 3.3 "
         "coverage heuristic; it is distinct from the roots shipped in the artifact.",
         "",
         "Both egraph modes use hoisting, independent-loop interchange and tuple fusion on the same nested bag sums. "
@@ -77,7 +77,7 @@ def comparison_markdown(report: dict[str, Any]) -> str:
         "Ordinary egglog uses de Bruijn indices with explicit shift/swap rules. "
         "A resource failure is reported as a failure, never as an execution speedup.",
         "",
-        "Samples lists completed egraph/execution runs; collection stops after a resource failure at unchanged bounds. "
+        "The sample counts show completed egraph and execution runs; collection stops after a resource failure. "
         "Egraph time and peak RSS are medians of separate optimizer processes, including parsing and rewriting "
         "but excluding extraction. Optimization + generation is one measured LMFAO compiler invocation, "
         "including translation, rewriting, DAG extraction and code generation. C++ compilation is separate. "
