@@ -76,8 +76,7 @@ theorem Reach.rounds {S : Schedule} (hS : S.rules ⊆ P.rules) {x y : Database}
 /-! ### Preservation -/
 
 theorem subsumeFree_of_mem (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : r.SubsumeFree :=
-  Rule.subsumeFree_of_monotone
-    (List.all_eq_true.mp (Bool.and_eq_true_iff.mp hP.monotone).1 r hr)
+  Schedule.subsumeFree_of_subsumeFreeB hP.subsumeFree r hr
 
 theorem SrcInv.runRules (hP : P.Fragment) {x : Database} (h : SrcInv P x) {R : List Rule}
     (hR : ∀ r ∈ R, r ∈ P.rules) : SrcInv P (RunRules R x) where
@@ -141,15 +140,18 @@ theorem pattern_names {q : Query} (hq : ∀ fk ∈ q.flatMap Pattern.ctors, fk �
 
 /-- The final check tests no disequality. -/
 theorem check_monotone (hP : P.Fragment) : ∀ p ∈ P.check, p.monotoneB = true :=
-  fun p hp => List.all_eq_true.mp (Bool.and_eq_true_iff.mp hP.monotone).2 p hp
+  List.all_eq_true.mp hP.checkMonotone
 
 /-- The final check takes no minimum. -/
-theorem check_orderingFree (hP : P.Fragment) : ∀ p ∈ P.check, p.OrderingFree := hP.noMin.2
+theorem check_orderingFree (hP : P.Fragment) : ∀ p ∈ P.check, p.OrderingFree :=
+  hP.checkOrderingFree
 
 /-- Every minimum of a rule is over query variables. -/
 theorem rule_minOverVars (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) :
-    (∀ p ∈ r.query, p.MinOverVars) ∧ Actions.MinOverVars r.actions :=
-  Rule.minOverVars_of_orderingFree (hP.noMin.1 r hr)
+    (∀ p ∈ r.query, p.MinOverVars) ∧ Actions.MinOverVars r.actions := by
+  rcases hP.ordering with hO | ⟨_, hM⟩
+  · exact Rule.minOverVars_of_orderingFree (hO r hr)
+  · exact Rule.minOverVars_of_minOverVarsB (List.all_eq_true.mp hM r hr)
 
 /-- Every rule of a fragment program satisfies the round correspondence's conditions. -/
 theorem ruleOk_of_fragment (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : RuleOk r := by

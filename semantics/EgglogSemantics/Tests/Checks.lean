@@ -61,8 +61,30 @@ private def nested : Query := [.eq (.app "F" [atom "A"]) (.app "F" [atom "B"])]
 #guard !(Program.WellFormed ⟨.seq base (global [.expr (.app "F" [.var "x"])]), joined⟩)
 #guard Program.WellFormed ⟨global [.union (.lit (.int 0)) (.lit (.int 1))], []⟩
 #guard !(Program.Fragment ⟨global [.union (.lit (.int 0)) (.lit (.int 1))], []⟩)
--- The check is part of the fragment: a disequality there is outside it.
+-- The check is part of the fragment: a disequality or a minimum there is outside it.
 #guard !(Program.Fragment ⟨base, [.ne (atom "A") (atom "B")]⟩)
+#guard !(Program.Fragment ⟨base,
+  [.expr (.app "F" [.var "x"]), .eq (.var "x") (.min (.var "x") (.var "x"))]⟩)
+-- A rule may test a disequality, under saturation too.
+private def guarded : Rule :=
+  ⟨[.expr (.app "F" [.var "x"]), .expr (.app "G" [.var "y"]), .ne (.var "x") (.var "y")],
+   [.expr (.app "H" [.var "x", .var "y"])]⟩
+#guard Program.Fragment ⟨.seq base (.saturate (.run [guarded])), joined⟩
+#guard !(SourceProof.Fragment ⟨.seq base (.saturate (.run [guarded])), joined⟩)
+-- A rule may take the minimum of query variables when the program has no saturation.
+private def least : Rule :=
+  ⟨[.expr (.app "F" [.var "x"]), .expr (.app "G" [.var "y"])],
+   [.expr (.app "H" [.min (.var "x") (.var "y")])]⟩
+#guard Program.Fragment ⟨.seq base (.run [least]), joined⟩
+#guard !(Program.Fragment ⟨.seq base (.saturate (.run [least])), joined⟩)
+#guard !(SourceProof.Fragment ⟨.seq base (.run [least]), joined⟩)
+-- A minimum over an application is outside the fragment: the compiled head would build it
+-- whether or not it is chosen.
+#guard !(Program.Fragment ⟨.seq base (.run [⟨[.expr (.app "F" [.var "x"])],
+  [.expr (.app "H" [.min (.app "F" [.var "x"]) (.var "x")])]⟩]), joined⟩)
+-- Subsumption stays outside both fragments.
+#guard !(Program.Fragment ⟨.seq base (.run [⟨[.expr (.app "F" [.var "x"])],
+  [.subsume "F" [.var "x"]]⟩]), joined⟩)
 
 -- Query compilation and provenance instrumentation keep the check.
 private def provenancedObservation (p : Program) : Option Bool :=

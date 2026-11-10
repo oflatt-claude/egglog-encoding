@@ -56,7 +56,9 @@ theorem encode_correct_orderingFree (P : Program) (hP : P.Fragment)
 /-- The compiled program's outcomes and divergence agree with the source's. -/
 theorem encode_correct (P : Program) (_hW : P.WellFormed) (hP : P.Fragment) :
     (∀ o : Result, Eval Database.empty (encode P) o ↔ Eval Database.empty P o) ∧
-    (Diverges Database.empty (encode P).schedule ↔ Diverges Database.empty P.schedule) :=
-  encode_correct_orderingFree P hP hP.noMin.1
+    (Diverges Database.empty (encode P).schedule ↔ Diverges Database.empty P.schedule) := by
+  rcases hP.ordering with hO | ⟨hn, _⟩
+  · exact encode_correct_orderingFree P hP hO
+  · exact encode_correct_noSaturate hP hn
 
 end Egglog.Congruence

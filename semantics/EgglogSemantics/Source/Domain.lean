@@ -4,9 +4,10 @@ import EgglogSemantics.Spec.Eval
 /-!
 # The source fragment
 
-Constructor discovery, source scoping, and `Program.Fragment`: the one definition of the
-source programs the congruence pass compiles and the source proof checker accepts. Decided
-by `instDecidableFragment`, so a program is checked by `decide`.
+Constructor discovery, source scoping, and `Program.Fragment`: the definition of the
+source programs the congruence pass compiles. Decided by `instDecidableFragment`, so a
+program is checked by `decide`. The proof checker accepts its monotone, ordering-free part,
+`SourceProof.Fragment`.
 -/
 
 namespace Egglog
@@ -175,10 +176,11 @@ def Rule.unionAppsB (r : Rule) : Bool := r.actions.all Action.unionAppsB
 /-- `Rule.unionAppsB` at every rule a schedule fires. -/
 def Schedule.unionAppsB (S : Schedule) : Bool := S.rules.all Rule.unionAppsB
 
-/-! ### Monotone source programs
+/-! ### Monotone programs
 
-The source fragment excludes disequality and subsumption. Compiled maintenance rules use
-both to replace rows. -/
+The checker's fragment excludes disequality and subsumption; the compiler's excludes
+subsumption, and disequality in the final check. Compiled maintenance rules use both to
+replace rows. -/
 
 /-- No disequality guard. -/
 def Pattern.monotoneB : Pattern → Bool
@@ -308,21 +310,38 @@ def Program.AritiesAgree (P : Program) : Prop :=
 instance (P : Program) : Decidable P.AritiesAgree :=
   inferInstanceAs (Decidable (∀ p ∈ P.ctors, ∀ q ∈ P.ctors, p.1 = q.1 → p.2 = q.2))
 
-/-- **The source fragment**: the programs the congruence pass compiles, the completeness
-theorem is about, and the source proof checker accepts. -/
+/-! ### Saturation -/
+
+instance instDecidableNoSaturate : ∀ S : Schedule, Decidable S.NoSaturate
+  | .run _ => .isTrue trivial
+  | .saturate _ => .isFalse id
+  | .seq S₁ S₂ => @instDecidableAnd _ _ (instDecidableNoSaturate S₁) (instDecidableNoSaturate S₂)
+
+instance (P : Program) : Decidable P.NoSaturate :=
+  inferInstanceAs (Decidable P.schedule.NoSaturate)
+
+/-- **The source fragment**: the programs the congruence pass compiles and its correctness
+theorem is about. The proof checker accepts the monotone, ordering-free part of it
+(`SourceProof.Fragment`). -/
 @[blueprint "def:fragment"
   (title := /-- Supported source fragment -/)
-  (statement := /-- Source programs contain no disequality guard, no subsumption, and no
-  $\min$, and their names avoid the generated \texttt{@} prefix. Expression patterns and
-  build actions are applications. Equality patterns are not pairs of bare literals, and
-  every query variable occurs as an application argument. Head variables are query-bound,
-  and each name has a consistent arity. Finally, either every union is between
-  applications or all head expressions are literal-free. -/)]
+  (statement := /-- Source programs subsume no rows, and their names avoid the generated
+  \texttt{@} prefix. Rules may test disequalities, and they may take the minimum of query
+  variables when the program has no saturation; the final check does neither. -/)]
 structure Program.Fragment (P : Program) : Prop where
-  /-- Source programs only add facts; disequality and subsumption serve compiled rebuilding. -/
-  monotone : P.monotoneB = true
-  /-- The source never computes with `min`: every expression builds. -/
-  noMin : Program.OrderingFree P
+  /-- Source rules subsume no row; subsumption serves compiled rebuilding. -/
+  subsumeFree : P.schedule.subsumeFreeB = true
+  /-- The final check tests no disequality. It reads the compiled state with subsumption
+  forgotten, where a stale edge can bind a variable to a former parent, so two ids may differ
+  although the source values are congruent. -/
+  checkMonotone : P.check.all Pattern.monotoneB = true
+  /-- The final check takes no minimum, for the same reason: a former parent is not the
+  representative a minimum in the source compares. -/
+  checkOrderingFree : ∀ p ∈ P.check, p.OrderingFree
+  /-- Rules take no minimum, or the program has no saturation and every minimum is over
+  query variables. A minimum compares representatives, and the compiled passes after a
+  source fixpoint may still change them. -/
+  ordering : P.schedule.OrderingFree ∨ (P.NoSaturate ∧ P.schedule.minOverVarsB = true)
   /-- Source function and variable names cannot collide with generated names. -/
   noAt : ∀ n ∈ P.names, ¬ "@".isPrefixOf n
   /-- Patterns supply constructor reads and key every variable. Flattening a bare literal
@@ -437,13 +456,16 @@ instance (P : Program) : Decidable P.QueriesEncodable :=
   inferInstanceAs (Decidable (P.schedule.QueryEncodable ∧ P.check.Encodable))
 
 instance instDecidableFragment (P : Program) : Decidable P.Fragment :=
-  decidable_of_iff (P.monotoneB = true ∧ Program.OrderingFree P ∧
+  decidable_of_iff (P.schedule.subsumeFreeB = true ∧ P.check.all Pattern.monotoneB = true ∧
+      (∀ p ∈ P.check, p.OrderingFree) ∧
+      (P.schedule.OrderingFree ∨ (P.NoSaturate ∧ P.schedule.minOverVarsB = true)) ∧
       (∀ n ∈ P.names, ¬ "@".isPrefixOf n) ∧
       P.QueriesEncodable ∧
       (P.schedule.unionAppsB = true ∨ P.schedule.litFreeB = true) ∧
       P.AritiesAgree ∧ P.HeadsScoped)
-    ⟨fun h => ⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2⟩,
-      fun h => ⟨h.monotone, h.noMin, h.noAt, h.queryEncodable, h.noLitUnion, h.aritiesAgree,
-        h.headsScoped⟩⟩
+    ⟨fun h => ⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2.1,
+        h.2.2.2.2.2.2.2.1, h.2.2.2.2.2.2.2.2⟩,
+      fun h => ⟨h.subsumeFree, h.checkMonotone, h.checkOrderingFree, h.ordering, h.noAt,
+        h.queryEncodable, h.noLitUnion, h.aritiesAgree, h.headsScoped⟩⟩
 
 end Egglog
