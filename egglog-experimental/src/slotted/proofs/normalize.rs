@@ -6,7 +6,7 @@ use super::HashMap;
 use super::format::{ProofId, RulePremise, SlottedProof, SlottedProofStore};
 use super::terms::{Renaming, all_slots, rename, slot_of};
 use egglog::Term;
-use egglog::proof::Justification as Step;
+use egglog::proof::{Justification as Step, Proposition};
 
 type Key = (ProofId, Renaming);
 
@@ -35,8 +35,8 @@ impl SlottedProofStore {
             if memo.contains_key(&key) {
                 continue;
             }
-            let proof = self.get(id).clone();
-            let children: Vec<Key> = match &proof {
+            let proof = self.get(id);
+            let children: Vec<Key> = match proof {
                 SlottedProof::Equivariance {
                     proof, renaming, ..
                 } => vec![(*proof, rho.compose(renaming))],
@@ -60,7 +60,7 @@ impl SlottedProofStore {
                 continue;
             }
             let children: Vec<_> = children.iter().map(|k| memo[k]).collect();
-            let result = match proof {
+            let result = match self.get(id).clone() {
                 SlottedProof::Rule(mut proof) => {
                     let normalized = |p| memo[&(p, Renaming::identity())];
                     proof.premises = proof
@@ -129,15 +129,17 @@ impl SlottedProofStore {
             return self.fiat(lhs, rhs);
         }
         let unchanged = (lhs, rhs) == (p.lhs, p.rhs);
-        let slots = all_slots(&self.term_dag, p.lhs)
-            .union(&all_slots(&self.term_dag, p.rhs))
-            .copied()
-            .collect();
         let source = self.add(proof);
         if unchanged {
             source
         } else {
-            self.equivariance(source, rho.restricted(&slots))
+            // The work key already restricts rho to these endpoints. Reuse the
+            // terms computed above instead of traversing both trees again.
+            self.add(SlottedProof::Equivariance {
+                proposition: Proposition::new(lhs, rhs),
+                proof: source,
+                renaming: rho.clone(),
+            })
         }
     }
 
