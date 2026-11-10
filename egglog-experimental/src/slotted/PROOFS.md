@@ -211,8 +211,9 @@ by renaming content, so runtime reads and proof validation agree on each index.
 
 The proof-compatible encoding represents these operations as follows:
 
-- *Shape tables.* `_shape_F` becomes `_shape_class_F (key...) <sort> :merge old`
-  and `_shape_back_F (key...) Renaming :merge old`, both set by the index rule;
+- *Shape tables.* `_shape_F` becomes `_shape_class_F (key... back) <sort> :merge old`
+  and `_shape_back_F (key...) Renaming :merge old`. The class lookup includes the
+  selected back renaming, so rebuilding cannot pair values from different entries.
   `_shapeof_F` becomes `_shapeof_edges_F (...) Renamings :no-merge`, holding
   `[s1 .. sn, back]`, and `_shapeof_syms_F (...) Group :no-merge`.
 - *Shape collisions.* The collision a merge block stated is a rule,
