@@ -33,7 +33,7 @@ pub struct SourceRule {
     pub(in crate::slotted) normal: super::normal_form::NormalRule,
 }
 
-pub(super) trait SourceFact {
+pub(in crate::slotted) trait SourceFact {
     fn terms(&self) -> Vec<&ResolvedExpr>;
     fn binding(&self) -> Option<(&String, &ResolvedExpr)>;
 }
@@ -137,7 +137,7 @@ impl SourceRule {
         (lhs, rhs)
     }
 
-    pub(super) fn conditions(&self) -> &[ResolvedFact] {
+    pub(in crate::slotted) fn conditions(&self) -> &[ResolvedFact] {
         &self.rule.body[1..]
     }
 

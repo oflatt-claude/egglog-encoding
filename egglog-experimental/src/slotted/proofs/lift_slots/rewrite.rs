@@ -287,8 +287,8 @@ impl SlotLifter<'_> {
         let rule_step = self.out.rule(
             Proposition::new(instance_lhs, instance_rhs),
             name.to_string(),
-            sigma_order.clone(),
-            premises.clone(),
+            sigma_order,
+            premises,
             self.program,
         );
         self.note(rule_step);
@@ -302,15 +302,17 @@ impl SlotLifter<'_> {
             let built = self.dec(lhs)?;
             let found = self
                 .find_subterm_like(instance_rhs, built)
-                .or(self.find_subterm_like(instance_lhs, built));
-            if let Some(sub) = found {
-                let refl = self.out.rule(
-                    Proposition::new(sub, sub),
-                    name.to_string(),
-                    sigma_order,
-                    premises,
-                    self.program,
-                );
+                .map(|path| (rule_step, path))
+                .or_else(|| {
+                    self.find_subterm_like(instance_lhs, built)
+                        .map(|path| (root, path))
+                });
+            if let Some((mut refl, path)) = found {
+                // Existence follows directly from the constructed head term.
+                // Keep that occurrence explicit so later passes only replay Proj.
+                for index in path {
+                    refl = self.out.project(refl, index).map_err(|e| e.to_string())?;
+                }
                 let refl = self.note(refl);
                 let reframed = self.align(refl, built)?; // sub = ·built
                 let s = self.out.sym(reframed); // built = ·sub
@@ -574,17 +576,25 @@ impl SlotLifter<'_> {
     }
 
     /// A subterm of `haystack` that is `needle` up to a bijection of slots.
-    fn find_subterm_like(&self, haystack: TermId, needle: TermId) -> Option<TermId> {
-        let mut stack = vec![haystack];
-        while let Some(t) = stack.pop() {
+    fn find_subterm_like(&self, haystack: TermId, needle: TermId) -> Option<Vec<usize>> {
+        let mut stack = vec![(haystack, vec![])];
+        let mut seen = HashSet::default();
+        while let Some((t, path)) = stack.pop() {
+            if !seen.insert(t) {
+                continue;
+            }
             let mut pairs = BTreeMap::new();
             if self.match_slots(t, needle, &mut pairs).is_ok()
                 && Renaming::completing(pairs.into_iter()).is_some()
             {
-                return Some(t);
+                return Some(path);
             }
             if let Term::App(_, kids) = self.out.term_dag.get(t) {
-                stack.extend(kids.iter().copied());
+                stack.extend(kids.iter().enumerate().map(|(i, &kid)| {
+                    let mut path = path.clone();
+                    path.push(i);
+                    (kid, path)
+                }));
             }
         }
         None

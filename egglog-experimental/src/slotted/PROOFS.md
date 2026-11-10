@@ -291,12 +291,19 @@ checking context. Rule steps instantiate auxiliary bindings and expand their
 
 The pass in [`proofs/lift_slots`](proofs/lift_slots) produces proofs over those
 flattened rewrites. A separate pass in [`flatten/unflatten.rs`](flatten/unflatten.rs)
-reconstructs nested terms using the atom equalities, congruence, projection, and
-equivariance. It replaces
-each flattened rule application with an application of the original rewrite,
-reconstructs evidence for the original `:when` facts, and removes generated
-variables from substitutions. The final checker uses only the original source
-program and the resulting ordinary equality proof.
+replays the original rule's constructor traversal, consuming flattened atom and
+global premises in the order that flattening produced them. Join ordering changes
+the encoded match, but leaves this source premise order intact. Congruence expands
+nested patterns; explicit Alpha steps restore their binder scopes. Each firing's
+queues and occurrence proofs are temporary. There is no equality-graph search or
+stored reconstruction recipe.
+
+The pass replaces each flattened application with the original rewrite and its
+original `:when` facts, and removes generated variables from substitutions. Slot
+lifting proves existence of a head-built subterm by projection from the complete
+rule result, preserving that occurrence for later passes. Unflattening preserves
+every input step's exact endpoints, so ordinary equality steps replay directly.
+The final checker uses only the original source program and the resulting proof.
 
 Generated slots come from one supply that reserves all interned source slots, the input terms' slots,
 encoded renaming coordinates, and names introduced during lifting. Negative

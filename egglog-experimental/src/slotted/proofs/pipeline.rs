@@ -220,7 +220,7 @@ impl ProofRequest {
             )
             .map_err(|e| format!("claim {claim}: {e}"))?;
             log::debug!("query lifted {} steps", store.len());
-            let (mut store, proof) = unflatten::lift(store, &program, proof)?;
+            let (mut store, proof) = unflatten::lift(store, &program, &flattened, proof)?;
             log::debug!("query unflattened {} steps", store.len());
             check_claim(&mut store, resolved, &source, proof).map_err(|e| {
                 format!(

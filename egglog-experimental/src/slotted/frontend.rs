@@ -908,13 +908,16 @@ impl Compiler {
             return Err(format!("rewrite root {root:?} is not bound by a pattern"));
         }
         self.global_terms(&mut p, &mut rhs, None);
+        // Proof reconstruction follows the source traversal. Matching may reorder
+        // these atoms for joins, but the flattened source rule keeps their order.
+        let source_atoms = p.atoms.clone();
         self.finish_pattern(&mut p)?;
         let mut flattened = flatten::rewrite(
             &self.state.lang,
             &root,
             &lhs,
             &rhs,
-            &p.atoms,
+            &source_atoms,
             &p.conditions,
             p.proof_names,
         );

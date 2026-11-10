@@ -13,18 +13,20 @@ Proof:
 (let t (Lam $a (F (V $a))))
 (let t_1 (Wrap t))
 (let t_2 (Lam $a (G (V $a))))
+(let prf (Fiat (= t_1 t_1)))
+(let prf_1 (Proj (= t t) prf 0))
 (Claim
   (= t_1 (rename (renaming ($a $b) ($b $a)) (Wrap (Lam $b (G (V $b))))))
   (Congr
     (= t_1 (Wrap t_2))
-    (Fiat (= t_1 t_1))
+    prf
     (Congr
       (= t t_2)
-      (Fiat (= t t))
+      prf_1
       (Rule
         (= (F (V $a)) (G (V $a)))
         (name "f-to-g")
-        (premises (Fiat (= (F (V $a)) (F (V $a)))))
+        (premises (Proj (= (F (V $a)) (F (V $a))) prf_1 1))
         (substitution (x (V $a))))
       1)
     0))
