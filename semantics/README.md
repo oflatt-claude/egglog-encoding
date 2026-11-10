@@ -82,7 +82,7 @@ From the workspace root:
 make check                 # Python and Rust formatting, checks, and tests
 make -C semantics lean-check            # Lean build, proof-hole audit, corpus gates, Rust certificate check
 cargo build --release -p egglog
-make -C semantics lean-difftest          # compare Lean and egglog per-function row counts
+make -C semantics lean-difftest          # compare Lean and egglog row counts and check outcomes
 make -C semantics lean-compiled-difftest # run the compiled programs in egglog and compare e-node censuses
 make -C semantics paper-sync             # regenerate the semantics section of ../extended-egglog-paper
 ```

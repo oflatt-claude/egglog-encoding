@@ -100,6 +100,16 @@ private def provenancedObservation (p : Program) : Option Bool :=
 #guard provenancedObservation ⟨base, joined⟩ == some false
 #guard provenancedObservation ⟨unionPrefix, joined⟩ == some true
 
+-- The check sees live rows only; the observer's compatibility mode, egglog's current
+-- `check`, sees subsumed rows too.
+private def subsumedRow : Program :=
+  ⟨.seq (global [.expr (.app "F" [atom "A"])])
+    (.run [⟨[.expr (.app "F" [.var "x"])], [.subsume "F" [.var "x"]]⟩]),
+   [.expr (.app "F" [atom "A"])]⟩
+#guard observation (observe subsumedRow) == some false
+#guard observation (observe subsumedRow true) == some true
+#guard observation (observe ⟨subsumedRow.schedule, [.expr (.app "F" [.var "x"])]⟩) == some false
+
 -- Parsing keeps the check; a program without one ends in the empty check.
 #guard observation ((Program.ofEgg "(check (Missing))").toOption.bind observe) == some false
 #guard observation ((Program.ofEgg "(Missing)").toOption.bind observe) == some true

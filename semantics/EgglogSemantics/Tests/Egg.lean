@@ -6,8 +6,10 @@ import EgglogSemantics.Source.Names
 # Emitting egglog source
 
 Renders a `Program` as a `.egg` file so that the same program can be run by the Rust
-implementation and the results compared by `DiffTest.lean`. The oracle is `(print-size)`,
-which prints one row count per function — the same quantity `FDatabase.rowCount` computes.
+implementation and the results compared by `DiffTest.lean`. The oracles are `(print-size)`,
+which prints one row count per function — the same quantity `FDatabase.rowCount` computes —
+and egglog's exit status on the final check, asserted with the outcome the interpreter
+predicts for it.
 
 The model is untyped and has no declarations, so the emitter invents a single sort `Math`
 and declares every name at the arity it is applied with: a generated table as a `relation`,
@@ -96,6 +98,12 @@ def Schedule.toEggLines (name : Nat → Option String) (S : Schedule) (leaf k : 
 /-- The final check as egglog source; the empty check is left out. -/
 def Query.checkToEgg (q : Query) : List String :=
   if q.isEmpty then [] else ["(check" ++ String.join (q.map fun p => " " ++ p.toEgg) ++ ")"]
+
+/-- The final check as an egglog command asserting a predicted outcome: `(check …)` when
+the check is predicted to hold and `(fail (check …))` when it is predicted to fail, so that
+egglog's exit status reports a wrong prediction. The empty check is left out. -/
+def Query.checkToEggExpecting (q : Query) (holds : Bool) : List String :=
+  q.checkToEgg.map fun c => if holds then c else "(fail " ++ c ++ ")"
 
 /-! ### Declarations
 
@@ -219,20 +227,20 @@ def Program.censusToEgg (p : Program) : List String × List String :=
   ("(ruleset census)" :: decls ++ rules, ["(run census 1)"])
 
 /-- The program as a complete `.egg` file for the row-count comparison: the schedules, the
-census, then the `(print-size)` the comparison reads. The check is left out, since a
-failing one would stop egglog before it prints. -/
-def Program.toEgg (p : Program) : String :=
+check asserted with the outcome `check` predicts for it, the census, then the `(print-size)`
+the comparison reads. Without a prediction the check is left out, since a failing one would
+stop egglog before it prints. -/
+def Program.toEgg (p : Program) (check : Option Bool := none) : String :=
   let (census, run) := p.censusToEgg
   String.intercalate "\n"
     (p.eggHeader :: p.rulesetDecls ++ p.declsToEgg ++ census ++ p.commandsToEgg (fun _ => none)
-      ++ run ++ ["(print-size)"]) ++ "\n"
+      ++ (check.map p.check.checkToEggExpecting).getD [] ++ run ++ ["(print-size)"]) ++ "\n"
 
-/-- The row counts the interpreter predicts, one `name count` line per function and one
-per census relation, for diffing against egglog's `(print-size)`. The census count is the
-number of distinct parent tuples the census query finds: one per canonical e-node. `STUCK`
-if the program does not run. -/
-def Program.expectedSizes (p : Program) : String :=
-  match exec p with
+/-- The row counts the interpreter predicts from its result of running `p`, one
+`name count` line per function and one per census relation, for diffing against egglog's
+`(print-size)`. The census count is the number of distinct parent tuples the census query
+finds: one per canonical e-node. `STUCK` if the program did not run. -/
+def Program.expectedSizesOf (p : Program) : Option FDatabase → String
   | none => "STUCK\n"
   | some d =>
     let raw := p.fnNames.map fun f => f ++ " " ++ toString (d.rowCount f)
@@ -241,5 +249,8 @@ def Program.expectedSizes (p : Program) : String :=
         (censusParents fa.2).map fun r => r.eval σ
       liveName fa.1 ++ " " ++ toString tuples.dedup.length
     String.intercalate "\n" (raw ++ live) ++ "\n"
+
+/-- `Program.expectedSizesOf` at the interpreter's result. -/
+def Program.expectedSizes (p : Program) : String := p.expectedSizesOf (exec p)
 
 end Egglog
