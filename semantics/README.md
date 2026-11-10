@@ -11,10 +11,10 @@ The language is untyped and has no declarations. A program is a schedule, built 
 runs of rule lists, saturations and sequences nested as in egglog's `run-schedule`, and
 one check, a query like a rule's over the final e-graph, that decides its outcome;
 applying any name to any arguments builds a term, and an initial fact is a run of an
-empty-query rule. A rule's query is a
-conjunction of term patterns, equalities and disequalities, and its actions build terms,
-assert equalities with `union`, and `subsume` rows. egglog's named rulesets are resolved by
-the parser: a run of a ruleset fires the rules registered in it so far.
+empty-query rule. A rule's query is a conjunction of term patterns, equalities and
+disequalities, and its actions build terms, assert equalities with `union`, and `subsume`
+rows. egglog's named rulesets are resolved by the parser: a run of a ruleset fires the
+rules registered in it so far.
 
 A state is an e-graph: a set of equations and a set of subsumed rows. Reflexive equations
 record which terms exist, and congruence is derived over the terms the equations mention.

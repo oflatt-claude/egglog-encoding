@@ -218,8 +218,8 @@ monotone, ordering-free programs (`exec_programStep`) and for union-free program
 subsumption, disequalities and `min` (`exec_programStep_noUnions`). The latter includes
 the compiler's output (`Congruence.exec_encode_programStep`); mixed union-and-subsume
 programs are not covered, and neither are source programs whose rules test a disequality
-or that take a `min`, which the corpus gates still execute. `execRunRules` matches every rule against the
-pre-state, then applies the firings' writes and subsumptions.
+or that take a `min`, which the corpus gates still execute. `execRunRules` matches every
+rule against the pre-state, then applies the firings' writes and subsumptions.
 
 `Congruence.compile` returns the compiled program with one origin per rule, in
 `Program.rules` order. Origins identify a source rule by index, path compression, parent
@@ -310,8 +310,11 @@ proofs.
 The corpus is the curated and generated programs in `DiffTest.lean` together with the
 hand-written `.egg` programs under [`tests/`](tests), which `Program.ofEgg` parses; a
 source `min` is written `ordering-min`, egglog's minimum on an eq-sort, and the difftest
-scripts emit that spelling. The egg gate (`difftest egg`) checks each of those against its
-committed snapshots: the congruence encoding in `<name>.congruence.egg`, the provenance
+scripts emit that spelling. The source difftest (`difftest.sh`) runs each corpus program in
+egglog, comparing its row counts and asserting its final check with the outcome the
+interpreter predicts in egglog's check semantics; on a program that subsumes no rows that
+outcome is the model's as well. The egg gate (`difftest egg`) checks each of those against
+its committed snapshots: the congruence encoding in `<name>.congruence.egg`, the provenance
 encoding in `<name>.provenance.egg`, and, for a program in the checker's fragment, the
 lifted source proofs in `<name>.proofs.txt`.
 `make -C semantics lean-update-egg-snapshots` rewrites them after an intended change. A program that
