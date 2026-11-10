@@ -202,7 +202,7 @@ impl ProofRequest {
                     .query_instance(&mut dag, &claim.rhs, &witnesses)
                     .map_err(|e| format!("claim {claim}: {e}"))?,
             };
-            log::debug!(
+            log::trace!(
                 "egglog proof of claim {claim}:\n{}",
                 egg.proof_to_string(root)
             );
