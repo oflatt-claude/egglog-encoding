@@ -348,8 +348,7 @@ The [paper figures](figures/README.md) use the checked-in
 Run `./bench.py figures` from this checkout to build the required release engines,
 reuse compatible observations, collect missing runs, and render all seven paper
 figures and the LMFAO table into the ignored `figures/output/eval/` folder.
-Each figure has seven
-companions: PDF, SVG, PNG, bound specification, results JSON, numeric TeX macros,
+Each figure has seven companions: PDF, SVG, PNG, bound specification, results JSON, numeric TeX macros,
 and a TeX table. See the [output guide](figures/README.md) for the LMFAO files.
 Setup requires the Python environment above, the
 pinned Rust toolchain, and Node.js/npm (`npx`); renderer packages are pinned in

@@ -218,9 +218,8 @@ uv run --locked python -m benchmarking.lmfao.program \
 The check is appended after rewriting and asserts no new equalities. One batch
 claim avoids copying the proof context for each query. The run repeats rewriting
 with proofs enabled, reconstructs a source proof, checks it, simplifies it, and
-checks it again before formatting the result. A successful source check followed
-by an incomplete simplification is partial progress, not a completed replay
-timing. DAG extraction and C++ compilation are measured separately.
+checks it again before formatting the result. A completed replay includes both
+checks and formatting. DAG extraction and C++ compilation are measured separately.
 
 These proofs cover logical query transformations. Backend code generation and
 physical sharing are checked separately by executing every output against

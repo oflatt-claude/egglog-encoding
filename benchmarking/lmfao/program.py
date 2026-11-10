@@ -440,7 +440,7 @@ def plan_checks(plan: dict[str, Any], queries: list[model.Query] | None = None) 
 
 
 def benchmark_input(mode: str, directory: Path, rounds: int = DEFAULT_ROUNDS) -> Path:
-    """Use the frozen paper input; explicitly different budgets are experiments."""
+    """Return the checked-in input at the default budget; write a generated input otherwise."""
     if rounds == DEFAULT_ROUNDS:
         return INPUTS / f"{mode}.egg"
     directory.mkdir(parents=True, exist_ok=True)
