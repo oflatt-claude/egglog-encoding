@@ -70,13 +70,15 @@ private def missingPremise : Program :=
 #guard Relational.patternHolds (FDatabase.empty.addTerm (term "A"))
   (.eq (.var "x") (.var "x")) [("x", term "A")]
 #guard (Relational.matchQuery FDatabase.empty [.eq (.var "x") (.var "x")]).isEmpty
--- A disequality needs both sides held and distinct, and a subsumed row is not held for a
--- query but is for a check.
+-- A disequality needs both sides held and distinct, and a subsumed row is held neither for
+-- a query nor for the check.
 #guard !Relational.patternHolds (FDatabase.empty.addTerm (term "A"))
   (.ne (atom "A") (atom "B")) []
 #guard !Relational.patternHolds ((FDatabase.empty.addTerm (term "A")).subsume (term "B"))
   (.ne (atom "A") (atom "B")) []
-#guard Relational.holds ((FDatabase.empty.addTerm (term "A")).subsume (term "B"))
+#guard !Relational.holds ((FDatabase.empty.addTerm (term "A")).subsume (term "B"))
+  [.ne (atom "A") (atom "B")]
+#guard Relational.holds ((FDatabase.empty.addTerm (term "A")).addTerm (term "B"))
   [.ne (atom "A") (atom "B")]
 #guard Relational.patternHolds ((FDatabase.empty.addTerm (term "A")).addTerm (term "B"))
   (.ne (.var "x") (.var "y")) [("x", term "A"), ("y", term "B")]

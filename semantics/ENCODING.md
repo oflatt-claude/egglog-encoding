@@ -41,9 +41,11 @@ rules may test disequalities.
 - A saturation repeats its schedule until a pass changes neither congruence nor the live
   terms (`Database.SameMeaning`). Subsuming a live row is a change, as egglog's
   `saturate` counts a subsume-flag change.
-- The final check sees subsumed rows, as egglog's `check` does (`check_facts` queries
-  with `include_subsumed`), so `Eval` runs it against the final e-graph with subsumption
-  forgotten (`Database.forgetSubsumed`). Rule queries never see them.
+- The final check is an ordinary query over the live rows of the reached e-graph, with the
+  semantics of a rule query (`Eval`). egglog's `check` currently also sees subsumed rows
+  (`check_facts` queries with `include_subsumed`); the model diverges from it deliberately,
+  and the reference interpreter's `observe` has a `checkIncludesSubsumed` mode that
+  reproduces egglog's behaviour for differential testing.
 - A query variable is bound to a representative: the stored spelling of its class that is
   least in the term order (`Database.reps`, `ValidEnv`). This is egglog's one binding per
   e-class. Binding every stored spelling instead makes saturations diverge where egglog

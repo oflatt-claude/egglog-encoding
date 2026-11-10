@@ -4,11 +4,10 @@ import EgglogSemantics.Proofs.Congruence.Atoms
 
 /-! Soundness of the compiled queries: whenever the atoms of a flattened source pattern
 match in a reading of the compiled state, the source pattern matches, with its ids
-congruent to the source values. The reading is any database whose live edges and live
-applications are sound for the source: the compiled state itself, and the compiled state
-with subsumption forgotten, which the final check sees. A disequality needs the reading to
-be canonical as well, so that two ids differ only when their source values are not
-congruent. -/
+congruent to the source values. The reading is a database whose live edges and live
+applications are sound for the source (`Reads`), which the compiled state is (`Rel.reads`).
+A disequality needs the reading to be canonical as well, so that two ids differ only when
+their source values are not congruent. -/
 
 namespace Egglog.Congruence
 
@@ -25,29 +24,6 @@ theorem Rel.reads {src d : Database} (h : Rel src d) : Reads src d where
     h.key_mem_src (h.parent_of_edge he)⟩
   app := fun _ _ hf hl => (h.app_live_iff hf).mp hl
   lit := fun _ hl => h.lit_live_iff.mp hl
-
-/-- With subsumption forgotten every row is live; rows are still sound. -/
-theorem Rel.reads_forget {src d : Database} (h : Rel src d) : Reads src d.forgetSubsumed where
-  diag := h.diag.forgetSubsumed
-  edge := by
-    intro k p he
-    have hmem : ufRowT k p ∈ d.terms := by
-      have : ufRowT k p ∈ d.forgetSubsumed.live := he
-      rw [Database.live_forgetSubsumed] at this
-      exact ((Cong.iff_eq_and_mem_of_diag h.diag).mp this).2
-    have hr : Row d k p := (uf_mem_terms_iff h.ufOnly h.endsFree).mp hmem
-    exact ⟨h.row_cong hr, h.key_mem_src hr.mem_keys, h.key_mem_src (h.parent_mem_keys hr)⟩
-  app := by
-    intro f ts hf hl
-    rw [Database.live_forgetSubsumed] at hl
-    exact h.app_mem_src_of_mem_terms hf ((Cong.iff_eq_and_mem_of_diag h.diag).mp hl).2
-  lit := by
-    intro l hl
-    rw [Database.live_forgetSubsumed] at hl
-    have hmem := ((Cong.iff_eq_and_mem_of_diag h.diag).mp hl).2
-    rcases h.mem_terms_iff.mp hmem with ⟨_, _, _, heq⟩ | ht
-    · cases heq
-    · exact ht
 
 theorem evalList_of_forall₂ {σ : Env} : ∀ {es : List Expr} {ts : List Term},
     List.Forall₂ (fun e t => e.eval σ = some t) es ts → Expr.evalList es σ = some ts

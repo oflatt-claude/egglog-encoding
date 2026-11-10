@@ -98,8 +98,8 @@ private def provenancedObservation (p : Program) : Option Bool :=
 #guard observation ((Program.ofEgg "(Missing)").toOption.bind observe) == some true
 
 -- The check decides the outcome and nothing else: a failed check still ran the schedule,
--- and the check reads the final state with subsumption forgotten.
+-- and the check reads the final state as a rule query does.
 example {db d : Database} {P : Program} (hs : Reach db P.schedule d)
-    (h : ¬ QueryHolds d.forgetSubsumed P.check) : Eval db P .checkFailed := .checkFailed hs h
+    (h : ¬ QueryHolds d P.check) : Eval db P .checkFailed := .checkFailed hs h
 
 end Egglog.Tests.Checks

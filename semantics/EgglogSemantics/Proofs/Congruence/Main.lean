@@ -24,10 +24,9 @@ theorem encode_correct_orderingFree (P : Program) (hP : P.Fragment)
   -- A finite source result and a finite compiled result with related final states agree on
   -- the check.
   have hcheck : ∀ {e d : Database}, SrcInv P e → RelC P e d →
-      (QueryHolds e.forgetSubsumed P.check ↔ QueryHolds d.forgetSubsumed (encode P).check) := by
+      (QueryHolds e P.check ↔ QueryHolds d (encode P).check) := by
     intro e d he ⟨x, hx, hm, hd, hc⟩
-    rw [encode_check, Database.forgetSubsumed_eq_self he.subsumed]
-    rw [← check_corr hP hx hd hc]
+    rw [encode_check, ← check_corr hP hx hd hc]
     exact SourceMeaning.queryHolds_iff he.wf hx.wf hm he.hasReps hx.hasReps
       (check_orderingFree hP)
   refine ⟨fun o => ?_, ?_⟩

@@ -71,9 +71,9 @@ theorem encode_correct_noSaturate (hP : P.Fragment) (hn : P.NoSaturate) :
   have hS : P.schedule.rules ⊆ P.rules := fun _ hr => hr
   -- Related final states agree on the check.
   have hcheck : ∀ {e d : Database}, SrcInv P e → Rel e d → Canon d →
-      (QueryHolds e.forgetSubsumed P.check ↔ QueryHolds d.forgetSubsumed (encode P).check) := by
+      (QueryHolds e P.check ↔ QueryHolds d (encode P).check) := by
     intro e d he hd hc
-    rw [encode_check, Database.forgetSubsumed_eq_self he.subsumed]
+    rw [encode_check]
     exact check_corr hP he hd hc
   refine ⟨fun o => ?_, ?_⟩
   · cases o with
