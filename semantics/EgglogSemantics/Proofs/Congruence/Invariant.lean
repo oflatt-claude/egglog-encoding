@@ -359,4 +359,45 @@ theorem edge_iff_rep (hw : src.WF) {k p : Term} (hk : k ∈ Keys d) :
 
 end Rel
 
+/-! ### The empty states -/
+
+/-- Nothing is congruent in a state without equations. -/
+theorem cong_empty_eqs {d : Database} (hd : d.eqs = ∅) {a b : Term} (h : Cong d a b) : False := by
+  induction h using Cong.rec (motive_2 := fun _ _ _ => True) with
+  | direct hp => rw [hd] at hp; exact hp
+  | child _ _ ih => exact ih
+  | symm _ ih => exact ih
+  | trans _ _ ih _ => exact ih
+  | congr _ _ ih _ => exact ih
+  | nil => trivial
+  | cons => trivial
+
+theorem keys_empty : Keys Database.empty = ∅ := by
+  ext k
+  constructor
+  · rintro ⟨p, hp⟩
+    exact hp
+  · intro h
+    exact h.elim
+
+/-- The empty states are related. -/
+theorem rel_empty : Rel Database.empty Database.empty where
+  diag := fun _ hq => hq.elim
+  ufOnly := fun _ hq => hq.elim
+  finite := Set.finite_empty
+  marks := fun _ ht => ht.elim
+  down := fun _ _ hr => hr.elim
+  selfLoop := fun _ _ hr => hr.elim
+  keys := by rw [keys_empty, Database.empty_terms]
+  avoids := by intro t ht; rw [Database.empty_terms] at ht; exact ht.elim
+  cong := fun a b => ⟨fun h => (cong_empty_eqs rfl h).elim, fun h => (cong_empty_eqs rfl h).elim⟩
+  liveCong := fun _ _ hr => hr.elim
+  srcSubsumed := rfl
+
+/-- The empty state is canonical. -/
+theorem canon_empty : Canon Database.empty where
+  unique := fun _ _ _ he _ => (cong_empty_eqs rfl he.1).elim
+  root := fun _ _ he => (cong_empty_eqs rfl he.1).elim
+  congr := fun _ _ _ _ _ _ _ _ _ _ he _ => (cong_empty_eqs rfl he.1).elim
+
 end Egglog.Congruence
