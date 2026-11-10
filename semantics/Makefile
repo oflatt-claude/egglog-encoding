@@ -8,6 +8,8 @@ LEAN_BIN := $(abspath $(if $(filter /%,$(LEAN_BIN_DIR)),$(LEAN_BIN_DIR),../$(LEA
 export PATH := $(LEAN_BIN):$(PATH)
 CERTIFICATES := $(abspath $(if $(filter /%,$(LEAN_CERTIFICATES)),$(LEAN_CERTIFICATES),../$(LEAN_CERTIFICATES)))
 LAKE ?= $(LEAN_BIN)/lake
+# The checkout of the paper that paper-sync writes into.
+PAPER_DIR ?= $(abspath ../../extended-egglog-paper)
 
 PAPER_MODULES := \
   ExtlogTheorems \
@@ -73,9 +75,9 @@ paper-check: paper-extract
 	latexmk -pdf -Werror -halt-on-error -interaction=nonstopmode -outdir=../paper/build ../paper/semantics.tex
 	@! grep -n '^Overfull' ../paper/build/semantics.log || { echo "paper-check: overfull boxes in ../paper/build/semantics.log"; exit 1; }
 
-# Write the semantics blocks and the worked examples into ../../extended-egglog-paper/generated.
+# Write the semantics blocks and the worked examples into $(PAPER_DIR)/generated.
 paper-sync: paper-extract
-	python3 paper_sync.py --no-extract
+	python3 paper_sync.py --no-extract --paper-dir "$(PAPER_DIR)"
 
 paper-extract:
 	$(LAKE) build ExtlogTheorems $(addsuffix :blueprint,$(PAPER_MODULES))
