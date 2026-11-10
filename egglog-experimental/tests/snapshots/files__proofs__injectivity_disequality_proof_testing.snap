@@ -1,0 +1,76 @@
+---
+source: egglog-experimental/tests/files.rs
+expression: snapshot
+---
+(
+(let t (@disequality-ne-Term (Num 1) (Num 2)))
+(Rule
+  (= t t)
+  (name "@injectivity-Num")
+  (premises
+    (Fiat (= (Num 1) (Num 1)))
+    (Fiat (= (Num 2) (Num 2)))
+    (Fiat (= () ())))
+  (substitution
+    (@injectivity-left (Num 1))
+    (@injectivity-input 1)
+    (@injectivity-right (Num 2))
+    (@injectivity-other 2)))
+)
+(
+(let t (@disequality-ne-Term (Pair (A) (C)) (Pair (B) (C))))
+(Rule
+  (= t t)
+  (name "@injectivity-Pair_1")
+  (premises
+    (Fiat (= (Pair (A) (C)) (Pair (A) (C))))
+    (Fiat (= (Pair (B) (C)) (Pair (B) (C))))
+    (Fiat (= (@disequality-ne-Term (A) (B)) (@disequality-ne-Term (A) (B)))))
+  (substitution
+    (@injectivity-left_1 (Pair (A) (C)))
+    (@injectivity-input_1 (A))
+    (@injectivity-input_2 (C))
+    (@injectivity-right_1 (Pair (B) (C)))
+    (@injectivity-other_1 (B))))
+)
+(
+(let t (@disequality-ne-Term (Pair (C) (A)) (Pair (C) (B))))
+(Rule
+  (= t t)
+  (name "@injectivity-Pair_3")
+  (premises
+    (Fiat (= (Pair (C) (A)) (Pair (C) (A))))
+    (Fiat (= (Pair (C) (B)) (Pair (C) (B))))
+    (Fiat (= (@disequality-ne-Term (A) (B)) (@disequality-ne-Term (A) (B)))))
+  (substitution
+    (@injectivity-left_1 (Pair (C) (A)))
+    (@injectivity-input_1 (C))
+    (@injectivity-input_2 (A))
+    (@injectivity-right_1 (Pair (C) (B)))
+    (@injectivity-other_1 (B))))
+)
+(
+(Sym
+  (= (C) (D))
+  (Rule
+    (= (D) (C))
+    (name "@injectivity-Wrap")
+    (premises (Fiat (= (Wrap (C)) (Wrap (D)))) (Fiat (= (Wrap (C)) (Wrap (C)))))
+    (substitution
+      (@injectivity-left_2 (Wrap (C)))
+      (@injectivity-input_3 (D))
+      (@injectivity-other_2 (C)))))
+)
+(
+(let t (@disequality-ne-Term (Wrap (C)) (Wrap (D))))
+(Rule
+  (= (@disequality-contradiction) (@disequality-contradiction))
+  (name "@disequality-self-Term")
+  (premises
+    (Congr
+      (= t (@disequality-ne-Term (Wrap (C)) (Wrap (C))))
+      (Fiat (= t t))
+      (Sym (= (Wrap (D)) (Wrap (C))) (Fiat (= (Wrap (C)) (Wrap (D)))))
+      1))
+  (substitution (@disequality-left (Wrap (C)))))
+)

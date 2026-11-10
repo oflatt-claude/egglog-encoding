@@ -35,7 +35,7 @@ def source_program(native: str, equalities: int = 100_000, disequalities: int = 
         lhs, rhs = (re.sub(r"\b([1-5])\b", r"(N\1)", term) for term in pair)
         command = "union" if index < 2 * equalities else "disequal"
         lines.append(f"({command} {lhs} {rhs})")
-    return "\n".join(lines) + "\n(check-contradiction)\n"
+    return "\n".join(lines) + "\n(check (contradiction))\n"
 
 
 def main() -> None:

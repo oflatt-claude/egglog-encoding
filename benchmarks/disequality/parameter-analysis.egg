@@ -110009,4 +110009,4 @@
 (disequal (f (g (g (N3) (N2)) (g (N5) (N5)))) (g (g (f (N3)) (f (N5))) (f (f (N3)))))
 (disequal (h (g (h (N2) (N1) (N1)) (h (N3) (N2) (N3))) (f (g (N1) (N1))) (f (g (N5) (N5)))) (g (g (h (N1) (N1) (N5)) (f (N5))) (f (f (N4)))))
 (disequal (g (f (f (N5))) (h (g (N1) (N5)) (f (N4)) (f (N4)))) (f (f (g (N2) (N4)))))
-(check-contradiction)
+(check (contradiction))

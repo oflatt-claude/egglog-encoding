@@ -1,9 +1,9 @@
 ; Saturation propagates equality through successive layers of the same constructor.
-(datatype Term (Leaf String) (Wrap Term :injective))
+(datatype Term (Leaf String) (Wrap Term))
+(separately-injective Wrap)
 (let a (Leaf "a"))
 (let b (Leaf "b"))
 (union (Wrap (Wrap (Wrap a))) (Wrap (Wrap (Wrap b))))
-(run-schedule (saturate injectivity))
 (check (= a b))
 
 ; Other constructors remain ordinary, and injectivity does not imply disjointness.
@@ -11,8 +11,6 @@
 (let c (Leaf "c"))
 (let d (Leaf "d"))
 (union (Other c) (Other d))
-(run-schedule (saturate injectivity))
 (fail (check (= c d)))
 (union (Wrap c) (Other d))
-(run-schedule (saturate injectivity))
 (fail (check (= c d)))

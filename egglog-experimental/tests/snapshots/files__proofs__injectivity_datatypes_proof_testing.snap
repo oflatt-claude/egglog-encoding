@@ -3,22 +3,29 @@ source: egglog-experimental/tests/files.rs
 expression: snapshot
 ---
 (
-(let t (Return (Leaf "b") 0))
-(let t_1 (Return (Leaf "a") 0))
+(let t (Return (Leaf "a") 0))
+(let t_1 (Return (Leaf "b") 0))
+(let t_2 (Block t))
 (Sym
   (= (Leaf "a") (Leaf "b"))
   (Rule
     (= (Leaf "b") (Leaf "a"))
     (name "@injectivity-Return")
     (premises
-      (Rule
+      (Sym
         (= t t_1)
-        (name "@injectivity-Block")
-        (premises (Fiat (= (Block t_1) (Block t))))
-        (substitution (@injectivity-left t_1) (@injectivity-right t))))
+        (Rule
+          (= t_1 t)
+          (name "@injectivity-Block")
+          (premises (Fiat (= t_2 t_2)) (Fiat (= t_2 (Block t_1))))
+          (substitution
+            (@injectivity-left t_2)
+            (@injectivity-input t)
+            (@injectivity-other t_1))))
+      (Fiat (= t t)))
     (substitution
-      (@injectivity-left_1 (Leaf "b"))
-      (@injectivity-left_2 0)
-      (@injectivity-right_1 (Leaf "a"))
-      (@injectivity-right_2 0))))
+      (@injectivity-left_1 t)
+      (@injectivity-input_1 (Leaf "b"))
+      (@injectivity-input_2 0)
+      (@injectivity-other_1 (Leaf "a")))))
 )

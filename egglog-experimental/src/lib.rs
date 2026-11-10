@@ -35,18 +35,20 @@
 //!   portion of the constructor sub-e-graph reachable from `root` with each key
 //!   e-class replaced by its mapped value.
 //!
-//! Mark a constructor or datatype variant with `:injective` to infer equality
-//! of its arguments from equality of its results. Run the shared `injectivity`
-//! ruleset explicitly with `(run-schedule (saturate injectivity))`. Equality-sort
-//! arguments are unioned; unequal primitive arguments panic. Container arguments
-//! are rejected. These rules also support term encoding and proof testing.
+//! `(disequal a b)` asserts positive disequality evidence. Root query patterns
+//! `(known-disequal a b)` and `(contradiction)` read inferred evidence and detect
+//! inconsistent constraints. Operands must have the same unionable equality sort.
+//! `(separately-injective F)` marks an existing ordinary constructor: equality
+//! cancellation and upward disequality propagation each require all other inputs
+//! to agree. Native primitive differences can establish evidence or contradiction;
+//! containers and nonunionable equality sorts cannot be marked. No output
+//! disequality propagates downward, and different constructors imply no disjointness.
 //!
-//! `(known-disequal? left right)` reads known disequality without storing derived
-//! pairs. For marked constructors, it follows explicit equality-sort argument
-//! disequalities and native primitive differences forward at any arity, and
-//! result disequalities backward at unary constructors. Both operands must have
-//! the same equality sort. Use `:naive` in rules with this read predicate. The
-//! query currently supports ordinary execution only, without term/proof encoding.
+//! The pass saturates private supporting rules after each user run and before
+//! observations of pending top-level actions. User run budgets and pre-step until
+//! checks are preserved. Queries are whole facts, rather than nested expressions
+//! or actions. Ordinary execution, term encoding, and proof testing are supported;
+//! the separate slotted source frontend does not yet accept these constructs.
 //!
 //! ## Generic containers and callbacks
 //!
@@ -128,7 +130,6 @@ mod type_constraints;
 pub use subst::Subst;
 mod greedy_dag_extract;
 mod secondary_map;
-pub use disequality::DisequalityEncoding;
 pub use greedy_dag_extract::{extract_best_greedy_dag, extract_variants_greedy_dag};
 
 mod set_cost;
@@ -163,23 +164,20 @@ pub use effsafe_extract::{
 
 /// Create an e-graph with all experimental extensions registered.
 pub fn new_experimental_egraph() -> EGraph {
-    new_experimental_egraph_with_options(true, DisequalityEncoding::default())
+    new_experimental_egraph_with_options(true)
 }
 
 /// Register extensions with core schedules so term/proof lowering can process them.
 pub fn new_experimental_egraph_for_proofs() -> EGraph {
-    new_experimental_egraph_with_options(false, DisequalityEncoding::default())
+    new_experimental_egraph_with_options(false)
 }
 
-/// Construct a graph with the selected disequality encoding. Disable the extended
+/// Construct an experimental graph. Disable the extended
 /// schedule interpreter when enabling term/proof encoding, which lowers schedules.
-pub fn new_experimental_egraph_with_options(
-    extended_run_schedule: bool,
-    disequality_encoding: DisequalityEncoding,
-) -> EGraph {
+pub fn new_experimental_egraph_with_options(extended_run_schedule: bool) -> EGraph {
     let mut egraph = EGraph::default();
     add_experimental_extensions(&mut egraph, extended_run_schedule);
-    disequality::add_disequality_support(&mut egraph, disequality_encoding);
+    disequality::add_disequality_support(&mut egraph);
     egraph
 }
 
@@ -207,7 +205,6 @@ fn add_experimental_extensions(egraph: &mut EGraph, extended_run_schedule: bool)
 
     // Support for set cost
     add_set_cost(egraph);
-    injectivity::add_injectivity_support(egraph);
     egraph.add_read_primitive(GetSizePrimitive, None);
     maybe::add_maybe(egraph);
     egraph.add_read_primitive(GetNodeSizePrimitive, None);
