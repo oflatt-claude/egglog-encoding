@@ -32,40 +32,11 @@ impl SlotLifter<'_> {
             .unwrap_or_default()
     }
 
-    /// Which side of a row proof's proposition a consumer reads.
-    fn row_side(&self, proof: ProofId, rhs: bool) -> TermId {
-        let p = self.egg.get(proof);
-        if rhs { p.rhs() } else { p.lhs() }
-    }
-
     /// The equality denoted by one side of a row proof's proposition. A row proof
     /// may relate a row to its re-keyed form, or state a row reflexively through
     /// a composition; the consumer wants the equality of the row as it reads it.
     pub(super) fn row_eq(&mut self, id: ProofId, rhs_side: bool) -> LiftResult<ViewId> {
         let proof = self.egg.get(id).clone();
-        let (lhs, rhs) = (proof.lhs(), proof.rhs());
-        if lhs == rhs {
-            // a reflexive row: its own justification says how it holds
-            return match proof.justification() {
-                Justification::Trans(a, b) => {
-                    let (a, b) = (*a, *b);
-                    match self.egg.get(a).justification() {
-                        Justification::Sym(x) => {
-                            let x = *x;
-                            let want = self.row_side(x, false) == lhs;
-                            self.row_eq(x, !want)
-                        }
-                        _ => self.row_eq(a, true),
-                    }
-                    .or_else(|_| self.row_eq(b, true))
-                }
-                Justification::Sym(x) => {
-                    let x = *x;
-                    self.row_eq(x, false)
-                }
-                _ => self.eq_direct(id),
-            };
-        }
         match proof.justification() {
             Justification::Sym(x) => {
                 let x = *x;
@@ -241,19 +212,16 @@ impl SlotLifter<'_> {
                 variables.insert(v.clone(), cls);
             }
             let t = self.dec(cls)?;
-            let proof = self.reflexive(t).or_else(|error| {
-                // A variable can name a term constructed by an earlier rewrite.
-                // Replay its direct match witness before asking for reflexivity.
-                let witness = ctx.prems.iter().copied().find(|&id| {
-                    let proof = self.egg.get(id);
-                    proof.lhs() == cls || proof.rhs() == cls
-                });
-                let Some(witness) = witness else {
-                    return Err(error);
-                };
-                self.eq(witness)?;
-                self.reflexive(t)
-            })?;
+            let witness = ctx.prems.iter().copied().find(|&id| {
+                let proof = self.egg.get(id);
+                proof.lhs() == cls || proof.rhs() == cls
+            });
+            let proof = if let Some(witness) = witness {
+                let proof = self.eq(witness)?;
+                self.orient(proof, cls, cls)?
+            } else {
+                self.reflexive(t)?
+            };
             return Ok(Expansion {
                 proof,
                 variables,
@@ -451,9 +419,7 @@ impl SlotLifter<'_> {
         })
     }
 
-    /// Several matched nodes can have identical canonical child classes while
-    /// their edges and binder markers differ. Identify the node by all physical
-    /// columns captured by the compiler, not just its constructor and classes.
+    /// Whether all recorded columns match, including edges and binder markers.
     fn matches_row(
         &self,
         expression: &egglog::ast::Expr,

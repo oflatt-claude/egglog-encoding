@@ -76,12 +76,10 @@ pub(crate) fn node_shape(edges: &[Renaming], groups: &[Vec<Renaming>]) -> NodeSh
     out
 }
 
-/// Each column's edge, and the edge through every symmetry of its child's class: the
-/// readings of a node that spell the same invocation. A renaming that does not permute
-/// the column's own slots is not one of them, so a stale symmetry is ignored.
-/// Each column's reading and the group element that produces it. The ordering
-/// also chooses the returned back map when several readings share one canonical
-/// shape, so proof reconstruction must use this same enumeration.
+/// Each column's edge under its child's symmetries, with the chosen group elements.
+/// Only symmetries that permute the column's slots participate. Readings are sorted
+/// within each column; the first column varies fastest. This order breaks ties in
+/// [`node_shape`] when several readings have the same canonical shape.
 pub(crate) fn readings(
     edges: &[Renaming],
     groups: &[Vec<Renaming>],

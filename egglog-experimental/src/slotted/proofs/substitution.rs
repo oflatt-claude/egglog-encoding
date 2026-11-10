@@ -10,8 +10,7 @@ use egglog::{ArcSort, EGraph, Primitive, PurePrim, PureState, Term, TermDag, Ter
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// Attach the source operation to each carrier's signature. Runtime substitution
-/// uses its own graph operation; this evaluator is only the proof's semantics.
+/// Register the source substitution validator for each carrier signature.
 pub(super) fn register(graph: &mut EGraph, context: &Arc<ProofContext>) {
     let sorts: std::collections::BTreeSet<_> = context
         .constructors

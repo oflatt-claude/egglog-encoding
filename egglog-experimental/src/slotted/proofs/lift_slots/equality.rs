@@ -2,8 +2,7 @@
 
 use super::*;
 
-/// A failed candidate match carries only the conflicting nodes, so rejected
-/// candidates never render (potentially very large) terms for diagnostics.
+/// The first term or slot conflict in a structural match.
 pub(super) enum SlotMismatch {
     Terms(TermId, TermId),
     Conflict(i64, i64, i64),
@@ -276,13 +275,17 @@ impl SlotLifter<'_> {
             } => self
                 .congr(*proof, *child_index, *child_proof, rhs)
                 .map_err(|e| format!("in a congruence at {child_index}: {e}"))?,
-            Justification::Proj { proof, .. } => {
-                // Reuse an established surface term, translating the parent if needed.
-                let term = self.dec(lhs)?;
-                self.reflexive(term).or_else(|_| {
-                    self.eq(*proof)?;
-                    self.reflexive(term)
-                })?
+            Justification::Proj { proof, child_index } => {
+                let row = self.egg.get(*proof).rhs();
+                if self.is_carrier_term(row) {
+                    self.project(*proof, *child_index)?
+                } else {
+                    let term = self.dec(lhs)?;
+                    self.reflexive(term).or_else(|_| {
+                        self.eq(*proof)?;
+                        self.reflexive(term)
+                    })?
+                }
             }
             Justification::Rule {
                 name,
@@ -321,6 +324,24 @@ impl SlotLifter<'_> {
             }
         };
         Ok(result)
+    }
+
+    pub(super) fn project(&mut self, parent: ProofId, physical: usize) -> LiftResult<ViewId> {
+        let row = self.egg.get(parent).rhs();
+        let head = self
+            .app(row)
+            .ok_or("projection parent is not a constructor")?
+            .0;
+        let column = self.surface_column(head, physical)?;
+        let target = self.dec(row)?;
+        let parent = self.eq(parent)?;
+        let parent = self.align(parent, target)?;
+        let projected = self
+            .out
+            .project(parent, column)
+            .map_err(|e| e.to_string())?;
+        let completion = self.edge_memo[&(row, column)].inverse();
+        Ok(self.rename_both(projected, &completion))
     }
 
     /// A row stated at the top level.
@@ -647,7 +668,7 @@ impl SlotLifter<'_> {
     pub(super) fn orient(&mut self, p: ViewId, lhs: TermId, rhs: TermId) -> LiftResult<ViewId> {
         let (l, r) = (self.dec(lhs)?, self.dec(rhs)?);
         let prop = self.out.edge(p).clone();
-        if l == r {
+        if lhs == rhs {
             // the step's own conclusion: the term it built equals itself
             if prop.lhs == l {
                 let s = self.out.sym(p);

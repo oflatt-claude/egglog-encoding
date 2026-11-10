@@ -189,17 +189,15 @@ root equality, not another inference rule. For example, alpha-renaming needs onl
 
 # Normalization
 
-The lifted proof is checked before and after a normalization pass. The pass
-carries an accumulated permutation through Sym, Trans, Congr, and Alpha, materializing
-it in their endpoints. Nested equivariance steps compose. Source axioms and
-rule instances retain their provenance and substitutions, so remaining
-equivariance steps sit immediately above source steps. A renamed source union
-still has a proof of the original union underneath it.
+The lifted proof is checked before and after simplification. The pass composes
+adjacent equivariance and Alpha steps and removes reflexive congruence, symmetry,
+transitivity, and double symmetry. Each reachable proof is simplified once.
+Equivariance can remain around a compound derivation: distributing it across
+shared premises could duplicate that derivation for every incoming renaming.
 
-The pass also removes reflexive congruence, symmetry and transitivity steps and
-double symmetry. It memoizes by proof ID and accumulated permutation: shared
-subproofs stay shared when used in the same coordinates. Slot names are assigned
-to the resulting displayed proof, reserving all source names and rule variables.
+Source axioms and rule instances retain their provenance and substitutions.
+A renamed source union still has a proof of the original union underneath it.
+Slot names in the displayed proof reserve all source names and rule variables.
 
 # The proof profile
 
@@ -297,6 +295,11 @@ the encoded match, but leaves this source premise order intact. Congruence expan
 nested patterns; explicit Alpha steps restore their binder scopes. Each firing's
 queues and occurrence proofs are temporary. There is no equality-graph search or
 stored reconstruction recipe.
+
+Slot lifting still searches for source-term witnesses, redundant-slot
+certificates, and slot alignments. Those searches precede unflattening and are
+separate from its replay of the source rule. Class-group operations replay the
+runtime's closure and reading enumeration.
 
 The pass replaces each flattened application with the original rewrite and its
 original `:when` facts, and removes generated variables from substitutions. Slot

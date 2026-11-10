@@ -1,80 +1,20 @@
-//! Push equivariance through ordinary equality steps, sharing each transported
-//! subproof, and remove reflexive scaffolding. Source steps retain their checked
-//! instantiations; any remaining equivariance is immediately above a source step.
+//! Simplify a checked proof while preserving shared subproofs and source steps.
 
 use super::HashMap;
 use super::format::{ProofId, RulePremise, SlottedProof, SlottedProofStore};
-use super::terms::{Renaming, all_slots, rename, slot_of};
-use egglog::proof::{Justification as Step, Proposition};
-use egglog::{Term, TermDag, TermId};
-use std::collections::BTreeSet;
-
-type Key = (ProofId, Renaming);
-
-/// Shared endpoints are renamed repeatedly through different proof steps.
-/// Both caches belong to this normalization pass and use immutable term IDs.
-#[derive(Default)]
-struct TermRenamings {
-    slots: HashMap<TermId, BTreeSet<i64>>,
-    renamed: HashMap<(TermId, Renaming), TermId>,
-}
-
-impl TermRenamings {
-    fn slots(&mut self, dag: &TermDag, term: TermId) -> &BTreeSet<i64> {
-        self.slots
-            .entry(term)
-            .or_insert_with(|| all_slots(dag, term))
-    }
-
-    fn restrict(&mut self, dag: &TermDag, rho: &Renaming, lhs: TermId, rhs: TermId) -> Renaming {
-        if rho.is_identity() {
-            return rho.clone();
-        }
-        self.slots(dag, lhs);
-        self.slots(dag, rhs);
-        Renaming::completing(
-            rho.entries().filter(|(slot, _)| {
-                self.slots[&lhs].contains(slot) || self.slots[&rhs].contains(slot)
-            }),
-        )
-        .expect("restricting a permutation keeps it injective")
-    }
-
-    fn rename(&mut self, dag: &mut TermDag, rho: &Renaming, term: TermId) -> TermId {
-        if rho.is_identity() {
-            return term;
-        }
-        let rho = rho.restricted(self.slots(dag, term));
-        if rho.is_identity() {
-            return term;
-        }
-        *self
-            .renamed
-            .entry((term, rho.clone()))
-            .or_insert_with(|| rename(dag, &rho, term))
-    }
-}
+use egglog::proof::Justification as Step;
 
 impl SlottedProofStore {
-    /// Normalize an already checked proof. Check the resulting proof again before
-    /// using it, just as for any other proof transformation.
+    /// Simplify an already checked proof without changing its proposition.
+    /// Check the resulting proof again before using it.
     pub fn simplify(&mut self, root: ProofId) -> ProofId {
-        let mut terms = TermRenamings::default();
-        // Only the action on a step's endpoints matters. Keeping unrelated
-        // coordinates in the memo key can expand a shared proof exponentially
-        // when it is reached through different binder-renaming paths.
-        let root = (root, Renaming::identity());
-        let mut memo = HashMap::<Key, ProofId>::default();
-        let mut work = vec![(root.clone(), false)];
-        while let Some(((id, rho), ready)) = work.pop() {
-            let key = (id, rho.clone());
-            if memo.contains_key(&key) {
+        let mut memo = HashMap::<ProofId, ProofId>::default();
+        let mut work = vec![(root, false)];
+        while let Some((id, ready)) = work.pop() {
+            if memo.contains_key(&id) {
                 continue;
             }
             let proof = self.get(id);
-            // These branches will be discarded regardless of the renaming.
-            // Prune them before transporting their premises: a shared chain of
-            // reflexive detours can otherwise create exponentially many contexts.
             let bypass = match proof {
                 SlottedProof::Ordinary(proof) => match proof.justification() {
                     Step::Trans(a, b) if self.reflexive(*a) => Some(*b),
@@ -87,138 +27,84 @@ impl SlottedProofStore {
                 },
                 _ => None,
             };
-            let children: Vec<Key> = if let Some(child) = bypass {
-                vec![(child, rho.clone())]
-            } else {
-                match proof {
-                    SlottedProof::Equivariance {
-                        proof, renaming, ..
-                    } => vec![(*proof, rho.compose(renaming))],
-                    SlottedProof::Rule(_) => proof
-                        .premises()
-                        .into_iter()
-                        .map(|p| (p, Renaming::identity()))
-                        .collect(),
-                    _ => proof
-                        .premises()
-                        .into_iter()
-                        .map(|p| (p, rho.clone()))
-                        .collect(),
-                }
-            }
-            .into_iter()
-            .map(|(id, rho)| {
-                let p = self.proposition(id);
-                (id, terms.restrict(&self.term_dag, &rho, p.lhs, p.rhs))
-            })
-            .collect();
+            let children = bypass.map_or_else(|| proof.premises(), |p| vec![p]);
             if !ready {
-                work.push((key, true));
-                work.extend(children.into_iter().rev().map(|k| (k, false)));
+                work.push((id, true));
+                work.extend(children.into_iter().rev().map(|p| (p, false)));
                 continue;
             }
-            let children: Vec<_> = children.iter().map(|k| memo[k]).collect();
+            let children: Vec<_> = children.iter().map(|p| memo[p]).collect();
             if bypass.is_some() {
-                memo.insert(key, children[0]);
+                memo.insert(id, children[0]);
                 continue;
             }
             let result = match self.get(id).clone() {
                 SlottedProof::Rule(mut proof) => {
-                    let normalized = |p| memo[&(p, Renaming::identity())];
                     proof.premises = proof
                         .premises
                         .into_iter()
                         .map(|p| match p {
-                            RulePremise::Equality(p) => RulePremise::Equality(normalized(p)),
+                            RulePremise::Equality(p) => RulePremise::Equality(memo[&p]),
                             RulePremise::RenamingEq { left, right } => RulePremise::RenamingEq {
-                                left: normalized(left),
-                                right: normalized(right),
+                                left: memo[&left],
+                                right: memo[&right],
                             },
                         })
                         .collect();
-                    self.simplify_source(SlottedProof::Rule(proof), &rho, &mut terms)
+                    self.add(SlottedProof::Rule(proof))
                 }
-                SlottedProof::Equivariance { .. } => children[0],
-                SlottedProof::Alpha { proposition, .. } => {
-                    let rhs = terms.rename(&mut self.term_dag, &rho, proposition.rhs);
-                    if rhs == self.proposition(children[0]).rhs {
-                        children[0]
-                    } else {
-                        self.alpha(children[0], rhs)
+                SlottedProof::Equivariance {
+                    proposition,
+                    mut renaming,
+                    ..
+                } => {
+                    let mut proof = children[0];
+                    if let SlottedProof::Equivariance {
+                        proof: inner,
+                        renaming: rho,
+                        ..
+                    } = self.get(proof)
+                    {
+                        renaming = renaming.compose(rho);
+                        proof = *inner;
                     }
+                    if &proposition == self.proposition(proof) {
+                        proof
+                    } else {
+                        // Distributing this renaming over a shared derivation
+                        // can create a distinct copy for every path to a source step.
+                        self.add(SlottedProof::Equivariance {
+                            proposition,
+                            proof,
+                            renaming,
+                        })
+                    }
+                }
+                SlottedProof::Alpha { proposition, .. } => {
+                    let mut proof = children[0];
+                    if let SlottedProof::Alpha { proof: inner, .. } = self.get(proof) {
+                        proof = *inner;
+                    }
+                    self.alpha(proof, proposition.rhs)
                 }
                 SlottedProof::Ordinary(proof) => match proof.justification() {
                     Step::Sym(_) => self.simple_sym(children[0]),
                     Step::Proj { child_index, .. } => self
                         .project(children[0], *child_index)
-                        .expect("normalizing preserves projected children"),
-                    Step::Trans(..) => {
-                        let (a, b) = (children[0], children[1]);
-                        if self.reflexive(a) {
-                            b
-                        } else if self.reflexive(b) {
-                            a
-                        } else {
-                            self.trans(a, b)
-                                .expect("normalizing preserves middle terms")
-                        }
-                    }
-                    Step::Congr { child_index, .. } => {
-                        if self.reflexive(children[1]) {
-                            children[0]
-                        } else {
-                            self.congr(children[0], *child_index, children[1])
-                                .expect("normalizing preserves child terms")
-                        }
-                    }
-                    Step::Fiat => {
-                        self.simplify_source(SlottedProof::Ordinary(proof), &rho, &mut terms)
-                    }
-                    _ => unreachable!("normalization requires a checked slotted proof"),
+                        .expect("simplifying preserves projected children"),
+                    Step::Trans(..) => self
+                        .trans(children[0], children[1])
+                        .expect("simplifying preserves middle terms"),
+                    Step::Congr { child_index, .. } => self
+                        .congr(children[0], *child_index, children[1])
+                        .expect("simplifying preserves child terms"),
+                    Step::Fiat => id,
+                    _ => unreachable!("simplification requires a checked slotted proof"),
                 },
             };
-            memo.insert(key, result);
-            if memo.len().is_multiple_of(1_000_000) {
-                log::debug!(
-                    "normalized {} proof contexts into {} steps and {} terms ({} cached renamings)",
-                    memo.len(),
-                    self.len(),
-                    self.term_dag.size(),
-                    terms.renamed.len(),
-                );
-            }
+            memo.insert(id, result);
         }
         memo[&root]
-    }
-
-    fn simplify_source(
-        &mut self,
-        proof: SlottedProof,
-        rho: &Renaming,
-        terms: &mut TermRenamings,
-    ) -> ProofId {
-        let p = proof.proposition();
-        let lhs = terms.rename(&mut self.term_dag, rho, p.lhs);
-        let rhs = terms.rename(&mut self.term_dag, rho, p.rhs);
-        if lhs == rhs
-            && (slot_of(&self.term_dag, lhs).is_some()
-                || matches!(self.term_dag.get(lhs), Term::Lit(_)))
-        {
-            return self.fiat(lhs, rhs);
-        }
-        let unchanged = (lhs, rhs) == (p.lhs, p.rhs);
-        let source = self.add(proof);
-        if unchanged {
-            source
-        } else {
-            // The work key already restricts rho to these endpoints. Reuse the
-            // terms computed above instead of traversing both trees again.
-            self.add(SlottedProof::Equivariance {
-                proposition: Proposition::new(lhs, rhs),
-                proof: source,
-                renaming: rho.clone(),
-            })
-        }
     }
 
     fn reflexive(&self, p: ProofId) -> bool {

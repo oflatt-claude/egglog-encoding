@@ -10,8 +10,7 @@ use egglog::{CommandOutput, EGraph, Error, Term, TermDag, TermId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-/// Execution records ordinary extraction proofs, never reconstructed source
-/// proofs. The latter are produced only when a query asks for a proof.
+/// Ordinary proofs of substitution inputs, retained for later source proof requests.
 #[derive(Clone, Debug, Default)]
 pub(in crate::slotted) struct Evidence {
     batches: Vec<Batch>,

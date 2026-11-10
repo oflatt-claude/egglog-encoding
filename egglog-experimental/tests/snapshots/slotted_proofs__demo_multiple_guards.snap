@@ -14,12 +14,7 @@ Proof:
 (let t (Pair (V $a) (V $b)))
 (let prf (Fiat (= t t)))
 (let prf_1 (Proj (= (V $a) (V $a)) prf 0))
-(let t_1 (Pair (V $b) (V $a)))
-(let prf_2
-  (Proj
-          (= (V $b) (V $b))
-          (Equivariance (= t_1 t_1) prf (renaming ($a $b) ($b $a)))
-          0))
+(let prf_2 (Equivariance (= (V $b) (V $b)) prf_1 (renaming ($a $b) ($b $a))))
 (let prf_3 (Fiat (= () ())))
 (Rule
   (= t (Hit))

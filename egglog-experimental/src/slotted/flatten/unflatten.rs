@@ -119,8 +119,7 @@ fn alpha_endpoints(
     proof
 }
 
-/// The two contexts share declaration order. Project each refreshed source root
-/// once, rather than rediscovering its origin for every Fiat step.
+/// Source axioms in flattened coordinates. The contexts must share declaration order.
 fn source_axioms(
     store: &mut SlottedProofStore,
     program: &ProofContext,
@@ -158,8 +157,7 @@ fn source_axioms(
     axioms
 }
 
-/// Temporary state for one firing. The queues are the flattened rule's ordinary
-/// premises; consuming them mirrors `flatten` and `pattern_fact` in source order.
+/// Premises and bindings for replaying one source rule application.
 struct Replay<'a> {
     store: &'a mut SlottedProofStore,
     rule: &'a SourceRule,
