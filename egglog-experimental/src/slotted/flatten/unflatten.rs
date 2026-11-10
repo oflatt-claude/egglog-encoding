@@ -2,7 +2,7 @@
 use crate::slotted::proofs::context::{ProofContext, pattern_term};
 use crate::slotted::proofs::coordinates::Coordinates;
 use crate::slotted::proofs::format::{ProofId, RulePremise, SlottedProof, SlottedProofStore};
-use crate::slotted::proofs::terms::{Renaming, term_renaming};
+use crate::slotted::proofs::terms::{Renaming, TermShapes, term_renaming};
 use crate::slotted::proofs::{HashMap, HashSet};
 use egglog::ast::{Literal, ResolvedExpr, ResolvedFact};
 use egglog::proof::{Justification as Step, Proposition};
@@ -284,6 +284,7 @@ struct Witnesses<'a> {
     known: HashMap<TermId, ProofId>,
     memo: HashMap<(TermId, TermId, bool), ProofId>,
     active: HashSet<(TermId, TermId, bool)>,
+    term_shapes: TermShapes,
 }
 
 impl<'a> Witnesses<'a> {
@@ -299,6 +300,7 @@ impl<'a> Witnesses<'a> {
             known: HashMap::default(),
             memo: HashMap::default(),
             active: HashSet::default(),
+            term_shapes: TermShapes::default(),
         };
         for proof in proofs {
             out.add(proof);
@@ -363,7 +365,13 @@ impl<'a> Witnesses<'a> {
         ))
     }
 
-    fn renaming(&self, pairs: &[(TermId, TermId)]) -> Option<Renaming> {
+    fn renaming(&mut self, pairs: &[(TermId, TermId)]) -> Option<Renaming> {
+        if pairs.iter().any(|&(lhs, rhs)| {
+            self.term_shapes.get(&self.store.term_dag, lhs)
+                != self.term_shapes.get(&self.store.term_dag, rhs)
+        }) {
+            return None;
+        }
         term_renaming(&self.store.term_dag, pairs)
     }
 
@@ -493,7 +501,10 @@ impl<'a> Witnesses<'a> {
             if current == to {
                 return Ok(proof);
             }
-            if self.program.alpha_eq(&mut self.store.term_dag, current, to) {
+            if self.term_shapes.get(&self.store.term_dag, current)
+                == self.term_shapes.get(&self.store.term_dag, to)
+                && self.program.alpha_eq(&mut self.store.term_dag, current, to)
+            {
                 return Ok(self.store.alpha(proof, to));
             }
             if rename_source && let Some(renaming) = self.renaming(&[(current, to)]) {
