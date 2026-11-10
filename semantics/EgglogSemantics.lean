@@ -23,7 +23,6 @@ import EgglogSemantics.Impl.Interp
 import EgglogSemantics.Impl.Observe
 
 -- Congruence compiler
-import EgglogSemantics.Congruence.Correctness
 import EgglogSemantics.Congruence.Encode
 import EgglogSemantics.Congruence.Read
 import EgglogSemantics.Congruence.Reader
@@ -37,7 +36,6 @@ import EgglogSemantics.SourceProof.Simplify
 
 -- Provenance
 import EgglogSemantics.Provenance.Checker
-import EgglogSemantics.Provenance.Correctness
 import EgglogSemantics.Provenance.Encode
 import EgglogSemantics.Provenance.Log
 

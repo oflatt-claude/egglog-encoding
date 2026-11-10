@@ -10,6 +10,7 @@ CERTIFICATES := $(abspath $(if $(filter /%,$(LEAN_CERTIFICATES)),$(LEAN_CERTIFIC
 LAKE ?= $(LEAN_BIN)/lake
 
 PAPER_MODULES := \
+  EgglogPaper \
   EgglogSemantics.Spec.Syntax \
   EgglogSemantics.Spec.Term \
   EgglogSemantics.Spec.Database \
@@ -23,13 +24,11 @@ PAPER_MODULES := \
   EgglogSemantics.Source.Domain \
   EgglogSemantics.Source.WellFormed \
   EgglogSemantics.Proofs.OrderFinite \
-  EgglogSemantics.Congruence.Correctness \
   EgglogSemantics.Congruence.Encode \
   EgglogSemantics.SourceProof.Format \
   EgglogSemantics.SourceProof.Checker \
   EgglogSemantics.Provenance.Encode \
   EgglogSemantics.Provenance.Log \
-  EgglogSemantics.Provenance.Correctness \
   EgglogSemantics.Resugar.Claim \
   EgglogSemantics.Resugar.Query \
   EgglogSemantics.Resugar.Lift

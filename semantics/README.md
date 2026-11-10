@@ -1,7 +1,8 @@
 # EgglogSemantics
 
-A Lean 4 model of egglog's semantics and proof encoding, originally ported from the
-Redex model in [egglog PR #324](https://github.com/egraphs-good/egglog/pull/324).
+A Lean 4 model of egglog's semantics, of the paper's compiler passes and proof
+production, with the paper's theorems proved. Originally ported from the Redex model in
+[egglog PR #324](https://github.com/egraphs-good/egglog/pull/324).
 The reference interpreter targets the extended egglog implementation in this workspace.
 
 ## Language and semantics
@@ -22,6 +23,39 @@ egglog binds a variable to an e-class. A round fires every rule it names against
 pre-state and adds every write and every subsumed row, in no particular order. Definitions
 and brief rationale are in [Spec/Step.lean](EgglogSemantics/Spec/Step.lean).
 
+## Reading guide
+
+Start with [EgglogPaper.lean](EgglogPaper.lean). It states every theorem the paper claims,
+in full and in the vocabulary of the specification, and proves each by one reference into
+`EgglogSemantics/Proofs/`:
+
+| Theorem | Statement |
+| --- | --- |
+| `congruence_pass_correct` | A well-formed source program in the fragment and its compilation have the same outcome and the same divergence (paper `thm:congruence`). |
+| `provenance_pass_correct` | Instrumenting a union-free program with keyed queries changes neither outcome nor divergence, and erasing the log from its final e-graph gives the original's (paper `thm:provenance`). |
+| `passes_compose` | The fully compiled program has the source program's outcome and divergence. |
+| `checker_sound` | A claim the proof checker accepts, between terms of the saturated final e-graph, holds there. |
+| `log_proofs_checked` | Every proof read off the firing log is accepted by the checker. |
+| `lifted_proofs_checked`, `lifted_proofs_sound` | Lifted proofs are accepted by the source checker, and their claims hold in the saturated source e-graph. |
+
+Specification and proofs are separate: nothing outside `Proofs/`, `Tests/` and
+`EgglogPaper.lean` imports a proof module. The `@[blueprint "def:…"]` and
+`@[blueprint "thm:…"]` attributes carry the paper's labels and statements, and
+`make paper-sync` writes them into the paper.
+
+| Paper | Lean |
+| --- | --- |
+| Section 4, semantics | `EgglogSemantics/Spec/`: `Syntax` (programs, schedules, rules), `Term`, `Database` (an e-graph as equations and subsumed rows), `Congruence` (`Cong` and `terms`), `Match` (queries, representatives), `Eval` (expressions, actions), `Step` (rounds, schedules, outcomes: `Reach`, `Eval`), `Divergence`, `Behavior`, `Order` (the term order behind representatives) |
+| Section 5, congruence pass | `Congruence/Encode.lean` (the pass `encode`, the maintenance rules, the view and phasing options), `Source/Domain.lean` and `Source/WellFormed.lean` (the fragment and well-formedness), `Congruence/Read.lean` (reading a compiled e-graph back) |
+| Section 6, proofs | `SourceProof/Format.lean` and `Checker.lean` (proof terms and the checker), `Provenance/Encode.lean` (instrumentation) and `Log.lean` (proofs read off the log), `Resugar/Claim.lean`, `Query.lean`, `Lift.lean` (lifting), `Resugar/Execute.lean` (`prove`) |
+| The proofs | `Proofs/Congruence/` (the simulation for Section 5; plan in [PROOF-PORT-S.md](PROOF-PORT-S.md)), `Proofs/Provenance/` ([PROOF-PORT-T.md](PROOF-PORT-T.md)), `Proofs/SourceProof/` and `Proofs/Resugar/` (checker and lifting soundness); the remaining modules are lemmas about the specification and the reference interpreter |
+| Executable | `Impl/` (finite reference interpreter), `Congruence/Relational.lean` (execution without equality reasoning), `Tests/`, `DiffTest.lean` (comparisons with egglog and the corpus gates), `tests/` (`.egg` programs with snapshots of their encodings and lifted proofs) |
+
+To check the theorems from this directory: `lake build` (the `assert_no_sorry` lines in
+`EgglogPaper.lean` fail the build on any incomplete proof), `make lean-holes` (no `sorry`
+anywhere), and `#print axioms Egglog.Paper.congruence_pass_correct` and the others, which
+show only `propext`, `Classical.choice` and `Quot.sound`.
+
 ## Encoding passes
 
 The congruence compiler translates source programs, which use neither `subsume` nor
@@ -31,51 +65,10 @@ flattening and rebuilding, with one id column per relation. The provenance pass 
 firing log, one relation per rule recording the values each firing bound, and proofs are
 reconstructed from the log afterwards. Proof lifting turns them into source proofs that
 both the Lean and Rust checkers accept. The [encoding guide](ENCODING.md) describes the
-encoding, the log, and the rationale.
-
-Compiler correctness is stated in
-[Congruence/Correctness.lean](EgglogSemantics/Congruence/Correctness.lean): well-formed
-source programs in the fragment and their compilations have exactly the same outcomes and
-the same divergence, over mathematical databases. Its proof (`Congruence.correctness`,
-developed under `Proofs/Congruence/`) is a simulation between the source and the compiled
-schedules up to the meaning of the source state; the congruence gate also checks the
-statement executably on the corpus. Provenance pass correctness is stated in
-[Provenance/Correctness.lean](EgglogSemantics/Provenance/Correctness.lean): a union-free
-program whose names avoid the log prefix and whose query variables are all arguments of
-application patterns, which the compiler's output is (`Provenance.encode_instrumentable`),
-and its instrumentation have the same outcomes and the same divergence, and erasing the
-log from the instrumented final state gives the original's final state up to meaning. Its
-proof (`Provenance.correctness`, developed under `Proofs/Provenance/`) is a simulation in
-which the instrumented state is the original state plus log rows; the provenance gate
-checks the state clause executably on the corpus. The specification-level proofs, the
-interpreter refinement (subsume-free programs, and union-free programs with subsumption
-such as the compiler's output), and the certificate soundness proofs are ported to the
-declaration-free specification; `EgglogPaper.lean` lists the theorems the paper relies on.
-Brief certificate notes live with the
-[source checker](EgglogSemantics/SourceProof/Checker.lean) and
+encoding, the log, and the rationale; the corpus gates (`difftest congruence`,
+`difftest provenance`) also check both correctness statements executably. Brief certificate
+notes live with the [source checker](EgglogSemantics/SourceProof/Checker.lean) and
 [relational checker](EgglogSemantics/Provenance/Checker.lean).
-
-## Layout
-
-| Directory | Contents |
-| --- | --- |
-| `EgglogSemantics/Spec/` | Syntax, databases, congruence, evaluation, matching, relational steps, scope |
-| `EgglogSemantics/Impl/` | Finite reference interpreter |
-| `EgglogSemantics/Source/` | The source fragment the compiler accepts, and the generated names |
-| `EgglogSemantics/Congruence/` | Congruence compiler and relational execution |
-| `EgglogSemantics/SourceProof/` | Source proof format and checker |
-| `EgglogSemantics/Provenance/` | Firing-log instrumentation, proof format, checker, and extraction |
-| `EgglogSemantics/Resugar/` | Proof lifting to source proofs, fixtures, and JSON export |
-| `EgglogSemantics/Proofs/` | Theorems about the specification, checker and lifting soundness, the compiler proof under `Proofs/Congruence/`, and the provenance pass proof under `Proofs/Provenance/` |
-| `EgglogSemantics/Tests/` | Executable regressions, `.egg` parsing and emission, and proof rendering |
-| `tests/` | Hand-written `.egg` programs with snapshots of their encodings and lifted proofs |
-| `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
-
-Start with [Syntax.lean](EgglogSemantics/Spec/Syntax.lean),
-[Eval.lean](EgglogSemantics/Spec/Eval.lean), and
-[Step.lean](EgglogSemantics/Spec/Step.lean), then read
-[Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean) and
-[Congruence/Correctness.lean](EgglogSemantics/Congruence/Correctness.lean).
 
 ## Validation
 

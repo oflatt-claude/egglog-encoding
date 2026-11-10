@@ -76,7 +76,7 @@ def isLog : Term → Bool
 def eraseLog (terms : List Term) : List Term := terms.filter fun t => !isLog t
 
 /-- The e-graph without the log: the equations whose row is not a log row, and the same
-subsumed rows. `Provenance.correctness` states that this is the e-graph the original
+subsumed rows. `Egglog.Paper.provenance_pass_correct` states that this is the e-graph the original
 program reaches. -/
 def _root_.Egglog.Database.eraseLog (d : Database) : Database :=
   ⟨{q ∈ d.eqs | isLog q.1 = false}, d.subsumed⟩

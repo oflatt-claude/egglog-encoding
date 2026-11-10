@@ -29,7 +29,7 @@ mistaken for the log. This covers the congruence compiler's output. -/
 def programOk (P : Program) : Bool :=
   unionFree P && P.names.all fun f => !firePrefix.isPrefixOf f
 
-/-- The programs the instrumentation preserves (`Provenance.correctness`): `programOk`,
+/-- The programs the instrumentation preserves (`Egglog.Paper.provenance_pass_correct`): `programOk`,
 and every variable of a rule query or of the check is an argument of an application
 pattern, so that no query can bind a variable to a log row. The congruence compiler's
 output satisfies this (`Provenance.encode_instrumentable`). -/

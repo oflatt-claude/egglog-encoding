@@ -142,7 +142,7 @@ instrumented program builds exactly the data of the original, round for round, a
 subsumes the same rows. A saturation of the instrumented program may run one or two more
 passes than the original's, because a new log row is a change of the state, but those
 passes write only log rows, which belong to a finite set, so they terminate. This is the
-theorem `Provenance.correctness` (`Provenance/Correctness.lean`, proved under
+theorem `Egglog.Paper.provenance_pass_correct` (`EgglogPaper.lean`, proved under
 `Proofs/Provenance/`): for a union-free program whose names avoid the log prefix and
 whose every query variable is an argument of an application pattern (`Instrumentable`,
 which the congruence compiler's output satisfies, `Provenance.encode_instrumentable`),
@@ -199,14 +199,14 @@ identity out of the data entirely.
   programs with subsumption, disequalities and `min` (`exec_programStep_noUnions`,
   `Congruence.exec_encode_programStep`), which is what the compiler emits; mixed
   union-and-subsume programs are not covered. Compiler correctness against the source,
-  stated in `Congruence/Correctness.lean`, is proved for this encoding
-  (`Congruence.correctness`, developed under `Proofs/Congruence/`; `PROOF-PORT-S.md`
-  records the plan) and is also checked executably by the congruence gate. The proofs of
+  stated in `EgglogPaper.lean`, is proved for this encoding
+  (`Egglog.Paper.congruence_pass_correct`, developed under `Proofs/Congruence/`;
+  `PROOF-PORT-S.md` records the plan) and is also checked executably by the congruence gate. The proofs of
   the previous, merge-function encoding were deleted on 2026-10-30 (`PROOF-PORT-*.md`
   record the ports that preceded them). Provenance pass correctness, stated in
-  `Provenance/Correctness.lean`, is proved for every union-free program with keyed
+  `EgglogPaper.lean`, is proved for every union-free program with keyed
   queries whose names avoid the log prefix, in particular for the compiler's output
-  (`Provenance.correctness`, `Provenance.correctness_compiled`, developed under
+  (`Egglog.Paper.provenance_pass_correct`, `Egglog.Paper.passes_compose`, developed under
   `Proofs/Provenance/`; `PROOF-PORT-T.md` records the plan), and is also checked
   executably by the provenance gate.
 

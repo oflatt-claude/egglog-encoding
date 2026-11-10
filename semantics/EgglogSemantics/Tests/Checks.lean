@@ -1,5 +1,6 @@
 import EgglogSemantics.Proofs.Congruence.Properties
-import EgglogSemantics.Congruence.Correctness
+import EgglogSemantics.Congruence.Encode
+import EgglogSemantics.Source.WellFormed
 import EgglogSemantics.Congruence.Relational
 import EgglogSemantics.Provenance.Encode
 import EgglogSemantics.Tests.Parse
