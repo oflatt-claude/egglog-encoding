@@ -1,6 +1,6 @@
 use super::*;
 use crate::slotted::proofs::checker::check_proof_in_program as check_proof;
-use crate::slotted::proofs::context::ColumnKind;
+use crate::slotted::proofs::context::{ColumnKind, Union};
 use egglog::TermDag;
 
 #[test]
@@ -40,6 +40,51 @@ fn congruence_restores_binders_in_independent_scopes() {
     let (mut store, proof) = lift(store, &program, proof).unwrap();
     check_proof(&mut store, &program, proof).unwrap();
     assert_eq!(store.proposition(proof), &expected);
+}
+
+#[test]
+fn witness_search_crosses_incompatible_shared_shapes() {
+    for depth in [4, 32] {
+        let mut dag = TermDag::default();
+        let mut program = ProofContext::default();
+        for head in ["Z", "M", "T"] {
+            program.add_constructor(head, vec![]);
+        }
+        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+        let mut shared = dag.app("Z".into(), vec![]);
+        for _ in 0..depth {
+            shared = dag.app("Pair".into(), vec![shared, shared]);
+        }
+        let middle = dag.app("M".into(), vec![]);
+        let target = dag.app("T".into(), vec![]);
+        program.lets.insert("input".into(), shared);
+        program.unions.extend([
+            Union {
+                lhs: shared,
+                rhs: middle,
+            },
+            Union {
+                lhs: middle,
+                rhs: target,
+            },
+        ]);
+        let mut store = SlottedProofStore::new(dag);
+        let root = store.fiat(shared, shared);
+        let first = store.fiat(shared, middle);
+        let second = store.fiat(middle, target);
+        let mut witnesses = Witnesses::new(&mut store, &program, vec![root, first, second]);
+        // Shape mismatch must skip costly Alpha but still follow both equalities.
+        let proof = witnesses.equality(shared, target).unwrap();
+        assert_eq!(
+            witnesses.store.proposition(proof),
+            &Proposition::new(shared, target)
+        );
+        // The checker recursively sorts every tree occurrence. Check the small
+        // case; the deep DAG exercises reconstruction without expanding that tree.
+        if depth == 4 {
+            check_proof(&mut store, &program, proof).unwrap();
+        }
+    }
 }
 
 #[test]
