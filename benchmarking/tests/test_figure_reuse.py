@@ -245,9 +245,8 @@ def test_missing_samples_reuse_local_overlap_without_collection(
     )
 
 
-@pytest.mark.parametrize("encoding", ["nee", "ee"])
 def test_exact_missing_fill_collects_only_deficit_and_rejects_changed_input(
-    saved: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, encoding: str
+    saved: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
     checkout = tmp_path / "historical"
@@ -261,7 +260,6 @@ def test_exact_missing_fill_collects_only_deficit_and_rejects_changed_input(
     parameters["selected_inputs"][:] = parameters["selected_inputs"][:1]
     item = parameters["selected_inputs"][0]
     item["binary_sha256"], item["file_sha256"] = targets.sha256_file(binary), targets.sha256_file(source)
-    item["disequality_encoding"] = encoding
     rows = [dict(row) for row in data.grouped.records if row["treatment"] == "off"]
     for row in rows:
         row.update(
@@ -269,7 +267,6 @@ def test_exact_missing_fill_collects_only_deficit_and_rejects_changed_input(
             file_sha256=item["file_sha256"],
             target_path=str(checkout),
             file_path=str(source),
-            disequality_encoding=encoding,
         )
     data.grouped = grouped_figure(rows, "historical")
     calls = []
@@ -279,14 +276,12 @@ def test_exact_missing_fill_collects_only_deficit_and_rejects_changed_input(
         calls.append(run)
         assert run.missing_observations == 1
         assert run.cached_statuses == ("success", "success")
-        assert run.disequality_encoding == _args[0][0].endpoint.disequality_encoding == encoding
         assert plans[0].target.binary_path_for("off") == binary
         row = make_record(
             2,
             started_at="2026-01-01T00:00:02Z",
             binary_sha256=item["binary_sha256"],
             file_sha256=item["file_sha256"],
-            disequality_encoding=cast(Any, encoding),
             max_rss_bytes=1048576,
         )
         store.append(row)
@@ -478,3 +473,17 @@ def test_missing_fill_preserves_pinned_valid_observations(saved: Path, tmp_path:
     inputs = next(p["value"] for p in data.spec["params"] if p["name"] == "selected_inputs")
     rows = {row["row_index"]: row for group in data.grouped.data["groups"] for row in group["samples"]}
     assert [rows[index]["wall_sec"] for index in inputs[0]["selected_row_indices"]] == [1.0, 102.0]
+
+
+@pytest.mark.parametrize("version", [None, 1, 3])
+def test_incompatible_export_version_is_rejected_before_reading_bindings(saved: Path, version: int | None) -> None:
+    path = saved / "retired-export.results.json"
+    result = json.loads(path.read_text())
+    if version is None:
+        result.pop("figure_data_version")
+    else:
+        result["figure_data_version"] = version
+    path.write_text(json.dumps(result))
+    (saved / "retired-export.bound.vl.json").unlink()
+    with pytest.raises(ValueError, match="unsupported figure data.*regenerate exports"):
+        import_figure("retired-export", saved)

@@ -46,7 +46,7 @@ fresh local-cap failure; uncapped validation is unestablished. Its nested timing
 and matched-count configurations remain separate checks on the full input.
 The full parameter-analysis NEE strict-proof configuration exceeds the local
 cap even in a fresh process and is explicitly deferred across profiles; it has
-not been certified uncapped. The proofs-off figure is unaffected. General NEE/EE
+not been certified uncapped. The proofs-off figure is unaffected. General NEE
 pass composition is checked in the smaller semantic cases, which do not
 certify that excluded full workload. Math12 strict modes are excluded only under
 the local cap and have separately passed the actual uncapped correctness trial.
@@ -105,7 +105,7 @@ after their corresponding guard increases. Cached reruns collect missing work.
 
 [`benchmarks/ignore.json`](ignore.json) is the shared exclusion policy
 for Rust tests, comparisons, and figures. Each entry records a reason and
-evidence; optional treatment/encoding selectors narrow it. A resource entry
+evidence; optional treatment selectors narrow it. A resource entry
 with `memory_limit_bytes` applies only when the selected cap is no larger than
 that recorded bound. It never excludes an uncapped run. Entries without a cap
 selector apply across profiles. Excluded conditions remain visible in reports and figure

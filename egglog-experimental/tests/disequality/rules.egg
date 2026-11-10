@@ -7,4 +7,4 @@
 (disequal (X) (Y))
 (run 1)
 (union (A) (B))
-(check-contradiction)
+(check (contradiction))

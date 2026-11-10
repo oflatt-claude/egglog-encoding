@@ -24,7 +24,7 @@ from benchmarks.reproduction.native import NATIVE_ALLOCATION_FAILURE
 
 from .config import DEFAULT_AST_CACHE, DEFAULT_MEMORY_LIMIT_BYTES, DEFAULT_REPORT, DEFAULT_TIMEOUT_SEC
 from .engines import TREATMENT_SPECS, TREATMENTS, Treatment
-from .figure_reuse import FigureData
+from .figure_reuse import FIGURE_DATA_VERSION, FigureData
 from .models import (
     BenchmarkEndpoint,
     BuiltBinary,
@@ -122,7 +122,7 @@ def _figure_inventory(root: Path, selected: Sequence[FileSpec] | None = None) ->
         item = workloads.get(outcome["file_sha256"])
         if item is None or outcome["kind"] != "validation" or outcome["policy"] != VALIDATION_POLICY:
             continue
-        key = f"{outcome['binary_sha256']}/{outcome['disequality_encoding']}"
+        key = outcome["binary_sha256"]
         if outcome["status"] == "success":
             item["validation_failures"].pop(key, None)
         elif outcome["reason"] not in (
@@ -397,7 +397,7 @@ def render_figures(
                     if excluded is not None:
                         rows = ()
                 validation_issue = (
-                    info["validation_failures"].get(f"{key.binary_sha256}/nee", "")
+                    info["validation_failures"].get(key.binary_sha256, "")
                     if info and correctness_mode == "proof-testing"
                     else ""
                 )
@@ -522,7 +522,7 @@ def render_figure_data(
             results = figure_results(
                 name, parameters["selected_inputs"], item.grouped, parameters["rounds"], parameters["t_critical"]
             )
-            results.update(figure_data_version=1, provenance=item.provenance, renderer=renderer)
+            results.update(figure_data_version=FIGURE_DATA_VERSION, provenance=item.provenance, renderer=renderer)
             # Include only selected measurements; full profiling/provenance lives outside the plot view.
             selections: dict[tuple[str, str, str], set[int]] = {}
             for selected in parameters["selected_inputs"]:

@@ -137,8 +137,8 @@ or modify the JSONL.
 - Benchmark files are resolved relative to the command invocation directory,
   not relative to comparison targets. Require self-contained files without
   `(include ...)` or `(input ...)`; expand external inputs before benchmarking.
-- Cache identity includes binary SHA-256, physical file SHA-256, treatment and
-  disequality encoding. Reuse completed successes independently of time/memory
+- Cache identity includes binary SHA-256, physical file SHA-256, and treatment.
+  Reuse completed successes independently of time/memory
   guards. `select_records` centrally retries timeouts only after raising the
   timeout, and memory-limited outcomes only after raising/removing the memory
   guard. Ordinary failures require force-run. Classify outcomes once at launch;
@@ -153,8 +153,8 @@ or modify the JSONL.
   their exact expectations. Complete successful samples bypass cap-specific
   resource deferrals; unsupported configurations remain excluded.
 - The baseline and candidate must have different endpoint cache identities
-  (binary SHA-256, treatment, and disequality encoding). They may use the same
-  binary when treatment or encoding differs.
+  (binary SHA-256 and treatment). They may use the same binary when treatment
+  differs.
 - A request must not contain duplicate file hashes; those
   selectors would address the same cached workload observations twice.
 
@@ -172,7 +172,8 @@ or modify the JSONL.
   Correctness watchdogs retain a 3x allowance per mode for their additional
   extraction, proof, and native-reference work.
   Use `--rounds 3 --memory-limit` with temporary reports/previews for verification;
-  ordinary benchmark defaults are unchanged. There is no cached-only mode.
+  ordinary benchmark defaults are unchanged. `figures --reuse-from DIR --no-runs`
+  renders compatible exports without builds, measurements or measurement-cache writes.
 - Reuse compatible observations automatically, merge repeated runtime/memory
   requests, and refresh current label bindings even with zero fresh runs.
   Keep raw observations append-only. Scope plots by label and selected physical
@@ -187,8 +188,9 @@ or modify the JSONL.
   and a TeX table under `figures/output/eval/` by default. Authored specifications
   stay in `figures/eval/`. `--output-dir` overrides the common generated folder.
   Copy the generated `eval` folder into the manuscript's `figures/` directory;
-  PDF/TeX need no JSON runtime, while bound specs require the original cache to
-  rerender. Subset invocations update selected filenames only; obsolete renamed
+  PDF/TeX need no JSON runtime. Results JSON and bound specs retain selected data
+  and settings for `--reuse-from DIR` without the original cache. Subset invocations
+  update selected filenames only; obsolete renamed
   or removed outputs are not cleaned automatically. Render through temporary
   files and replace the requested bundle only after every condition is complete
   and every format succeeds. Failed/missing measurements stop publication.

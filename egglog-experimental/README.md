@@ -42,53 +42,51 @@ for usage and [the proof guide](src/slotted/PROOFS.md) for supported forms and t
 Check out the crate documentation (built locally) for the current list of implemented extensions, API details, and demo links.
 Releases are coordinated with compatible releases of egglog.
 
-## Constructor injectivity
+## Disequality and separate injectivity
 
-Mark a constructor with `:injective` to infer equal arguments when two of its
-results are equal. Schedule the shared `injectivity` ruleset explicitly:
+`(disequal a b)` asserts a disequality. The root query pattern
+`(known-disequal a b)` matches asserted or inferred positive evidence; a missing
+match means unknown. `(contradiction)` matches when an asserted disequality's
+endpoints have become equal, or a separate-injectivity promise conflicts with
+native primitive values. Both disequality operands must have the same unionable
+equality sort.
 
-```lisp
-(datatype Term (Leaf String))
-(constructor Wrap (Term) Term :injective)
-(union (Wrap (Leaf "a")) (Wrap (Leaf "b")))
-(run-schedule (saturate injectivity))
-(check (= (Leaf "a") (Leaf "b")))
-```
-
-Datatype variants also accept the annotation, for example
-`(datatype Term (Leaf String) (Wrap Term :injective))`. It combines with
-`:cost` and `:unextractable`. Equality-sort arguments are unioned; differing
-primitive arguments trigger a panic when the ruleset runs. Container arguments
-are currently rejected at declaration. Injectivity applies within each marked
-constructor and does not require different constructors to have different
-results. The generated rules support term encoding and proof testing.
-
-Executable examples cover [mixed arguments](tests/injectivity/injectivity-basic.egg),
-[recursive propagation](tests/injectivity/injectivity-recursive.egg), and
-[mutually recursive datatypes](tests/injectivity/injectivity-datatypes.egg).
-
-`(known-disequal? left right)` queries known disequality on demand. Both operands
-must have the same equality sort; the predicate returns `Unit` when it finds a
-finite witness and is undefined otherwise. For example:
+Use `(separately-injective F)` after declaring an ordinary constructor to promise
+injectivity in each coordinate while all other inputs are fixed:
 
 ```lisp
-(datatype Term (Num i64 :injective))
-(Num 1) (Num 2)
-(check (known-disequal? (Num 1) (Num 2)))
+(datatype Term (A) (B) (C) (Add Term Term) (Exp Term))
+(separately-injective Add)
+(separately-injective Exp)
+(disequal (A) (B))
+(Exp (Add (C) (A))) (Exp (Add (C) (B)))
+(check (known-disequal (Exp (Add (C) (A))) (Exp (Add (C) (B)))))
 ```
 
-For two existing applications of the same marked constructor, any unequal
-corresponding arguments establish unequal results. Primitive arguments use native
-`!=`; equality-sort arguments use asserted `(disequal ...)` facts or recursive
-witnesses. For a marked unary constructor with an equality-sort argument, known
-unequal results also establish unequal arguments. Multiple-argument constructors
-have no reverse rule.
+For binary `F`, equal outputs `F(a,b) = F(a,c)` imply `b = c`. Positive
+`b != c` implies unequal existing outputs `F(a,b)` and `F(a,c)`. Both rules
+require the other input to agree. Equality of `F(a,b)` and `F(c,d)` alone
+unions neither pair of inputs. No rule propagates output disequality downward,
+and different constructor names imply no disjointness. Unmarked constructors
+generate no structural rules. Native primitive fields use native `!=` as
+positive evidence; containers and nonunionable equality sorts cannot be marked.
+For a marked unary constructor `Num : i64 → Term`, n distinct inputs can generate
+n(n − 1) ordered disequalities. The pass materializes this evidence eagerly.
 
-Queries read the current graph without creating constructor applications or
-storing derived disequality pairs. They need no saturation; equality propagation
-still requires scheduling `injectivity`. Unknown equality supplies no inequality
-witness. Cycles terminate, although a query can visit many value pairs. Use
-`:naive` for rules whose bodies call this predicate, because its reads extend
-beyond the rule's explicit table atoms. The new query currently supports ordinary
-execution only; term encoding and proof testing reject it. See the executable
-[disequality query example](tests/injectivity/injectivity-disequality.egg).
+The pass saturates its private rules after each user run, including runs nested
+in sequences, repetitions, and saturations. It also closes pending top-level
+assertions, constructor rows, and unions before checks, proof requests, schedules,
+and observations. User run budgets and pre-step `:until` checks are preserved.
+Generated joins include subsumed rows and create no constructor applications.
+They support ordinary execution, term encoding, and proof testing. The separate slotted source frontend does not currently accept
+these constructs.
+
+The two query patterns are supported only as whole facts in checks, rule bodies,
+rewrite conditions, and run-until conditions. They expose ordinary relation
+dependencies to seminaive rules. Nested expressions and action uses are rejected.
+The encoding is incomplete for logical disequality; an absent row remains unknown.
+
+Executable examples cover [fixed-coordinate cancellation](tests/injectivity/injectivity-basic.egg),
+[recursive propagation](tests/injectivity/injectivity-recursive.egg),
+[mutually recursive datatypes](tests/injectivity/injectivity-datatypes.egg), and
+[positive disequality queries](tests/injectivity/injectivity-disequality.egg).

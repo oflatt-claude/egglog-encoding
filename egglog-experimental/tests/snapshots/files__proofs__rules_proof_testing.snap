@@ -5,7 +5,7 @@ expression: snapshot
 (
 (Rule
   (= (@disequality-contradiction) (@disequality-contradiction))
-  (name "@@disequality-ne-self-Term")
+  (name "@disequality-self-Term")
   (premises
     (Congr
       (= (@disequality-ne-Term (A) (B)) (@disequality-ne-Term (A) (A)))
@@ -19,5 +19,5 @@ expression: snapshot
         (substitution (a (A)) (b (B))))
       (Sym (= (B) (A)) (Fiat (= (A) (B))))
       1))
-  (substitution (x (A))))
+  (substitution (@disequality-left (A))))
 )

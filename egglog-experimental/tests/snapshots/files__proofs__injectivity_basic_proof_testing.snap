@@ -3,27 +3,23 @@ source: egglog-experimental/tests/files.rs
 expression: snapshot
 ---
 (
-(let t
-  (premises
-            (Fiat
-              (= (Pair (Leaf "b") 7 (Leaf "d")) (Pair (Leaf "a") 7 (Leaf "c"))))))
-(let t_1
-  (substitution
-            (@injectivity-left (Leaf "b"))
-            (@injectivity-left_1 7)
-            (@injectivity-left_2 (Leaf "d"))
-            (@injectivity-right (Leaf "a"))
-            (@injectivity-right_1 7)
-            (@injectivity-right_2 (Leaf "c"))))
-(Rule
-  (= (@ExistsConstructor) (@ExistsConstructor))
-  (name "@prove_exists_rule")
-  (premises
-    (Sym
-      (= (Leaf "a") (Leaf "b"))
-      (Rule (= (Leaf "b") (Leaf "a")) (name "@injectivity-Pair") t t_1))
-    (Sym
-      (= (Leaf "c") (Leaf "d"))
-      (Rule (= (Leaf "d") (Leaf "c")) (name "@injectivity-Pair") t t_1)))
-  (substitution))
+(let t (Pair (Leaf "a") 7 (Leaf "c")))
+(Sym
+  (= (Leaf "a") (Leaf "b"))
+  (Rule
+    (= (Leaf "b") (Leaf "a"))
+    (name "@injectivity-Pair")
+    (premises
+      (Congr
+        (= t (Pair (Leaf "b") 7 (Leaf "c")))
+        (Fiat (= t (Pair (Leaf "b") 7 (Leaf "d"))))
+        (Fiat (= (Leaf "d") (Leaf "c")))
+        2)
+      (Fiat (= t t)))
+    (substitution
+      (@injectivity-left t)
+      (@injectivity-input (Leaf "b"))
+      (@injectivity-input_1 7)
+      (@injectivity-input_2 (Leaf "c"))
+      (@injectivity-other (Leaf "a")))))
 )

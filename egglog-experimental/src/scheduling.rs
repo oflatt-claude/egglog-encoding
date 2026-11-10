@@ -248,21 +248,23 @@ impl ScheduleState {
                     _ => return err(),
                 };
 
+                let mut report = crate::disequality::close(egraph)?;
                 if let Some(until) = until {
                     let span = until.span();
-                    if egraph
-                        .run_program(vec![Command::Check(span, vec![Fact::Fact(until)])])
-                        .is_ok()
-                    {
-                        return Ok((vec![], RunReport::default()));
+                    match egraph.run_program(vec![Command::Check(span, vec![Fact::Fact(until)])]) {
+                        Ok(_) => return Ok((vec![], report)),
+                        Err(egglog::Error::CheckError(..)) => {}
+                        Err(error) => return Err(error),
                     }
                 }
 
-                let report = if let Some(scheduler) = scheduler {
+                let step = if let Some(scheduler) = scheduler {
                     egraph.step_rules_with_scheduler(scheduler, ruleset)?
                 } else {
                     egraph.step_rules(ruleset)?
                 };
+                report.union(step);
+                report.union(crate::disequality::close(egraph)?);
                 Ok((vec![], report))
             }
             "saturate" => {
@@ -375,7 +377,7 @@ impl UserDefinedCommand for RunExtendedSchedule {
         args: &[Expr],
     ) -> Result<Vec<CommandOutput>, egglog::Error> {
         let mut schedule = ScheduleState::new();
-        let mut report = RunReport::default();
+        let mut report = crate::disequality::close(egraph)?;
         let mut outputs: Vec<CommandOutput> = Vec::new();
         for arg in args {
             let (step_outputs, step_report) = schedule.run(egraph, arg)?;

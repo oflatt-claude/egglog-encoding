@@ -8,5 +8,5 @@ expression: snapshot
  (X 1)
  (Y 1)
  (___disequality-contradiction 1)
- (___disequality-ne-Other 1)
+ (___disequality-ne-Other 2)
  (___disequality-ne-Term 1))

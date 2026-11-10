@@ -6,7 +6,7 @@ expression: snapshot
 (let t (@disequality-ne-Term (f (A)) (f (B))))
 (Rule
   (= (@disequality-contradiction) (@disequality-contradiction))
-  (name "@@disequality-ne-self-Term")
+  (name "@disequality-self-Term")
   (premises
     (Congr
       (= t (@disequality-ne-Term (f (A)) (f (A))))
@@ -17,5 +17,5 @@ expression: snapshot
         (Sym (= (B) (A)) (Fiat (= (A) (B))))
         0)
       1))
-  (substitution (x (f (A)))))
+  (substitution (@disequality-left (f (A)))))
 )
