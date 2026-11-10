@@ -14,6 +14,26 @@ use crate::{
 };
 use std::rc::Rc;
 
+/// Replay only definitions when lifting needs the global environment. The
+/// checker's action replay also gathers every implied proposition, which is
+/// unnecessary here and repeatedly traverses unrelated inserted terms.
+pub(in crate::proofs) fn global_bindings(
+    program: &[ResolvedNCommand],
+    dag: &mut TermDag,
+) -> Result<HashMap<String, TermId>, ProofCheckError> {
+    let definitions: Vec<_> = program
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                ResolvedNCommand::CoreAction(crate::GenericAction::Let(..))
+            )
+        })
+        .cloned()
+        .collect();
+    crate::proofs::proof_checker::gather_globals(&definitions, dag)
+}
+
 pub(super) struct ProofLifter<'a> {
     program: &'a Vec<ResolvedNCommand>,
     globals: &'a HashMap<String, TermId>,

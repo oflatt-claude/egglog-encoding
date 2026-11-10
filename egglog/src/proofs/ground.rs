@@ -8,9 +8,9 @@
 use std::iter::once;
 
 use super::ground_evidence::{Proofs, RawEquality};
-use super::proof_checker::{gather_global_actions, gather_globals};
+use super::proof_checker::gather_global_actions;
 use super::proof_container_rebuild::rebuild_container_value_rec;
-use super::proof_format::{ProofId, ProofStore, RawProof};
+use super::proof_format::{ProofId, ProofStore, RawProof, global_bindings};
 use crate::extract::find_canonical;
 use crate::*;
 
@@ -206,7 +206,7 @@ impl EGraph {
             return Err(fail("requested terms have different leaders"));
         }
         let (mut proofs, nodes) = Proofs::import(self, values)?;
-        let globals = gather_globals(&self.proof_check_program, &mut proofs.raw.term_dag)
+        let globals = global_bindings(&self.proof_check_program, &mut proofs.raw.term_dag)
             .map_err(|error| fail(error.to_string()))?;
         let mut builder = GroundProofs {
             terms: &typed,
@@ -256,7 +256,7 @@ impl EGraph {
             .map_err(|error| fail(error.to_string()))?;
         let values = lookup(self, &typed)?;
         let (mut proofs, nodes) = Proofs::import(self, values)?;
-        let globals = gather_globals(&self.proof_check_program, &mut proofs.raw.term_dag)
+        let globals = global_bindings(&self.proof_check_program, &mut proofs.raw.term_dag)
             .map_err(|error| fail(error.to_string()))?;
         let mut builder = GroundProofs {
             terms: &typed,

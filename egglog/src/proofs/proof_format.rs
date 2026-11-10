@@ -8,7 +8,7 @@ use crate::{
     ResolvedCall, Term, TermDag, TermId,
     ast::{FunctionSubtype, GenericNCommand, ResolvedExpr, ResolvedFact, ResolvedNCommand},
     proofs::{
-        proof_checker::{ProofCheckError, ProofCheckErrorKind, eval_merge_expr, gather_globals},
+        proof_checker::{ProofCheckError, ProofCheckErrorKind, eval_merge_expr},
         proof_encoding_helpers::{EncodingNames, Skeleton},
     },
     typechecking::PrimitiveValidator,
@@ -16,6 +16,7 @@ use crate::{
 };
 mod lifting;
 use lifting::ProofLifter;
+pub(super) use lifting::global_bindings;
 
 use egglog_ast::generic_ast::Literal;
 use egglog_numeric_id::{DenseIdMap, NumericId, define_id};
@@ -926,7 +927,7 @@ impl ProofStore {
             container_normalizers,
             prim_value_constructors,
         );
-        let globals = gather_globals(prog, &mut store.term_dag)
+        let globals = global_bindings(prog, &mut store.term_dag)
             .unwrap_or_else(|_| panic!("failed to gather globals from program"));
 
         let mut lifting = ProofLifter::new(prog, &globals, raw_store);
