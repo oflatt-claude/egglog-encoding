@@ -4,6 +4,45 @@ use crate::slotted::proofs::context::ColumnKind;
 use egglog::TermDag;
 
 #[test]
+fn congruence_restores_binders_in_independent_scopes() {
+    let mut dag = TermDag::default();
+    let mut program = ProofContext::default();
+    program.add_constructor("Start", vec![]);
+    program.add_constructor("V", vec![ColumnKind::Var]);
+    program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
+    program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+    program.add_constructor("Box", vec![ColumnKind::Child]);
+    program.add_let(&mut dag, "input", "(Box (Start))").unwrap();
+    program
+        .add_rewrite(
+            &mut dag,
+            "(rewrite (Start) (Pair (Lam $x (V $x)) (Lam $x (V $x))) :name duplicate)",
+        )
+        .unwrap();
+    program
+        .add_let(&mut dag, "target", "(Pair (Lam $0 (V $0)) (Lam $0 (V $0)))")
+        .unwrap();
+    let target = program.lets.shift_remove("target").unwrap();
+    let start = dag.app("Start".into(), vec![]);
+    let slot = crate::slotted::proofs::terms::slot_term(&mut dag, 0);
+    let mut store = SlottedProofStore::new(dag);
+    let root = store.fiat(program.lets["input"], program.lets["input"]);
+    let exists = store.project(root, 0).unwrap();
+    let rewrite = store.rule(
+        Proposition::new(start, target),
+        "duplicate".into(),
+        [("$x".into(), slot)].into_iter().collect(),
+        vec![RulePremise::Equality(exists)],
+    );
+    let proof = store.congr(root, 0, rewrite).unwrap();
+    check_proof(&mut store, &program, proof).unwrap();
+    let expected = store.proposition(proof).clone();
+    let (mut store, proof) = lift(store, &program, proof).unwrap();
+    check_proof(&mut store, &program, proof).unwrap();
+    assert_eq!(store.proposition(proof), &expected);
+}
+
+#[test]
 fn reconstructs_nested_binders_after_a_shape_change() {
     let mut dag = TermDag::default();
     let mut program = ProofContext::default();

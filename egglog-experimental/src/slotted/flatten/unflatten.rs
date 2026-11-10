@@ -1,6 +1,6 @@
 //! Lift proofs of flattened rewrites back to the original source rules.
 use crate::slotted::proofs::context::{ProofContext, pattern_term};
-use crate::slotted::proofs::coordinates::Coordinates;
+use crate::slotted::proofs::coordinates::{Coordinates, ViewId};
 use crate::slotted::proofs::format::{ProofId, RulePremise, SlottedProof, SlottedProofStore};
 use crate::slotted::proofs::terms::{Renaming, term_renaming};
 use crate::slotted::proofs::{HashMap, HashSet};
@@ -75,10 +75,8 @@ pub(in crate::slotted) fn lift(
                 } else {
                     out.alpha(result, refreshed)
                 };
-                let actual = out.proposition(result).clone();
-                let renaming = term_renaming(&out.term_dag, &[(proposition.rhs, actual.rhs)])
-                    .ok_or("lifted rule changes the right-hand term's shape")?;
-                out.view(result, proposition.rhs, renaming)
+                let result = out.plain(result);
+                restore_rhs(&mut out, program, result, proposition.rhs)?
             }
             SlottedProof::Ordinary(proof) => match proof.justification() {
                 Step::Fiat => {
@@ -105,10 +103,7 @@ pub(in crate::slotted) fn lift(
                     let p = out
                         .congr(lifted[parent], *child_index, child)
                         .map_err(|e| e.to_string())?;
-                    let rhs = out.edge(p).rhs;
-                    let renaming = term_renaming(&out.term_dag, &[(rhs, proposition.rhs)])
-                        .ok_or("lifting congruence changes the right-hand term's shape")?;
-                    out.reframe(p, renaming)
+                    restore_rhs(&mut out, program, p, proposition.rhs)?
                 }
                 Step::Proj {
                     proof: parent,
@@ -126,6 +121,34 @@ pub(in crate::slotted) fn lift(
         lifted.insert(id, result);
     }
     Ok(out.finish(lifted[&root]))
+}
+
+/// Restore the flattened step's RHS coordinates. Bound names can be shared
+/// across independent scopes, so a global permutation alone need not suffice.
+fn restore_rhs(
+    out: &mut Coordinates,
+    program: &ProofContext,
+    proof: ViewId,
+    target: TermId,
+) -> Result<ViewId> {
+    let edge = out.edge(proof).clone();
+    if let Some(renaming) = term_renaming(&out.term_dag, &[(edge.rhs, target)]) {
+        return Ok(out.reframe(proof, renaming));
+    }
+    let renaming = program
+        .renaming_between(&mut out.term_dag, edge.rhs, target)
+        .ok_or_else(|| {
+            format!(
+                "unflattening changes the right-hand term's shape: {} versus {}",
+                out.term_dag.to_string(edge.rhs),
+                out.term_dag.to_string(target)
+            )
+        })?;
+    let coordinates = edge.renaming.compose(&renaming.inverse());
+    let actual = crate::slotted::proofs::terms::rename(&mut out.term_dag, &coordinates, target);
+    let premise = out.proof(proof);
+    let proof = out.alpha(premise, actual);
+    Ok(out.view(proof, target, coordinates))
 }
 
 fn source_fiat(

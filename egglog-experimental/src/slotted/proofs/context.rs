@@ -357,7 +357,7 @@ impl ProofContext {
         (canonical(dag, lhs), canonical(dag, rhs))
     }
 
-    pub(super) fn renaming_between(
+    pub(in crate::slotted) fn renaming_between(
         &self,
         dag: &mut TermDag,
         lhs: TermId,
