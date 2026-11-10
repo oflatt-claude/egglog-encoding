@@ -627,12 +627,14 @@ end Egglog
 /-! ### Entry point -/
 
 
+/-- Write a source program for egglog, with `min` spelled `ordering-min`, egglog's minimum
+on an eq-sort, and the row counts the interpreter predicts for it. -/
 private def writeCase (dir name : String) (p : Program) : IO Unit := do
   unless p.arityConflicts.isEmpty do
     throw <| IO.userError
       s!"difftest: {name} uses {p.arityConflicts} at more than one arity, which egglog \
          rejects with \"Function already bound\""
-  IO.FS.writeFile s!"{dir}/{name}.egg" p.toEgg
+  IO.FS.writeFile s!"{dir}/{name}.egg" (p.toEgg.replace "(min " "(ordering-min ")
   IO.FS.writeFile s!"{dir}/{name}.expected" p.expectedSizes
 
 /-- Write a compiled program for egglog, with `min` on ids spelled `ordering-min` and the
