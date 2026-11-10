@@ -72,20 +72,39 @@ impl SlottedProofStore {
                 continue;
             }
             let proof = self.get(id);
-            let children: Vec<Key> = match proof {
-                SlottedProof::Equivariance {
-                    proof, renaming, ..
-                } => vec![(*proof, rho.compose(renaming))],
-                SlottedProof::Rule(_) => proof
-                    .premises()
-                    .into_iter()
-                    .map(|p| (p, Renaming::identity()))
-                    .collect(),
-                _ => proof
-                    .premises()
-                    .into_iter()
-                    .map(|p| (p, rho.clone()))
-                    .collect(),
+            // These branches will be discarded regardless of the renaming.
+            // Prune them before transporting their premises: a shared chain of
+            // reflexive detours can otherwise create exponentially many contexts.
+            let bypass = match proof {
+                SlottedProof::Ordinary(proof) => match proof.justification() {
+                    Step::Trans(a, b) if self.reflexive(*a) => Some(*b),
+                    Step::Trans(a, b) if self.reflexive(*b) => Some(*a),
+                    Step::Congr {
+                        proof, child_proof, ..
+                    } if self.reflexive(*child_proof) => Some(*proof),
+                    Step::Sym(p) if self.reflexive(*p) => Some(*p),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let children: Vec<Key> = if let Some(child) = bypass {
+                vec![(child, rho.clone())]
+            } else {
+                match proof {
+                    SlottedProof::Equivariance {
+                        proof, renaming, ..
+                    } => vec![(*proof, rho.compose(renaming))],
+                    SlottedProof::Rule(_) => proof
+                        .premises()
+                        .into_iter()
+                        .map(|p| (p, Renaming::identity()))
+                        .collect(),
+                    _ => proof
+                        .premises()
+                        .into_iter()
+                        .map(|p| (p, rho.clone()))
+                        .collect(),
+                }
             }
             .into_iter()
             .map(|(id, rho)| {
@@ -99,6 +118,10 @@ impl SlottedProofStore {
                 continue;
             }
             let children: Vec<_> = children.iter().map(|k| memo[k]).collect();
+            if bypass.is_some() {
+                memo.insert(key, children[0]);
+                continue;
+            }
             let result = match self.get(id).clone() {
                 SlottedProof::Rule(mut proof) => {
                     let normalized = |p| memo[&(p, Renaming::identity())];

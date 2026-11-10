@@ -167,3 +167,46 @@ fn inverse_transports_cancel_without_trusting_new_fiats() {
     assert!(check_proof(&mut store, &program, forged).is_err());
     check_proof(&mut store, &program, transported).unwrap();
 }
+
+#[test]
+fn reflexive_detours_are_pruned_before_transporting_shared_proofs() {
+    let mut dag = TermDag::default();
+    let mut program = ProofContext::default();
+    program.add_constructor("V", vec![ColumnKind::Var]);
+    program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
+    program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+    let mut term = None;
+    for slot in 0..24 {
+        let slot = super::super::terms::slot_term(&mut dag, slot);
+        let body = dag.app("V".into(), vec![slot]);
+        let lambda = dag.app("Lam".into(), vec![slot, body]);
+        term = Some(match term {
+            None => lambda,
+            Some(term) => dag.app("Pair".into(), vec![term, lambda]),
+        });
+    }
+    let term = term.unwrap();
+    program.lets.insert("input".into(), term);
+    let mut store = SlottedProofStore::new(dag);
+    let mut proof = store.fiat(term, term);
+    for slot in 0..12 {
+        let renamed = store.equivariance(
+            proof,
+            Renaming::new([(2 * slot, 2 * slot + 1), (2 * slot + 1, 2 * slot)]).unwrap(),
+        );
+        let restored = store.alpha(renamed, term);
+        let restored = store.sym(restored);
+        let restored = store.alpha(restored, term);
+        let restored = store.sym(restored);
+        proof = store.trans(restored, proof).unwrap();
+    }
+    check_proof(&mut store, &program, proof).unwrap();
+    let size = store.len();
+    let normalized = store.simplify(proof);
+    assert_eq!(store.proposition(normalized), &Proposition::new(term, term));
+    check_proof(&mut store, &program, normalized).unwrap();
+    assert!(
+        store.len() < size + 100,
+        "discarded detours must not be transported"
+    );
+}
