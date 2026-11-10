@@ -32,40 +32,11 @@ impl SlotLifter<'_> {
             .unwrap_or_default()
     }
 
-    /// Which side of a row proof's proposition a consumer reads.
-    fn row_side(&self, proof: ProofId, rhs: bool) -> TermId {
-        let p = self.egg.get(proof);
-        if rhs { p.rhs() } else { p.lhs() }
-    }
-
     /// The equality denoted by one side of a row proof's proposition. A row proof
     /// may relate a row to its re-keyed form, or state a row reflexively through
     /// a composition; the consumer wants the equality of the row as it reads it.
     pub(super) fn row_eq(&mut self, id: ProofId, rhs_side: bool) -> LiftResult<ViewId> {
         let proof = self.egg.get(id).clone();
-        let (lhs, rhs) = (proof.lhs(), proof.rhs());
-        if lhs == rhs {
-            // a reflexive row: its own justification says how it holds
-            return match proof.justification() {
-                Justification::Trans(a, b) => {
-                    let (a, b) = (*a, *b);
-                    match self.egg.get(a).justification() {
-                        Justification::Sym(x) => {
-                            let x = *x;
-                            let want = self.row_side(x, false) == lhs;
-                            self.row_eq(x, !want)
-                        }
-                        _ => self.row_eq(a, true),
-                    }
-                    .or_else(|_| self.row_eq(b, true))
-                }
-                Justification::Sym(x) => {
-                    let x = *x;
-                    self.row_eq(x, false)
-                }
-                _ => self.eq_direct(id),
-            };
-        }
         match proof.justification() {
             Justification::Sym(x) => {
                 let x = *x;
@@ -108,7 +79,10 @@ impl SlotLifter<'_> {
                     .app(base_row)
                     .and_then(|(_, a)| a.get(*child_index).copied())
                     .unwrap_or(self.egg.get(*child_proof).lhs());
-                bridges.push((old, *child_proof));
+                let child = self.egg.get(*child_proof);
+                if child.lhs() != child.rhs() {
+                    bridges.push((old, *child_proof));
+                }
                 Ok((firing, bridges))
             }
             Justification::Trans(a, b) => self.unwrap_match(*a).or_else(|_| self.unwrap_match(*b)),
@@ -194,6 +168,14 @@ impl SlotLifter<'_> {
             expanded.proof = self.trans(s, expanded.proof)?;
             current = new;
         }
+        if let Term::Var(variable) = self.out.term_dag.get(pattern)
+            && !variable.starts_with('$')
+        {
+            // The apply frame describes the current class. Retaining the
+            // match-time class here would interpret its old slots with the new
+            // frame, losing binder connections after a match is re-keyed.
+            expanded.variables.insert(variable.clone(), current);
+        }
         // A flattened atom retains the symmetry selected for this occurrence.
         if let Some(name) = ctx.names.get(path)
             && let Some(reading) = ctx.readings.get(name)
@@ -201,8 +183,8 @@ impl SlotLifter<'_> {
         {
             let g = self.slot_map(g)?;
             if !is_identity(&g) {
-                let group = self.reading_group_proof(cls, &g, ctx.prems)?;
-                let symmetry = self.symmetry(cls, &g, group)?;
+                let reading = self.reading_proof(cls, &g, ctx.prems)?;
+                let symmetry = self.symmetry(cls, &g, reading)?;
                 let completion = Renaming::completing(g.iter().map(|(k, v)| (*k, *v)))
                     .ok_or("reading is not injective")?;
                 let renamed = self.rename_both(expanded.proof, &completion);
@@ -230,19 +212,16 @@ impl SlotLifter<'_> {
                 variables.insert(v.clone(), cls);
             }
             let t = self.dec(cls)?;
-            let proof = self.reflexive(t).or_else(|error| {
-                // A variable can name a term constructed by an earlier rewrite.
-                // Replay its direct match witness before asking for reflexivity.
-                let witness = ctx.prems.iter().copied().find(|&id| {
-                    let proof = self.egg.get(id);
-                    proof.lhs() == cls || proof.rhs() == cls
-                });
-                let Some(witness) = witness else {
-                    return Err(error);
-                };
-                self.eq(witness)?;
-                self.reflexive(t)
-            })?;
+            let witness = ctx.prems.iter().copied().find(|&id| {
+                let proof = self.egg.get(id);
+                proof.lhs() == cls || proof.rhs() == cls
+            });
+            let proof = if let Some(witness) = witness {
+                let proof = self.eq(witness)?;
+                self.orient(proof, cls, cls)?
+            } else {
+                self.reflexive(t)?
+            };
             return Ok(Expansion {
                 proof,
                 variables,
@@ -332,6 +311,12 @@ impl SlotLifter<'_> {
             .find(|q| {
                 let pr = self.egg.get(*q);
                 pr.lhs() == cls
+                    && ctx
+                        .names
+                        .get(path)
+                        .and_then(|name| ctx.rows.get(name))
+                        .and_then(Option::as_ref)
+                        .is_none_or(|row| self.matches_row(row, pr.rhs(), ctx.subst))
                     && self.app(pr.rhs()).is_some_and(|(h, args)| {
                         h == ctor
                             && self.columns_match(args, &columns, &kids, path, ctx, &variables)
@@ -432,6 +417,30 @@ impl SlotLifter<'_> {
             variables,
             occurrences,
         })
+    }
+
+    /// Whether all recorded columns match, including edges and binder markers.
+    fn matches_row(
+        &self,
+        expression: &egglog::ast::Expr,
+        term: TermId,
+        bindings: &IndexMap<String, TermId>,
+    ) -> bool {
+        use egglog::ast::Expr;
+        match expression {
+            Expr::Var(_, name) => bindings.get(name).copied() == Some(term),
+            Expr::Lit(_, literal) => {
+                matches!(self.egg().get(term), Term::Lit(value) if value == literal)
+            }
+            Expr::Call(_, head, args) => self.app(term).is_some_and(|(actual, children)| {
+                actual == head
+                    && args.len() == children.len()
+                    && args
+                        .iter()
+                        .zip(children)
+                        .all(|(arg, &child)| self.matches_row(arg, child, bindings))
+            }),
+        }
     }
 
     /// A pattern the flattener reaches through its class rather than by an atom
@@ -593,19 +602,13 @@ impl SlotLifter<'_> {
         Ok(())
     }
 
-    /// The group row a `Reading` row for `(child, g)` among the premises derives
-    /// from.
-    fn reading_group_proof(
-        &self,
-        child: TermId,
-        g: &SlotMap,
-        prems: &[ProofId],
-    ) -> LiftResult<ProofId> {
-        let reading = prems
+    /// The selected reading, including any congruences that re-keyed its class.
+    fn reading_proof(&self, child: TermId, g: &SlotMap, prems: &[ProofId]) -> LiftResult<ProofId> {
+        prems
             .iter()
             .copied()
             .find(|q| {
-                let t = self.egg.get(*q).lhs();
+                let t = self.egg.get(*q).rhs();
                 self.app(t).is_some_and(|(h, a)| {
                     h.starts_with("Reading_")
                         && a.len() >= 3
@@ -619,8 +622,7 @@ impl SlotLifter<'_> {
                     self.egg_string(child),
                     slot_map_string(g)
                 )
-            })?;
-        self.group_row_behind(reading)
+            })
     }
 
     /// Do a row's class columns agree with the substitution where the pattern

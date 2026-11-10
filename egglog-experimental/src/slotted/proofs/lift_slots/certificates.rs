@@ -168,6 +168,21 @@ impl SlotLifter<'_> {
                 RuleKind::SlotClosure => {
                     let grp = self.group(self.sub(&subst, "_grp")?)?;
                     let old = self.slot_map(self.sub(&subst, "_slots")?)?;
+                    if !old.contains_key(&s) {
+                        // Closure also preserves names already proved absent;
+                        // no symmetry needs to move such a name out of the set.
+                        let prior = prems
+                            .iter()
+                            .copied()
+                            .find(|proof| {
+                                self.app(self.egg.get(*proof).lhs())
+                                    .is_some_and(|(head, args)| {
+                                        head.starts_with("FreeVars_") && args.first() == Some(&c)
+                                    })
+                            })
+                            .ok_or("slot closure has no prior slot-set premise")?;
+                        return self.cert_from(prior, c, s, f);
+                    }
                     let t = self.dec(c)?;
                     // the symmetries behind the group, as stated: a group element
                     // restricted to the class's slots may have lost the entry
@@ -490,5 +505,100 @@ impl SlotLifter<'_> {
             .congr(p, *first, child)
             .map_err(|e| e.to_string())?;
         Ok(self.note(r))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::slotted::{Compiler, Options, ProofMode, new_egraph_with_proofs};
+    use egglog::CommandOutput;
+
+    #[test]
+    fn slot_closure_preserves_an_earlier_redundancy_certificate() {
+        let mut compiler = Compiler::new(Options {
+            proof_mode: ProofMode::Prove,
+            ..Default::default()
+        });
+        let encoded = compiler
+            .compile_program(
+                None,
+                "(datatype E (V Var) (Pair E E))
+                 (let input (Pair (V $0) (V $1)))
+                 (rewrite (Pair a b) (Pair a a) :name duplicate)
+                 (rewrite (Pair a b) (Pair b a) :name swap)
+                 (run 3)
+                 (check (= input (Pair (V $2) (V $3))))",
+            )
+            .unwrap();
+        let commands = encoded.to_string().replace("(slotted-prove 0 ", "(prove ");
+        let mut graph = new_egraph_with_proofs();
+        let egg = graph
+            .parse_and_run_program(None, &commands)
+            .unwrap()
+            .into_iter()
+            .find_map(|output| match output {
+                CommandOutput::ProveExists { proof_store, .. } => Some(proof_store),
+                _ => None,
+            })
+            .unwrap();
+        let request = encoded.proofs.values().next().unwrap();
+        let mut dag = TermDag::default();
+        let context = request
+            .flattened
+            .context(&mut dag, BTreeMap::new())
+            .unwrap();
+        let mut lifter = SlotLifter::new(&context, dag.clone(), &request.names, &egg);
+        let cases: Vec<_> = egg
+            .proofs()
+            .filter_map(|(id, proof)| {
+                let Justification::Rule {
+                    name, substitution, ..
+                } = proof.justification()
+                else {
+                    return None;
+                };
+                if !matches!(rule_kind(&context, name), RuleKind::SlotClosure) {
+                    return None;
+                }
+                let class = lifter.sub(substitution, "_c").unwrap();
+                let old = lifter
+                    .slot_map(lifter.sub(substitution, "_slots").unwrap())
+                    .unwrap();
+                let (head, args) = lifter.app(proof.rhs())?;
+                if !head.starts_with("FreeVars_") {
+                    return None;
+                }
+                let new = lifter.slot_map(args[1]).unwrap();
+                let term = lifter.dec(class).unwrap();
+                Some(
+                    all_slots(&lifter.out.term_dag, term)
+                        .into_iter()
+                        .filter(|slot| !new.contains_key(slot))
+                        .map(|slot| (id, class, slot, old.contains_key(&slot)))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .flatten()
+            .collect();
+        assert!(
+            cases.iter().any(|(_, _, _, present)| !present),
+            "closure must retain a previously absent slot"
+        );
+        assert!(
+            cases.iter().any(|(_, _, _, present)| *present),
+            "closure must also remove a slot through symmetry"
+        );
+        for (proof, class, slot, _) in cases {
+            let mut lifter = SlotLifter::new(&context, dag.clone(), &request.names, &egg);
+            let fresh = lifter.fresh();
+            let term = lifter.dec(class).unwrap();
+            let swap = Renaming::new([(slot, fresh), (fresh, slot)]).unwrap();
+            let target = rename(&mut lifter.out.term_dag, &swap, term);
+            let proof = lifter.cert_from(proof, class, slot, fresh).unwrap();
+            let (mut store, proof) = lifter.out.finish(proof);
+            crate::slotted::proofs::check_proof(&mut store, &request.flattened, proof).unwrap();
+            assert_eq!(store.proposition(proof), &Proposition::new(term, target));
+        }
     }
 }
