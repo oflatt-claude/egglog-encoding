@@ -476,15 +476,15 @@ fn quoted_source_payloads_round_trip() {
 }
 
 #[test]
-fn unsupported_substitution_does_not_change_compiler_state() {
+fn malformed_substitution_does_not_change_compiler_state() {
     let mut compiler = compiler(ProofMode::Prove);
     let error = compiler
         .compile(
             None,
-            "(datatype U (V Var) (F U)) (rewrite (F x) (subst x $0 x))",
+            "(datatype U (V Var) (F U)) (rewrite (F x) (subst (F x) $0 x))",
         )
         .unwrap_err();
-    assert!(error.to_string().contains("no proof translation"));
+    assert!(error.to_string().contains("subst"));
     assert!(
         compiler
             .compile(None, "(datatype U (V Var) (F U U))")
@@ -683,4 +683,25 @@ fn guard_operands_determine_their_carrier_despite_a_constructor_namesake() {
     "#,
     );
     assert_eq!(proofs.len(), 1);
+}
+
+#[test]
+fn reconstruction_replays_source_order_before_join_reordering() {
+    let source = r#"
+(datatype U (A) (B) (C) (Pair U U) (F U) (G U) (Hit))
+(let a (A))
+(let b (B))
+(let input (Pair (F a) b))
+(let disconnected (G (C)))
+(rewrite (Pair x b) (Pair a (Hit))
+    :when ((G z) (= x (F a)) (= b (B)) (= (G z) disconnected))
+    :name ordered)
+(run 1)
+(check (= input (Pair a (Hit))))
+"#;
+    prove(
+        &mut compiler(ProofMode::Prove),
+        &mut new_egraph_with_proofs(),
+        source,
+    );
 }

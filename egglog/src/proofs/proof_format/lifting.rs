@@ -14,6 +14,24 @@ use crate::{
 };
 use std::rc::Rc;
 
+/// Evaluate top-level let definitions in declaration order.
+pub(in crate::proofs) fn global_bindings(
+    program: &[ResolvedNCommand],
+    dag: &mut TermDag,
+) -> Result<HashMap<String, TermId>, ProofCheckError> {
+    let definitions: Vec<_> = program
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                ResolvedNCommand::CoreAction(crate::GenericAction::Let(..))
+            )
+        })
+        .cloned()
+        .collect();
+    crate::proofs::proof_checker::gather_globals(&definitions, dag)
+}
+
 pub(super) struct ProofLifter<'a> {
     program: &'a Vec<ResolvedNCommand>,
     globals: &'a HashMap<String, TermId>,
@@ -261,8 +279,7 @@ impl<'a> ProofLifter<'a> {
         }
     }
 
-    /// Lifts a recorded proof to source-level statements, recursively lifting its premises.
-    /// This adds new metadata to the proof, such as the substitution for rules.
+    /// Lift a recorded proof to source statements with instantiated rule premises.
     ///
     /// Panics if the raw proof is invalid with respect to the program.
     pub(super) fn proof(&mut self, store: &mut ProofStore, raw_proof_id: RawProofId) -> ProofId {
@@ -523,8 +540,7 @@ impl<'a> ProofLifter<'a> {
             .unwrap_or_else(|| panic!("could not find rule with name {rule_name}"))
     }
 
-    /// How `rule`'s head lowers. A property of the rule text, so it is computed
-    /// once per rule.
+    /// The lowering plan for `rule`'s head.
     fn head_plan(&mut self, rule: &ResolvedRule) -> Rc<HeadPlan> {
         if let Some(plan) = self.head_plans.get(&rule.name) {
             return plan.clone();
@@ -778,9 +794,7 @@ impl ProofStore {
         self.congr_all_nested(current, child_id)
     }
 
-    /// Whether `term` is a container application, i.e. one whose head has a
-    /// normalizer. The same lookup answers both whether [`Self::expand_congr_all`]
-    /// recurses into it and how to canonicalize it afterwards.
+    /// Whether `term` is an application with a registered container normalizer.
     fn is_container_term(&self, term: TermId) -> bool {
         matches!(self.term_dag.get(term), Term::App(head, _)
             if self.container_normalizers.contains_key(head))
@@ -902,9 +916,8 @@ impl ProofStore {
         );
     }
 
-    /// The positional projection indexes from `ancestor` to a proper descendant
-    /// equal to `target`, choosing the first depth-first occurrence. The
-    /// explicit stack keeps deeply nested proof terms off the Rust call stack.
+    /// The projection indexes from `ancestor` to the first depth-first proper
+    /// descendant equal to `target`, or `None` when no such descendant exists.
     fn projection_path_to_descendant(
         &self,
         ancestor: TermId,

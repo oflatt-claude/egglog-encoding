@@ -18,6 +18,17 @@ impl SlotLifter<'_> {
         lhs: TermId,
         rhs: TermId,
     ) -> LiftResult<ViewId> {
+        self.derive_rule(name, prems, subst, &HashMap::default(), Some((lhs, rhs)))
+    }
+
+    pub(super) fn derive_rule(
+        &mut self,
+        name: &str,
+        prems: &[ProofId],
+        subst: &IndexMap<String, TermId>,
+        selected: &HashMap<TermId, ProofId>,
+        result: Option<(TermId, TermId)>,
+    ) -> LiftResult<ViewId> {
         let rewrite = self
             .program
             .rewrites
@@ -47,7 +58,8 @@ impl SlotLifter<'_> {
         else {
             return Err(format!("the match of {name} is not a rule firing"));
         };
-        let bridges: HashMap<TermId, ProofId> = rekeys.into_iter().collect();
+        let mut bridges: HashMap<TermId, ProofId> = rekeys.into_iter().collect();
+        bridges.extend(selected.iter().map(|(term, proof)| (*term, *proof)));
         let frame = {
             let m = self.sub(subst, &names.frame)?;
             frame_from_term(self.egg(), m).ok_or("the apply rule's frame is not a frame")?
@@ -62,6 +74,7 @@ impl SlotLifter<'_> {
             names: names.patterns[0].iter().cloned().collect(),
             classes: names.classes.clone(),
             readings: names.readings.clone(),
+            rows: names.rows.clone(),
             bridges: &bridges,
         };
         let Expansion {
@@ -71,13 +84,20 @@ impl SlotLifter<'_> {
         } = self.expand(cls_p, lhs_pattern, &[], &ctx, HashMap::default())?;
         let root = self.content_form(root); // cls_p = C
         let root_atom = self
-            .atom_label(&frame, &root_name, lhs_pattern, root_occ.get(&vec![]))
+            .atom_label(
+                &names.atoms,
+                &frame,
+                &root_name,
+                lhs_pattern,
+                root_occ.get(&vec![]),
+            )
             .or(Some("@atom:0".to_string()));
         let nested = self.nested_node_slots(
             &frame,
             lhs_pattern,
             &root_occ,
             &ctx.names,
+            &names.atoms,
             self.out.edge(root).rhs,
         )?;
         let (root, _) = self.lift(root, &frame, root_atom.as_deref(), &nested);
@@ -121,12 +141,13 @@ impl SlotLifter<'_> {
                 } = self.expand(cls_v, pattern, &[], &cond_ctx, variables)?;
                 variables = expanded;
                 let p = self.content_form(p); // cls_v = C_v
-                let atom = self.atom_label(&frame, &var, call, occ_v.get(&vec![]));
+                let atom = self.atom_label(&names.atoms, &frame, &var, call, occ_v.get(&vec![]));
                 let nested = self.nested_node_slots(
                     &frame,
                     call,
                     &occ_v,
                     &cond_ctx.names,
+                    &names.atoms,
                     self.out.edge(p).rhs,
                 )?;
                 let (p, _) = self.lift(p, &frame, atom.as_deref(), &nested);
@@ -149,6 +170,7 @@ impl SlotLifter<'_> {
                 let d = self.dec(cls)?;
                 let completion = self.complete(&m, d);
                 let s = rename(&mut self.out.term_dag, &completion, d);
+
                 sigma.insert(v.clone(), s);
             }
         }
@@ -220,6 +242,7 @@ impl SlotLifter<'_> {
         for (v, s) in &sigma_order {
             log::debug!("rule {name}: {v} := {}", self.out_string(*s));
         }
+
         let instance_lhs = rewrite.instantiate(&mut self.out.term_dag, lhs_pattern, &sigma)?;
         let instance_lhs = self
             .program
@@ -256,33 +279,40 @@ impl SlotLifter<'_> {
             let rho =
                 Renaming::completing(pairs.into_iter()).ok_or("non-injective class renaming")?;
             let p = self.rename_both(p, &rho); // σ(v) = ·call[σ]
-            let p = self.fit_content(p, call_inst, &occ_v)?;
+            let p = self
+                .fit_content(p, call_inst, &occ_v)
+                .map_err(|e| format!("condition {var} of {name}: {e}"))?;
             premises.push(p);
         }
         let rule_step = self.out.rule(
             Proposition::new(instance_lhs, instance_rhs),
             name.to_string(),
-            sigma_order.clone(),
-            premises.clone(),
+            sigma_order,
+            premises,
             self.program,
         );
         self.note(rule_step);
         let p = self.trans(root, rule_step)?; // cls_p = ·R[σ]
+        let Some((lhs, rhs)) = result else {
+            return Ok(p);
+        };
         if lhs == rhs && self.is_carrier_term(lhs) {
             // the step states the reflexivity of a term the head built: a
             // subterm of the instance, which the rule may conclude
             let built = self.dec(lhs)?;
             let found = self
                 .find_subterm_like(instance_rhs, built)
-                .or(self.find_subterm_like(instance_lhs, built));
-            if let Some(sub) = found {
-                let refl = self.out.rule(
-                    Proposition::new(sub, sub),
-                    name.to_string(),
-                    sigma_order,
-                    premises,
-                    self.program,
-                );
+                .map(|path| (rule_step, path))
+                .or_else(|| {
+                    self.find_subterm_like(instance_lhs, built)
+                        .map(|path| (root, path))
+                });
+            if let Some((mut refl, path)) = found {
+                // Existence follows directly from the constructed head term.
+                // Keep that occurrence explicit so later passes only replay Proj.
+                for index in path {
+                    refl = self.out.project(refl, index).map_err(|e| e.to_string())?;
+                }
                 let refl = self.note(refl);
                 let reframed = self.align(refl, built)?; // sub = ·built
                 let s = self.out.sym(reframed); // built = ·sub
@@ -346,13 +376,17 @@ impl SlotLifter<'_> {
     /// expansion found for `pattern`: through the root variable's class slots, or
     /// through a child variable's or literal's, which share a block with the
     /// atom's node slots.
-    fn atom_label(
+    pub(super) fn atom_label(
         &self,
+        labels: &BTreeMap<String, Option<String>>,
         frame: &Fr,
         var: &str,
         pattern: TermId,
         occ: Option<&Occurrence>,
     ) -> Option<String> {
+        if let Some(label) = labels.get(var).and_then(Option::as_ref) {
+            return Some(label.clone());
+        }
         if let Some(a) = frame.atom_of(var) {
             return Some(a);
         }
@@ -404,12 +438,13 @@ impl SlotLifter<'_> {
     /// The frame coordinates of the nested atoms' node slots, as `(content slot,
     /// frame slot)` pairs: a nested row's node slot reaches the content through
     /// the renaming its occurrence spells it with.
-    fn nested_node_slots(
+    pub(super) fn nested_node_slots(
         &mut self,
         frame: &Fr,
         pattern: TermId,
         occ: &HashMap<Vec<usize>, Occurrence>,
         names: &HashMap<Vec<usize>, String>,
+        labels: &BTreeMap<String, Option<String>>,
         content: TermId,
     ) -> LiftResult<Vec<(i64, i64)>> {
         let mut out = vec![];
@@ -422,7 +457,7 @@ impl SlotLifter<'_> {
                 continue;
             };
             let sub_pattern = self.subterm_at(pattern, path)?;
-            let Some(label) = self.atom_label(frame, name, sub_pattern, Some(&o)) else {
+            let Some(label) = self.atom_label(labels, frame, name, sub_pattern, Some(&o)) else {
                 continue;
             };
             let dr = self.dec(row)?;
@@ -488,7 +523,7 @@ impl SlotLifter<'_> {
 
     /// Read a substitution off a pattern's instance: each variable's first
     /// occurrence binds it, a slot literal binds to the slot at its position.
-    fn bind_from_content(
+    pub(super) fn bind_from_content(
         &mut self,
         pattern: TermId,
         content: TermId,
@@ -541,17 +576,25 @@ impl SlotLifter<'_> {
     }
 
     /// A subterm of `haystack` that is `needle` up to a bijection of slots.
-    fn find_subterm_like(&self, haystack: TermId, needle: TermId) -> Option<TermId> {
-        let mut stack = vec![haystack];
-        while let Some(t) = stack.pop() {
+    fn find_subterm_like(&self, haystack: TermId, needle: TermId) -> Option<Vec<usize>> {
+        let mut stack = vec![(haystack, vec![])];
+        let mut seen = HashSet::default();
+        while let Some((t, path)) = stack.pop() {
+            if !seen.insert(t) {
+                continue;
+            }
             let mut pairs = BTreeMap::new();
             if self.match_slots(t, needle, &mut pairs).is_ok()
                 && Renaming::completing(pairs.into_iter()).is_some()
             {
-                return Some(t);
+                return Some(path);
             }
             if let Term::App(_, kids) = self.out.term_dag.get(t) {
-                stack.extend(kids.iter().copied());
+                stack.extend(kids.iter().enumerate().map(|(i, &kid)| {
+                    let mut path = path.clone();
+                    path.push(i);
+                    (kid, path)
+                }));
             }
         }
         None

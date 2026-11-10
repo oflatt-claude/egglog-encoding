@@ -96,6 +96,7 @@ fn variable_expansion_replays_its_construction_witness() {
         names: HashMap::default(),
         classes: BTreeMap::new(),
         readings: BTreeMap::new(),
+        rows: BTreeMap::new(),
         bridges: &bridges,
     };
     let expanded = lifter
@@ -104,6 +105,73 @@ fn variable_expansion_replays_its_construction_witness() {
     let (mut store, proof) = lifter.out.finish(expanded.proof);
     super::super::check_proof(&mut store, &request.flattened, proof).unwrap();
     assert_eq!(store.proposition(proof), &Proposition::new(target, target));
+}
+
+#[test]
+fn carrier_projections_replay_the_recorded_parent_and_column() {
+    use crate::slotted::{Compiler, Options, ProofMode, new_egraph_with_proofs};
+    use egglog::CommandOutput;
+
+    let mut compiler = Compiler::new(Options {
+        proof_mode: ProofMode::Prove,
+        ..Default::default()
+    });
+    let encoded = compiler
+        .compile_program(
+            None,
+            "(datatype E (Start) (V Var) (Wrap E) (Lam Var E :binder 0))
+             (let input (Start))
+             (rewrite (Start) (Lam $x (Wrap (V $x))) :name build)
+             (run 1)
+             (check (= input (Lam $y (Wrap (V $y)))))",
+        )
+        .unwrap();
+    let commands = encoded.to_string().replace("(slotted-prove 0 ", "(prove ");
+    let egg = new_egraph_with_proofs()
+        .parse_and_run_program(None, &commands)
+        .unwrap()
+        .into_iter()
+        .find_map(|output| match output {
+            CommandOutput::ProveExists { proof_store, .. } => Some(proof_store),
+            _ => None,
+        })
+        .unwrap();
+    let request = encoded.proofs.values().next().unwrap();
+    let mut dag = TermDag::default();
+    let context = request
+        .flattened
+        .context(&mut dag, BTreeMap::new())
+        .unwrap();
+    let mut checked = 0;
+    for (id, proof) in egg.proofs() {
+        if !matches!(proof.justification(), Justification::Rule { name, .. } if name == "build/apply")
+        {
+            continue;
+        }
+        let mut lifter = SlotLifter::new(&context, dag.clone(), &request.names, &egg);
+        let Some((head, args)) = lifter.app(proof.rhs()) else {
+            continue;
+        };
+        let physical = match head {
+            "Lam" => 2,
+            "Wrap" => 1,
+            _ => continue,
+        };
+        let child = args[physical];
+        let expected = lifter.dec(child).unwrap();
+        let lifted = lifter.project(id, physical).unwrap();
+        let (mut store, lifted) = lifter.out.finish(lifted);
+        super::super::check_proof(&mut store, &request.flattened, lifted).unwrap();
+        assert_eq!(
+            store.proposition(lifted),
+            &Proposition::new(expected, expected)
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "the extracted proof must contain a constructed parent"
+    );
 }
 
 #[test]
@@ -297,4 +365,45 @@ pub(in crate::slotted::proofs) fn check_restricted_symmetries(
         }
     }
     Ok(checked)
+}
+
+#[test]
+fn equal_decoded_endpoints_preserve_a_nontrivial_class_equality() {
+    let mut program = ProofContext::default();
+    program.add_constructor("V", vec![ColumnKind::Var]);
+    program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+    let mut dag = TermDag::default();
+    program
+        .add_union(&mut dag, "(Pair (V $0) (V $1))", "(Pair (V $1) (V $0))")
+        .unwrap();
+    let term = program.unions[0].lhs;
+    let mut encoded = TermDag::default();
+    let mut map = |entries: &[i64]| {
+        let entries = entries
+            .iter()
+            .map(|&n| encoded.lit(Literal::Int(n)))
+            .collect();
+        encoded.app("map-of".into(), entries)
+    };
+    let identity = map(&[0, 0]);
+    let redundant = map(&[0, 0, 7, 9]);
+    let shifted = map(&[0, 1]);
+    let variable = encoded.app("V".into(), vec![identity]);
+    let left = encoded.app("Pair".into(), vec![identity, variable, shifted, variable]);
+    let right = encoded.app("Pair".into(), vec![redundant, variable, shifted, variable]);
+    let egg = ProofStore::new(encoded, HashMap::default(), HashSet::default());
+    let names = EncodingNames::default();
+    let mut lifter = SlotLifter::new(&program, dag, &names, &egg);
+    assert_ne!(left, right);
+    assert_eq!(lifter.dec(left).unwrap(), term);
+    assert_eq!(lifter.dec(right).unwrap(), term);
+    let proof = lifter.out.fiat(term, program.unions[0].rhs);
+    let swap = Renaming::new([(0, 1), (1, 0)]).unwrap();
+    let proof = lifter.out.reframe(proof, swap.clone());
+    let oriented = lifter.orient(proof, left, right).unwrap();
+    assert_eq!(lifter.out.edge(oriented).renaming, swap);
+    let reflexive = lifter.orient(proof, left, left).unwrap();
+    assert!(lifter.out.edge(reflexive).renaming.is_identity());
+    let (mut store, proof) = lifter.out.finish(oriented);
+    super::super::checker::check_proof_in_program(&mut store, &program, proof).unwrap();
 }

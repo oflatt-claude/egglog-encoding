@@ -16,15 +16,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-/// Slot-insensitive structural hashes for one append-only term DAG. Hashes only
-/// reject incompatible alpha/renaming candidates; collisions merely add work.
-/// Keep this cache with the reconstruction pass, not with retained proofs.
+/// Slot-insensitive structural hashes for one append-only term DAG.
+/// Equal hashes do not establish equivalence; callers must still compare terms.
 #[derive(Default)]
 pub(in crate::slotted) struct TermShapes(HashMap<TermId, u64>);
 
 impl TermShapes {
-    /// Alpha conversion and slot permutations preserve this shape. Keep the
-    /// existing matching/Alpha derivation as the authority when hashes agree.
+    /// A hash preserved by alpha conversion and slot permutations.
     pub fn get(&mut self, dag: &TermDag, term: TermId) -> u64 {
         if let Some(&shape) = self.0.get(&term) {
             return shape;

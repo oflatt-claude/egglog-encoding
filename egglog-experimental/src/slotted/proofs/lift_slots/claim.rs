@@ -13,9 +13,35 @@ impl SlotLifter<'_> {
     ) -> LiftResult<ViewId> {
         let mut p = self.content_form(p);
         for _ in 0..64 {
-            let content = self.out.edge(p).rhs;
+            let mut content = self.out.edge(p).rhs;
+            let refreshed = self
+                .program
+                .refresh_binders(&mut self.out.term_dag, content);
+            if refreshed != content {
+                let renaming = self.out.edge(p).renaming.clone();
+                let actual = rename(&mut self.out.term_dag, &renaming, refreshed);
+                let proof = self.out.proof(p);
+                let proof = self.out.alpha(proof, actual);
+                p = self.out.view(proof, refreshed, renaming);
+                content = refreshed;
+            }
             if content == target {
                 return Ok(p);
+            }
+            if term_renaming(&self.out.term_dag, &[(content, target)]).is_none()
+                && self
+                    .program
+                    .alpha_eq(&mut self.out.term_dag, content, target)
+            {
+                // Bound names can alias unrelated free names after congruence.
+                // Scoped alpha conversion resolves this without claiming that
+                // the free occurrence is redundant or globally renamable.
+                let renaming = self.out.edge(p).renaming.clone();
+                let actual = rename(&mut self.out.term_dag, &renaming, target);
+                let proof = self.out.proof(p);
+                let proof = self.out.alpha(proof, actual);
+                let view = self.out.view(proof, target, renaming);
+                return Ok(self.note(view));
             }
             let mut pairs: Vec<(Vec<usize>, i64, i64)> = vec![];
             self.slot_pairs(content, target, &mut vec![], &mut pairs)?;
@@ -160,8 +186,20 @@ impl SlotLifter<'_> {
         occ: &HashMap<Vec<usize>, Occurrence>,
     ) -> LiftResult<ViewId> {
         let mut p = self.content_form(p);
+        let target_free = self.program.free_slots(&self.out.term_dag, target);
         for _ in 0..64 {
-            let content = self.out.edge(p).rhs;
+            let mut content = self.out.edge(p).rhs;
+            let refreshed = self.program.refresh_binders_avoiding(
+                &mut self.out.term_dag,
+                content,
+                &target_free,
+            );
+            if refreshed != content {
+                let proof = self.out.proof(p);
+                let proof = self.out.alpha(proof, refreshed);
+                p = self.out.plain(proof);
+                content = refreshed;
+            }
             let free = self.program.free_slots(&self.out.term_dag, content);
             let mut pairs: Vec<(Vec<usize>, i64, i64)> = vec![];
             self.slot_pairs(content, target, &mut vec![], &mut pairs)?;
@@ -216,7 +254,11 @@ impl SlotLifter<'_> {
                 ));
             }
         }
-        Err("content fitting did not converge".into())
+        Err(format!(
+            "content fitting {} onto {} did not converge",
+            self.out_string(self.out.edge(p).rhs),
+            self.out_string(target)
+        ))
     }
 
     pub(super) fn subterm_at(&self, term: TermId, path: &[usize]) -> LiftResult<TermId> {
@@ -279,6 +321,7 @@ impl SlotLifter<'_> {
         claim: &Claim,
         query: &ProofNames,
         roots: [&str; 2],
+        patterns: [TermId; 2],
     ) -> LiftResult<ViewId> {
         let frame = matched_frame(self.egg, root, query)?;
         let coset = Self::coset_symmetry(&frame, roots)?;
@@ -309,6 +352,7 @@ impl SlotLifter<'_> {
                 subst: &substitution,
                 classes: query.classes.clone(),
                 readings: query.readings.clone(),
+                rows: query.rows.clone(),
                 names: names.iter().cloned().collect(),
                 bridges: &bridges,
             })
@@ -319,19 +363,23 @@ impl SlotLifter<'_> {
         let src_b = self
             .program
             .refresh_binders(&mut self.out.term_dag, claim.rhs);
+        let patterns = patterns.map(|pattern| {
+            self.program
+                .refresh_binders(&mut self.out.term_dag, pattern)
+        });
         let ctx_a = side(0)?;
         let Expansion {
             proof: pa,
             occurrences: occ_a,
             ..
-        } = self.expand(cls_a, src_a, &[], &ctx_a, HashMap::default())?;
+        } = self.expand(cls_a, patterns[0], &[], &ctx_a, HashMap::default())?;
         let pa = self.fit(pa, src_a, &occ_a)?; // cls_a = ·src_a
         let ctx_b = side(1)?;
         let Expansion {
             proof: pb,
             occurrences: occ_b,
             ..
-        } = self.expand(cls_b, src_b, &[], &ctx_b, HashMap::default())?;
+        } = self.expand(cls_b, patterns[1], &[], &ctx_b, HashMap::default())?;
         for (path, o) in &occ_b {
             log::debug!(
                 "claim side b occurrence {path:?}: {}",

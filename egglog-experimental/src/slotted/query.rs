@@ -12,6 +12,9 @@ pub(crate) struct ProofNames {
     /// Generated class bindings for pattern variables and atoms.
     pub classes: BTreeMap<String, String>,
     pub readings: BTreeMap<String, String>,
+    /// Exact frame labels for roots with one atom; repeated roots are ambiguous.
+    pub atoms: BTreeMap<String, Option<String>>,
+    pub rows: BTreeMap<String, Option<egglog::ast::Expr>>,
     pub frame: String,
 }
 
@@ -150,6 +153,8 @@ pub(super) struct Query {
     pub length: String,
     pub filter_start: usize,
     pub readings: BTreeMap<String, String>,
+    pub atoms: BTreeMap<String, Option<String>>,
+    pub rows: BTreeMap<String, Option<egglog::ast::Expr>>,
     used: BTreeSet<String>,
     prefix: String,
     id: usize,
@@ -408,6 +413,13 @@ pub(super) fn compile(
             .map(|p| q.payload(p))
             .collect::<Result<Vec<_>, _>>()?;
         let node = op.node(&op.name, &edges, &kids, &pays);
+        let expression = super::syntax::parse(None, &node).map_err(|error| error.to_string())?[0]
+            .0
+            .expr()?;
+        q.rows
+            .entry(a.root.clone())
+            .and_modify(|row| *row = None)
+            .or_insert(Some(expression));
         q.body.push(format!("(= {rv} {node})"));
         let cols = node[op.name.len() + 1..node.len() - 1]
             .trim_start()
@@ -426,6 +438,10 @@ pub(super) fn compile(
         }
         q.body.extend(facts);
         let av = q.fresh(&format!("atom_{idx}"));
+        q.atoms
+            .entry(a.root.clone())
+            .and_modify(|label| *label = None)
+            .or_insert_with(|| Some(format!("@atom:{idx}")));
         q.body.push(format!(
             "(= {av} ({} \"@atom:{idx}\" {}))",
             if nested { "nested-atom" } else { "atom" },

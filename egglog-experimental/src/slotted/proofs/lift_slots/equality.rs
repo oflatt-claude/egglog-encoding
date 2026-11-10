@@ -2,8 +2,7 @@
 
 use super::*;
 
-/// A failed candidate match carries only the conflicting nodes, so rejected
-/// candidates never render (potentially very large) terms for diagnostics.
+/// The first term or slot conflict in a structural match.
 pub(super) enum SlotMismatch {
     Terms(TermId, TermId),
     Conflict(i64, i64, i64),
@@ -276,13 +275,17 @@ impl SlotLifter<'_> {
             } => self
                 .congr(*proof, *child_index, *child_proof, rhs)
                 .map_err(|e| format!("in a congruence at {child_index}: {e}"))?,
-            Justification::Proj { proof, .. } => {
-                // Reuse an established surface term, translating the parent if needed.
-                let term = self.dec(lhs)?;
-                self.reflexive(term).or_else(|_| {
-                    self.eq(*proof)?;
-                    self.reflexive(term)
-                })?
+            Justification::Proj { proof, child_index } => {
+                let row = self.egg.get(*proof).rhs();
+                if self.is_carrier_term(row) {
+                    self.project(*proof, *child_index)?
+                } else {
+                    let term = self.dec(lhs)?;
+                    self.reflexive(term).or_else(|_| {
+                        self.eq(*proof)?;
+                        self.reflexive(term)
+                    })?
+                }
             }
             Justification::Rule {
                 name,
@@ -323,6 +326,24 @@ impl SlotLifter<'_> {
         Ok(result)
     }
 
+    pub(super) fn project(&mut self, parent: ProofId, physical: usize) -> LiftResult<ViewId> {
+        let row = self.egg.get(parent).rhs();
+        let head = self
+            .app(row)
+            .ok_or("projection parent is not a constructor")?
+            .0;
+        let column = self.surface_column(head, physical)?;
+        let target = self.dec(row)?;
+        let parent = self.eq(parent)?;
+        let parent = self.align(parent, target)?;
+        let projected = self
+            .out
+            .project(parent, column)
+            .map_err(|e| e.to_string())?;
+        let completion = self.edge_memo[&(row, column)].inverse();
+        Ok(self.rename_both(projected, &completion))
+    }
+
     /// A row stated at the top level.
     fn row_fiat(&mut self, row: TermId) -> LiftResult<ViewId> {
         let (head, args) = self.app(row).ok_or("not a row")?;
@@ -349,6 +370,34 @@ impl SlotLifter<'_> {
     /// spellings using the proof algebra, keeping the source's free slots fixed.
     fn source_union(&mut self, lhs: TermId, m: &Renaming, rhs: TermId) -> LiftResult<ViewId> {
         let target = rename(&mut self.out.term_dag, m, rhs);
+        // Staged primitive outputs carry earlier source-rule certificates.
+        // Reuse their proof steps; generated top-level insertions are not axioms.
+        for proof in self.certificates.clone() {
+            let proposition = self.out.normalize(self.out.edge(proof).clone());
+            let (a, b) = (proposition.lhs, proposition.rhs);
+            let mut left = BTreeMap::new();
+            let mut right = BTreeMap::new();
+            if self.unify_slots(a, lhs, &mut left).is_err()
+                || self.unify_slots(b, target, &mut right).is_err()
+                || self
+                    .program
+                    .free_slots(&self.out.term_dag, a)
+                    .iter()
+                    .any(|s| left.get(s) != Some(s))
+                || self
+                    .program
+                    .free_slots(&self.out.term_dag, b)
+                    .iter()
+                    .any(|s| right.get(s) != Some(s))
+            {
+                continue;
+            }
+            let Some(rho) = Renaming::completing(left) else {
+                continue;
+            };
+            let proof = self.rename_both(proof, &rho);
+            return self.align(proof, rhs);
+        }
         for u in &self.program.unions {
             for (a, b) in [(u.lhs, u.rhs), (u.rhs, u.lhs)] {
                 let mut left = BTreeMap::new();
@@ -392,6 +441,12 @@ impl SlotLifter<'_> {
     ) -> LiftResult<ViewId> {
         let base = self.egg.get(proof).clone();
         let base_rhs = base.rhs();
+        let child = self.egg.get(child_proof);
+        if child.lhs() == child.rhs() {
+            // Ground extraction retains congruences on literal and renaming
+            // operands too. A reflexive operand leaves the source step intact.
+            return self.eq(proof);
+        }
         if self.is_carrier_term(base_rhs) {
             // `t1 = F(.., c, ..)` and `c = c'`: congruence at the surface column.
             let p = self.eq(proof)?;
@@ -613,7 +668,7 @@ impl SlotLifter<'_> {
     pub(super) fn orient(&mut self, p: ViewId, lhs: TermId, rhs: TermId) -> LiftResult<ViewId> {
         let (l, r) = (self.dec(lhs)?, self.dec(rhs)?);
         let prop = self.out.edge(p).clone();
-        if l == r {
+        if lhs == rhs {
             // the step's own conclusion: the term it built equals itself
             if prop.lhs == l {
                 let s = self.out.sym(p);
