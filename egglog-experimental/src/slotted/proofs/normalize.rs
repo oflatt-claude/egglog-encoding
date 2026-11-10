@@ -26,6 +26,20 @@ impl TermRenamings {
             .or_insert_with(|| all_slots(dag, term))
     }
 
+    fn restrict(&mut self, dag: &TermDag, rho: &Renaming, lhs: TermId, rhs: TermId) -> Renaming {
+        if rho.is_identity() {
+            return rho.clone();
+        }
+        self.slots(dag, lhs);
+        self.slots(dag, rhs);
+        Renaming::completing(
+            rho.entries().filter(|(slot, _)| {
+                self.slots[&lhs].contains(slot) || self.slots[&rhs].contains(slot)
+            }),
+        )
+        .expect("restricting a permutation keeps it injective")
+    }
+
     fn rename(&mut self, dag: &mut TermDag, rho: &Renaming, term: TermId) -> TermId {
         if rho.is_identity() {
             return term;
@@ -49,16 +63,6 @@ impl SlottedProofStore {
         // Only the action on a step's endpoints matters. Keeping unrelated
         // coordinates in the memo key can expand a shared proof exponentially
         // when it is reached through different binder-renaming paths.
-        let support: HashMap<_, _> = self
-            .dependencies(root)
-            .into_iter()
-            .map(|id| {
-                let p = self.proposition(id);
-                let mut slots = terms.slots(&self.term_dag, p.lhs).clone();
-                slots.extend(terms.slots(&self.term_dag, p.rhs));
-                (id, slots)
-            })
-            .collect();
         let root = (root, Renaming::identity());
         let mut memo = HashMap::<Key, ProofId>::default();
         let mut work = vec![(root.clone(), false)];
@@ -84,7 +88,10 @@ impl SlottedProofStore {
                     .collect(),
             }
             .into_iter()
-            .map(|(id, rho)| (id, rho.restricted(&support[&id])))
+            .map(|(id, rho)| {
+                let p = self.proposition(id);
+                (id, terms.restrict(&self.term_dag, &rho, p.lhs, p.rhs))
+            })
             .collect();
             if !ready {
                 work.push((key, true));
