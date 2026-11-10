@@ -6,10 +6,41 @@ use crate::slotted::proofs::terms::{Renaming, TermShapes, term_renaming};
 use crate::slotted::proofs::{HashMap, HashSet};
 use egglog::ast::{Literal, ResolvedExpr, ResolvedFact};
 use egglog::proof::{Justification as Step, Proposition};
-use egglog::{Term, TermId};
+use egglog::{Term, TermDag, TermId};
 use std::collections::VecDeque;
 
 type Result<T> = std::result::Result<T, String>;
+
+/// Failed speculative searches keep term IDs until a caller reports the error.
+enum SearchFailure {
+    Message(String),
+    NoPath { from: TermId, to: TermId },
+}
+
+impl SearchFailure {
+    fn render(self, dag: &TermDag) -> String {
+        match self {
+            Self::Message(message) => message,
+            Self::NoPath { from, to } => format!(
+                "cannot reconstruct {} = {} from matched atoms",
+                dag.to_string(from),
+                dag.to_string(to)
+            ),
+        }
+    }
+}
+
+impl From<String> for SearchFailure {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+impl From<&str> for SearchFailure {
+    fn from(message: &str) -> Self {
+        Self::Message(message.into())
+    }
+}
 
 pub(in crate::slotted) fn lift(
     old: SlottedProofStore,
@@ -254,7 +285,9 @@ fn lift_rule(
         return witnesses.reflexive(claimed.lhs);
     }
     witnesses.exists(claimed.lhs)?;
-    let before = witnesses.reconstruct(claimed.lhs, lhs, true)?;
+    let before = witnesses
+        .reconstruct(claimed.lhs, lhs, true)
+        .map_err(|error| error.render(&witnesses.store.term_dag))?;
     let start = witnesses.store.proposition(before).lhs;
     let renaming = witnesses
         .renaming(&[(start, claimed.lhs)])
@@ -419,7 +452,7 @@ impl<'a> Witnesses<'a> {
             let proof = self.exists(term)?;
             self.add(proof);
         }
-        if let Ok(proof) = self.equality(a, b) {
+        if let Ok(proof) = self.reconstruct(a, b, false) {
             return Ok(proof);
         }
         let initial = self.reflexive(a)?;
@@ -456,11 +489,17 @@ impl<'a> Witnesses<'a> {
 
     fn equality(&mut self, from: TermId, to: TermId) -> Result<ProofId> {
         self.reconstruct(from, to, false)
+            .map_err(|error| error.render(&self.store.term_dag))
     }
 
     // Existence allows a permutation of the whole derivation. An equality must
     // preserve its starting term as well as end at the requested target.
-    fn reconstruct(&mut self, from: TermId, to: TermId, rename_source: bool) -> Result<ProofId> {
+    fn reconstruct(
+        &mut self,
+        from: TermId,
+        to: TermId,
+        rename_source: bool,
+    ) -> std::result::Result<ProofId, SearchFailure> {
         let key = (from, to, rename_source);
         if let Some(&p) = self.memo.get(&key) {
             return Ok(p);
@@ -476,7 +515,12 @@ impl<'a> Witnesses<'a> {
         result
     }
 
-    fn search(&mut self, from: TermId, to: TermId, rename_source: bool) -> Result<ProofId> {
+    fn search(
+        &mut self,
+        from: TermId,
+        to: TermId,
+        rename_source: bool,
+    ) -> std::result::Result<ProofId, SearchFailure> {
         for edge in self.edges.clone() {
             let p = self.store.proposition(edge).clone();
             if let Some(renaming) = self.renaming(&[(p.lhs, from), (p.rhs, to)]) {
@@ -542,7 +586,7 @@ impl<'a> Witnesses<'a> {
                             .project(parent, index)
                             .map_err(|e| e.to_string())?;
                         self.known.entry(child).or_insert(projection);
-                        let proof = self.equality(child, target).or_else(|error| {
+                        let proof = self.reconstruct(child, target, false).or_else(|error| {
                             if rename_source {
                                 self.reconstruct(child, target, true)
                             } else {
@@ -559,7 +603,7 @@ impl<'a> Witnesses<'a> {
                         }
                         self.store
                             .congr(parent, index, proof)
-                            .map_err(|e| e.to_string())
+                            .map_err(|e| SearchFailure::Message(e.to_string()))
                     });
                     if expanded.is_err() {
                         break;
@@ -587,11 +631,7 @@ impl<'a> Witnesses<'a> {
                 }
             }
         }
-        Err(format!(
-            "cannot reconstruct {} = {} from matched atoms",
-            self.store.term_dag.to_string(from),
-            self.store.term_dag.to_string(to)
-        ))
+        Err(SearchFailure::NoPath { from, to })
     }
 }
 
