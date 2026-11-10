@@ -115,7 +115,21 @@ impl SlotLifter<'_> {
         self.reflexive(term)
     }
 
-    pub(super) fn trans(&mut self, p: ViewId, q: ViewId) -> LiftResult<ViewId> {
+    /// Compose through an exact or alpha-equivalent middle term.
+    pub(super) fn trans(&mut self, mut p: ViewId, q: ViewId) -> LiftResult<ViewId> {
+        let left = self.out.edge(p).rhs;
+        let middle = self.out.edge(q).lhs;
+        if left != middle
+            && self.term_shapes.get(&self.out.term_dag, left)
+                == self.term_shapes.get(&self.out.term_dag, middle)
+            && self.program.alpha_eq(&mut self.out.term_dag, left, middle)
+        {
+            let renaming = self.out.edge(p).renaming.clone();
+            let actual = rename(&mut self.out.term_dag, &renaming, middle);
+            let proof = self.out.proof(p);
+            let proof = self.out.alpha(proof, actual);
+            p = self.out.view(proof, middle, renaming);
+        }
         let r = self.out.trans(p, q).map_err(|e| e.to_string())?;
         Ok(self.note(r))
     }
