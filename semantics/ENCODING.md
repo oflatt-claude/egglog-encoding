@@ -214,11 +214,12 @@ substitution, which is not sound once the two terms become equal in the final e-
 a minimum compares spellings, which the final representatives need not be.
 
 The reference interpreter refines the specification up to `Database.SameMeaning` for
-subsume-free programs (`exec_programStep`) and for union-free programs with subsumption,
-disequalities and `min` (`exec_programStep_noUnions`). The latter includes the compiler's
-output (`Congruence.exec_encode_programStep`); mixed union-and-subsume programs are not
-covered. `execRunRules` matches every rule against the pre-state, then applies the
-firings' writes and subsumptions.
+monotone, ordering-free programs (`exec_programStep`) and for union-free programs with
+subsumption, disequalities and `min` (`exec_programStep_noUnions`). The latter includes
+the compiler's output (`Congruence.exec_encode_programStep`); mixed union-and-subsume
+programs are not covered, and neither are source programs with a disequality or a `min`,
+which the corpus gates still execute. `execRunRules` matches every rule against the
+pre-state, then applies the firings' writes and subsumptions.
 
 `Congruence.compile` returns the compiled program with one origin per rule, in
 `Program.rules` order. Origins identify a source rule by index, path compression, parent
