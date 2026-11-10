@@ -14,7 +14,8 @@ registered in it so far; the emitter does the reverse with one ruleset per run. 
 congruence compiler emits no merge function. Its one table, `@UF(key, parent)`, is a
 relation, and every change to a row is a rule that subsumes the stale row and writes its
 replacement. Two language features support this: a `subsume` action and a disequality
-pattern `e ≠ e`. Source programs use neither (`Program.Fragment.monotone`).
+pattern `e ≠ e`. Source programs subsume no rows (`Program.Fragment.subsumeFree`); their
+rules may test disequalities.
 
 ### Semantics
 
@@ -98,7 +99,10 @@ variables, one edge `(@UF aᵢ xᵢ)` per child, where `xᵢ` is the child's id,
 literal is its own id. At a rebuild fixpoint
 every key has one live edge, to its root, so a source variable is bound to the
 representative of its class and a source rule head already builds canonical spellings;
-there is no leader query. An equality or disequality compares the ids of its two sides.
+there is no leader query. An equality or disequality compares the ids of its two sides. A
+`min` of query variables passes through flattening unchanged: its operands are roots,
+which are the source representatives, so it chooses as the source does. A compiled head
+writes the self-loops of both operands of a `min`, which are keys already.
 
 ### Views as an optimization
 
@@ -175,6 +179,39 @@ The paper's theorems are stated in [ExtlogTheorems.lean](ExtlogTheorems.lean).
 source programs in the fragment. `ExtlogTheorems.passes_compose` gives the same guarantee
 for the composition with provenance instrumentation. Their proofs are under
 `Proofs/Congruence/` and `Proofs/Provenance/`.
+
+### The fragment's boundary
+
+`Program.Fragment` (`Source/Domain.lean`) admits disequality patterns in rule queries, and
+minima in the rules of a program without saturation; a `min` applies only to query
+variables and to such minima, and the final check tests no disequality and takes no
+minimum. Each boundary is where the theorem fails:
+
+- The final check reads the compiled state with subsumption forgotten, as egglog's `check`
+  does, so a stale edge can bind an id to a former parent. After `(union (F (A)) (E))`,
+  where `E()` is below `F(A())` in the term order, the subsumed self-loop
+  `@UF(F(A()), F(A()))` lets the compiled check `(!= (F (A)) (E))` succeed, while the
+  source check fails. A `min` in the check can pick such a former parent in the same way.
+  Rule queries never see subsumed rows, so a disequality there compares two roots, which
+  are the representatives of its sides.
+- A compiled saturation may run passes after the source has settled, at states with the
+  meaning of the source fixpoint but with new spellings, and a new spelling can be the new
+  representative of its class. A minimum compares representatives, so a rule that takes one
+  can then build a term the source never builds. With `(A)`, `(F (B))`, `(K (F (B)))` and
+  `(M (F (AB)))` as facts, the saturation of `(rule ((F x)) ((F x)))`,
+  `(rule ((A) (B)) ((union (A) (B))))` and `(rule ((K z) (M w)) ((H (min z w))))` stops in
+  the source once `F(A())` is stored, before any rule binds `z` to it, whereas the compiled
+  program runs one more pass and builds `H(F(A()))`. A program without saturation is
+  simulated exactly, run by run (`Proofs/Congruence/Exact.lean`), and its rules may take
+  minima.
+- A `min` over an application would be looked up by its spelling in a compiled query, and
+  built by a compiled head whether or not it is chosen (`encodeBuildWith`), so the fragment
+  admits `min` over variables only.
+
+The proof checker and the lifting accept `SourceProof.Fragment`, the monotone,
+ordering-free part of the fragment: a rule node's disequality is a syntactic test on the
+substitution, which is not sound once the two terms become equal in the final e-graph, and
+a minimum compares spellings, which the final representatives need not be.
 
 The reference interpreter refines the specification up to `Database.SameMeaning` for
 subsume-free programs (`exec_programStep`) and for union-free programs with subsumption,
@@ -264,13 +301,18 @@ The provenance gate checks data preservation
 and every retained row's proof read off the log. The resugar gate lifts those proofs and checks
 them against the original source program, and the certificate gate exports the same
 proofs and checks them with Rust egglog. Failures, stuck executions, and
-insufficient fuel fail the command. Out-of-domain cases are counted separately.
+insufficient fuel fail the command. Out-of-domain cases are counted separately: a program
+outside the compiler's fragment is skipped by every gate, and one outside the checker's
+fragment, with a disequality or a minimum, has its encodings checked but no lifted
+proofs.
 
 The corpus is the curated and generated programs in `DiffTest.lean` together with the
-hand-written `.egg` programs under [`tests/`](tests), which `Program.ofEgg` parses. The
-egg gate (`difftest egg`) checks each of those against its committed snapshots: the
-congruence encoding in `<name>.congruence.egg`, the provenance encoding in
-`<name>.provenance.egg`, and the lifted source proofs in `<name>.proofs.txt`.
+hand-written `.egg` programs under [`tests/`](tests), which `Program.ofEgg` parses; a
+source `min` is written `ordering-min`, egglog's minimum on an eq-sort, and the difftest
+scripts emit that spelling. The egg gate (`difftest egg`) checks each of those against its
+committed snapshots: the congruence encoding in `<name>.congruence.egg`, the provenance
+encoding in `<name>.provenance.egg`, and, for a program in the checker's fragment, the
+lifted source proofs in `<name>.proofs.txt`.
 `make -C semantics lean-update-egg-snapshots` rewrites them after an intended change. A program that
 unions a term with its own subterm does not saturate in the model, whose classes are sets
 of explicit spellings, so the hand-written programs evaluate into separate constructors

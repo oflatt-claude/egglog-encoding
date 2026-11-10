@@ -47,8 +47,8 @@ Specification and proofs are separate: nothing outside `Proofs/`, `Tests/` and
 | --- | --- |
 | Section 4, semantics | `EgglogSemantics/Spec/`: `Syntax` (programs, schedules, rules), `Term`, `Database` (an e-graph as equations and subsumed rows), `Congruence` (`Cong` and `terms`), `Match` (queries, representatives), `Eval` (expressions, actions), `Step` (rounds, schedules, outcomes: `Reach`, `Eval`), `Divergence`, `Behavior`, `Order` (the term order behind representatives) |
 | Section 5, congruence pass | `Congruence/Encode.lean` (the pass `encode`, the maintenance rules, the view and phasing options), `Source/Domain.lean` and `Source/WellFormed.lean` (the fragment and well-formedness), `Congruence/Read.lean` (reading a compiled e-graph back) |
-| Section 6, proofs | `SourceProof/Format.lean` and `Checker.lean` (proof terms and the checker), `Provenance/Encode.lean` (instrumentation) and `Log.lean` (proofs read off the log), `Resugar/Claim.lean`, `Query.lean`, `Lift.lean` (lifting), `Resugar/Execute.lean` (`prove`) |
-| The proofs | `Proofs/Congruence/` (the simulation for Section 5), `Proofs/Provenance/` (instrumentation correctness), `Proofs/SourceProof/` and `Proofs/Resugar/` (checker and lifting soundness); the remaining modules are lemmas about the specification and the reference interpreter |
+| Section 6, proofs | `SourceProof/Format.lean` and `Checker.lean` (proof terms, the checker, and its fragment `SourceProof.Fragment`), `Provenance/Encode.lean` (instrumentation) and `Log.lean` (proofs read off the log), `Resugar/Claim.lean`, `Query.lean`, `Lift.lean` (lifting), `Resugar/Execute.lean` (`prove`) |
+| The proofs | `Proofs/Congruence/` (the simulations for Section 5: up to meaning for ordering-free rules, and exact for programs without saturation), `Proofs/Provenance/` (instrumentation correctness), `Proofs/SourceProof/` and `Proofs/Resugar/` (checker and lifting soundness); the remaining modules are lemmas about the specification and the reference interpreter |
 | Executable | `Impl/` (finite reference interpreter), `Congruence/Relational.lean` (execution without equality reasoning), `Tests/`, `DiffTest.lean` (comparisons with egglog and the corpus gates), `tests/` (`.egg` programs with snapshots of their encodings and lifted proofs) |
 
 To check the theorems from this directory: `lake build` (the `assert_no_sorry` lines in
@@ -58,13 +58,16 @@ show only `propext`, `Classical.choice` and `Quot.sound`.
 
 ## Encoding passes
 
-The congruence compiler translates source programs, which use neither `subsume` nor
-disequality, into an explicit union-find relation maintained by rules that subsume
-a stale row and write its replacement; the output has no merge function. It handles query
-flattening and rebuilding, with one id column per relation. The provenance pass adds a
-firing log, one relation per rule recording the values each firing bound, and proofs are
-reconstructed from the log afterwards. Proof lifting turns them into source proofs that
-both the Lean and Rust checkers accept. The [encoding guide](ENCODING.md) describes the
+The congruence compiler translates source programs that subsume no rows into an explicit
+union-find relation maintained by rules that subsume a stale row and write its
+replacement; the output has no merge function. Source rules may test disequalities, and
+the rules of a program without saturation may take the minimum of query variables; the
+final check does neither (`Program.Fragment`). It handles query flattening and rebuilding,
+with one id column per relation. The provenance pass adds a firing log, one relation per
+rule recording the values each firing bound, and proofs are reconstructed from the log
+afterwards. Proof lifting turns them into source proofs that both the Lean and Rust
+checkers accept; the checkers and the lifting take the monotone, ordering-free part of the
+fragment (`SourceProof.Fragment`). The [encoding guide](ENCODING.md) describes the
 encoding, the log, and the rationale; the corpus gates (`difftest congruence`,
 `difftest provenance`) also check both correctness statements executably. Brief certificate
 notes live with the [source checker](EgglogSemantics/SourceProof/Checker.lean) and
