@@ -8,7 +8,9 @@ use super::context::{ColumnKind, ProofContext, SourceFact, pattern_term};
 use super::coordinates::{Coordinates, ViewId};
 use super::format::{Claim, SlottedProofStore};
 use super::pipeline::EncodingNames;
-use super::terms::{FreshSlots, Renaming, all_slots, rename, slot_of, slot_term, term_renaming};
+use super::terms::{
+    FreshSlots, Renaming, TermShapes, all_slots, rename, slot_of, slot_term, term_renaming,
+};
 
 use super::{HashMap, HashSet};
 use crate::slotted::query::ProofNames;
@@ -111,7 +113,7 @@ struct SlotLifter<'a> {
     source_index: Option<HashMap<TermId, Vec<SourceBridge>>>,
     /// Slot-insensitive structural hashes, used only to reject candidates whose
     /// constructors or payloads cannot match. Hash collisions only add work.
-    term_shapes: HashMap<TermId, u64>,
+    term_shapes: TermShapes,
     /// Preferred occurrences depend only on the immutable ordinary proof DAG.
     occurrence_memo: HashMap<TermId, Occurrence>,
     /// The `(class, slot)` certificates being derived, against circularity.
@@ -219,7 +221,7 @@ impl<'a> SlotLifter<'a> {
             group_index: None,
             carrier_index: None,
             source_index: None,
-            term_shapes: HashMap::default(),
+            term_shapes: TermShapes::default(),
             occurrence_memo: HashMap::default(),
             cert_stack: Default::default(),
             fresh,

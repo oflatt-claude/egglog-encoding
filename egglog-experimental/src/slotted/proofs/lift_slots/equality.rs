@@ -1,7 +1,6 @@
 //! Lift encoded equality steps and maintenance rules.
 
 use super::*;
-use std::hash::{Hash, Hasher};
 
 /// A failed candidate match carries only the conflicting nodes, so rejected
 /// candidates never render (potentially very large) terms for diagnostics.
@@ -11,37 +10,6 @@ pub(super) enum SlotMismatch {
 }
 
 impl SlotLifter<'_> {
-    /// Alpha conversion and slot permutations preserve this shape. Keep the
-    /// existing matching/Alpha derivation as the authority when hashes agree.
-    fn term_shape(&mut self, term: TermId) -> u64 {
-        let mut pending = vec![(term, false)];
-        while let Some((term, ready)) = pending.pop() {
-            if self.term_shapes.contains_key(&term) {
-                continue;
-            }
-            let node = self.out.term_dag.get(term);
-            if !ready && let Term::App(_, children) = node {
-                pending.push((term, true));
-                pending.extend(children.iter().map(|&child| (child, false)));
-                continue;
-            }
-            let mut hash = rustc_hash::FxHasher::default();
-            match node {
-                Term::Lit(value) => (0u8, value).hash(&mut hash),
-                Term::Var(_) if slot_of(&self.out.term_dag, term).is_some() => 1u8.hash(&mut hash),
-                Term::Var(name) => (2u8, name).hash(&mut hash),
-                Term::App(head, children) => {
-                    (3u8, head, children.len()).hash(&mut hash);
-                    for child in children {
-                        self.term_shapes[child].hash(&mut hash);
-                    }
-                }
-            }
-            self.term_shapes.insert(term, hash.finish());
-        }
-        self.term_shapes[&term]
-    }
-
     /// Record that `proof` proves `lhs = …`, so `lhs`'s reflexivity is available.
     pub(super) fn note(&mut self, proof: ViewId) -> ViewId {
         let p = self.out.edge(proof).clone();
@@ -71,10 +39,10 @@ impl SlotLifter<'_> {
             .into_iter()
             .chain(self.known.keys().copied())
             .collect();
-        let shape = self.term_shape(t);
+        let shape = self.term_shapes.get(&self.out.term_dag, t);
         for other in candidates {
             let mut pairs = BTreeMap::new();
-            if other == t || self.term_shape(other) != shape {
+            if other == t || self.term_shapes.get(&self.out.term_dag, other) != shape {
                 continue;
             }
             let matched = match self.match_slots(other, t, &mut pairs) {
