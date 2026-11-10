@@ -194,7 +194,11 @@ that extraction needs hoisting, sharing needs fusion, small DAG choices match
 exhaustive search, and the adapter rejects mismatched files and cleans up after
 timeouts.
 
-## Proof replay
+## Optional proof replay
+
+The paper table reports optimization and execution with proofs off. Proof replay
+is a separate validation of the selected plan; its time is not included in that
+table.
 
 The `slotted-proof-testing` treatment passes `--slotted --proofs` to generate
 and check source proofs. Ordinary egglog's `proofs` treatment only records proof
@@ -207,12 +211,17 @@ query batch equals the selected computations, then run it through the harness:
 uv run --locked python -m benchmarking.lmfao.program \
   --proof-plan figures/output/eval/lmfao/slotted/plan.json --output /tmp/lmfao-proof.egg
 ./bench.py /tmp/lmfao-proof.egg --compare-treatment slotted \
-  --treatment slotted-proof-testing --rounds 3 --report /tmp/lmfao-proof.jsonl
+  --treatment slotted-proof-testing --rounds 1 --timeout-sec 900 \
+  --memory-limit-gib 16 --report /tmp/lmfao-proof.jsonl
 ```
 
 The check is appended after rewriting and asserts no new equalities. One batch
 claim avoids copying the proof context for each query. The run repeats rewriting
-with proofs enabled, extracts source proofs, and checks them; it is separate
-from DAG extraction and C++ compilation. These proofs cover logical query
-transformations. Backend code generation and physical sharing are checked
-separately by executing every output against independent answers.
+with proofs enabled, reconstructs a source proof, checks it, simplifies it, and
+checks it again before formatting the result. A successful source check followed
+by an incomplete simplification is partial progress, not a completed replay
+timing. DAG extraction and C++ compilation are measured separately.
+
+These proofs cover logical query transformations. Backend code generation and
+physical sharing are checked separately by executing every output against
+independent answers.
