@@ -604,8 +604,11 @@ private def probeCasesRaw : List (String × List Src) :=
 private def probeCases : List (String × Program) := probeCasesRaw.map fun c => (c.1, prog c.2)
 
 namespace Egglog
-/-- The source fragment, decided. -/
+/-- The source fragment, decided: the programs the congruence and provenance gates run. -/
 def Program.encodeDomainB (p : Program) : Bool := decide p.Fragment
+
+/-- The checker's fragment, decided: the programs whose proofs lift to source proofs. -/
+def Program.proofDomainB (p : Program) : Bool := decide (SourceProof.Fragment p)
 
 /-! #### Running the compiled program
 
@@ -886,7 +889,7 @@ private def runProvenanceChecks (fuel : Nat) (names : List String)
   let mut skipped := 0
   for (name, p₀) in cases do
     let p := p₀
-    if !p.encodeDomainB then
+    if !p.encodeDomainB || (liftProofs && !p.proofDomainB) then
       skipped := skipped + 1
       continue
     tested := tested + 1
@@ -932,12 +935,15 @@ private def runEggChecks (fuel : Nat) (update : Bool) (names : List String) : IO
     if !p.encodeDomainB then errors := ["outside the correspondence domain"]
     else
       let congruence := Congruence.encode p
+      -- A program outside the checker's fragment has encodings but no lifted proofs.
       let snapshots : List (String × Option String) :=
         [("congruence.egg", some congruence.render),
-         ("provenance.egg", (Provenance.encode congruence).map Program.render),
-         ("proofs.txt", (Resugar.certificates
-           (fun Q => relationalExecAt fuel FDatabase.empty Q.schedule) p).map
-           Resugar.renderProofs)]
+         ("provenance.egg", (Provenance.encode congruence).map Program.render)] ++
+        (if p.proofDomainB then
+          [("proofs.txt", (Resugar.certificates
+            (fun Q => relationalExecAt fuel FDatabase.empty Q.schedule) p).map
+            Resugar.renderProofs)]
+         else [])
       for (suffix, text) in snapshots do
         let path := eggDir / s!"{name}.{suffix}"
         match text with
@@ -950,7 +956,7 @@ private def runEggChecks (fuel : Nat) (update : Bool) (names : List String) : IO
             if expected != text then
               errors := errors ++ [s!"{suffix} differs, {firstDifference expected text}"]
       errors := errors ++ congruenceCheck fuel {} p ++ provenanceCheck fuel p false ++
-        (provenanceCheck fuel p true).map ("lifting: " ++ ·)
+        (if p.proofDomainB then (provenanceCheck fuel p true).map ("lifting: " ++ ·) else [])
     unless errors.isEmpty do
       failed := failed + 1
       IO.println s!"FAIL {name}: {String.intercalate "; " errors}"
@@ -975,7 +981,7 @@ private def exportCertificates (fuel : Nat) (path : String) (names : List String
     let selected := if names.isEmpty then allCases ++ files else available.filter fun c => names.contains c.1
     for (name, p₀) in selected do
       let p := p₀
-      if !p.encodeDomainB then continue
+      if !p.proofDomainB then continue
       let some cs := Resugar.certificates
           (fun Q => relationalExecAt fuel FDatabase.empty Q.schedule) p |
         IO.eprintln s!"difftest: {name} does not lift"; return 1
