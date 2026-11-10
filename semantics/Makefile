@@ -10,7 +10,7 @@ CERTIFICATES := $(abspath $(if $(filter /%,$(LEAN_CERTIFICATES)),$(LEAN_CERTIFIC
 LAKE ?= $(LEAN_BIN)/lake
 
 PAPER_MODULES := \
-  EgglogPaper \
+  ExtlogTheorems \
   EgglogSemantics.Spec.Syntax \
   EgglogSemantics.Spec.Term \
   EgglogSemantics.Spec.Database \
@@ -78,5 +78,5 @@ paper-sync: paper-extract
 	python3 paper_sync.py --no-extract
 
 paper-extract:
-	$(LAKE) build EgglogPaper $(addsuffix :blueprint,$(PAPER_MODULES))
-	$(LAKE) env .lake/packages/LeanArchitect/.lake/build/bin/extract_blueprint index EgglogPaper "$$(printf '%s\n' $(PAPER_MODULES) | paste -sd, -)"
+	$(LAKE) build ExtlogTheorems $(addsuffix :blueprint,$(PAPER_MODULES))
+	$(LAKE) env .lake/packages/LeanArchitect/.lake/build/bin/extract_blueprint index ExtlogTheorems "$$(printf '%s\n' $(PAPER_MODULES) | paste -sd, -)"

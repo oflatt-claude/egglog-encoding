@@ -45,7 +45,9 @@ incomplete, and `#print axioms` on each shows only `propext`, `Classical.choice`
 `Quot.sound`.
 -/
 
-namespace Egglog.Paper
+namespace ExtlogTheorems
+
+open Egglog
 
 /-! ## Section 5: the congruence pass -/
 
@@ -154,20 +156,20 @@ theorem lifted_proofs_sound {P : Program} {db : Database} {terms : List Term}
       Cong db output.claim.lhs output.claim.rhs :=
   fun output ho hl hr => checker_sound hs hclosed (lifted_proofs_checked h output ho) hl hr
 
-end Egglog.Paper
+end ExtlogTheorems
 
 /-! ## No holes
 
 The build fails if any theorem above, or any supporting result the paper relies on, has an
 incomplete proof. -/
 
-assert_no_sorry Egglog.Paper.congruence_pass_correct
-assert_no_sorry Egglog.Paper.provenance_pass_correct
-assert_no_sorry Egglog.Paper.passes_compose
-assert_no_sorry Egglog.Paper.checker_sound
-assert_no_sorry Egglog.Paper.log_proofs_checked
-assert_no_sorry Egglog.Paper.lifted_proofs_checked
-assert_no_sorry Egglog.Paper.lifted_proofs_sound
+assert_no_sorry ExtlogTheorems.congruence_pass_correct
+assert_no_sorry ExtlogTheorems.provenance_pass_correct
+assert_no_sorry ExtlogTheorems.passes_compose
+assert_no_sorry ExtlogTheorems.checker_sound
+assert_no_sorry ExtlogTheorems.log_proofs_checked
+assert_no_sorry ExtlogTheorems.lifted_proofs_checked
+assert_no_sorry ExtlogTheorems.lifted_proofs_sound
 
 -- Supporting results. The term order the compiled rebuilding uses, and the representatives
 -- it picks.

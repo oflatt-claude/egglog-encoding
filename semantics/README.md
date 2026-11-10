@@ -25,7 +25,7 @@ and brief rationale are in [Spec/Step.lean](EgglogSemantics/Spec/Step.lean).
 
 ## Reading guide
 
-Start with [EgglogPaper.lean](EgglogPaper.lean). It states every theorem the paper claims,
+Start with [ExtlogTheorems.lean](ExtlogTheorems.lean). It states every theorem the paper claims,
 in full and in the vocabulary of the specification, and proves each by one reference into
 `EgglogSemantics/Proofs/`:
 
@@ -39,7 +39,7 @@ in full and in the vocabulary of the specification, and proves each by one refer
 | `lifted_proofs_checked`, `lifted_proofs_sound` | Lifted proofs are accepted by the source checker, and their claims hold in the saturated source e-graph. |
 
 Specification and proofs are separate: nothing outside `Proofs/`, `Tests/` and
-`EgglogPaper.lean` imports a proof module. The `@[blueprint "def:…"]` and
+`ExtlogTheorems.lean` imports a proof module. The `@[blueprint "def:…"]` and
 `@[blueprint "thm:…"]` attributes carry the paper's labels and statements, and
 `make paper-sync` writes them into the paper.
 
@@ -52,8 +52,8 @@ Specification and proofs are separate: nothing outside `Proofs/`, `Tests/` and
 | Executable | `Impl/` (finite reference interpreter), `Congruence/Relational.lean` (execution without equality reasoning), `Tests/`, `DiffTest.lean` (comparisons with egglog and the corpus gates), `tests/` (`.egg` programs with snapshots of their encodings and lifted proofs) |
 
 To check the theorems from this directory: `lake build` (the `assert_no_sorry` lines in
-`EgglogPaper.lean` fail the build on any incomplete proof), `make lean-holes` (no `sorry`
-anywhere), and `#print axioms Egglog.Paper.congruence_pass_correct` and the others, which
+`ExtlogTheorems.lean` fail the build on any incomplete proof), `make lean-holes` (no `sorry`
+anywhere), and `#print axioms ExtlogTheorems.congruence_pass_correct` and the others, which
 show only `propext`, `Classical.choice` and `Quot.sound`.
 
 ## Encoding passes

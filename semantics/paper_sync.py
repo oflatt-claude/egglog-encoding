@@ -25,7 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "paper" / "semantics.tex"
-LIBRARY_INDEX = ROOT / "semantics" / ".lake" / "build" / "blueprint" / "library" / "EgglogPaper.tex"
+LIBRARY_INDEX = ROOT / "semantics" / ".lake" / "build" / "blueprint" / "library" / "ExtlogTheorems.tex"
 DEFAULT_PAPER = ROOT.parent / "extended-egglog-paper"
 PACKAGES = ("mathpartir", "stmaryrd", "placeins")
 GENERATED_DIR = "generated"
