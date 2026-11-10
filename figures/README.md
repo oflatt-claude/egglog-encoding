@@ -31,6 +31,8 @@ The default catalog also includes the **LMFAO execution table**. Follow its
 not require LMFAO. Missing or mismatched external inputs fail before collection.
 Its outputs are `lmfao.table.tex`, `lmfao.caption.tex`, `lmfao.md` and
 `lmfao.results.json`; plans, generated C++ and checks are retained under `lmfao/`.
+`lmfao/slotted/proof.egg` replays the selected plan through the normal benchmark
+harness; see the [proof replay instructions](../benchmarks/lmfao/README.md#optional-proof-replay).
 Use `\input{figures/eval/lmfao.table.tex}` inside the manuscript's table and
 `\input{figures/eval/lmfao.caption.tex}` for its caption.
 

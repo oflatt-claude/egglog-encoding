@@ -204,16 +204,18 @@ The `slotted-proof-testing` treatment passes `--slotted --proofs` to generate
 and check source proofs. Ordinary egglog's `proofs` treatment only records proof
 information. A slotted input without equality checks does not certify a plan.
 
-After extraction, generate a self-contained input that asks whether the original
-query batch equals the selected computations, then run it through the harness:
+The LMFAO run writes `slotted/proof.egg` beside the selected plan. This
+self-contained input asks whether the original query batch equals the selected
+computations. Run it through the harness:
 
 ```sh
-uv run --locked python -m benchmarking.lmfao.program \
-  --proof-plan figures/output/eval/lmfao/slotted/plan.json --output /tmp/lmfao-proof.egg
-./bench.py /tmp/lmfao-proof.egg --compare-treatment slotted \
+./bench.py figures/output/eval/lmfao/slotted/proof.egg --compare-treatment slotted \
   --treatment slotted-proof-testing --rounds 1 --timeout-sec 900 \
   --memory-limit-gib 16 --report /tmp/lmfao-proof.jsonl
 ```
+
+For an existing plan made with the default rewrite budget, regenerate its replay
+with `python -m benchmarking.lmfao.program --proof-plan PLAN.json --output FILE.egg`.
 
 The check is appended after rewriting and asserts no new equalities. One batch
 claim avoids copying the proof context for each query. The run repeats rewriting

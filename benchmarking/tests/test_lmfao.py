@@ -144,8 +144,12 @@ def test_backend_rejects_missing_export_or_import(
 
     monkeypatch.setattr(backend, "command", fake_command)
     monkeypatch.setattr(backend, "optimize", lambda config, source, destination: destination.write_text("{}"))
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "proof.egg").write_text("stale selected plan")
     with pytest.raises(ValueError, match="did not export" if missing == "export" else "did not acknowledge"):
-        backend.generate(tmp_path / "multifaq", tmp_path, tmp_path / "out", {})
+        backend.generate(tmp_path / "multifaq", tmp_path, output, {})
+    assert not (output / "proof.egg").exists()
 
 
 @pytest.mark.parametrize("mode", ["original", "paper", "egraph"])
@@ -303,7 +307,7 @@ def test_pipeline_charges_optimization_once_and_excludes_validation_and_diagnost
         directory.mkdir()
         plan = {
             "views": [{"origin": 0, "destination": 0, "keys": [], "aggregates": [{"functions": [], "incoming": []}]}],
-            "outputs": [{"view": 0, "aggregate": 0, "root": 0}],
+            "outputs": [{"view": 0, "aggregate": 0, "root": 0}] * len(model.WORKLOAD.queries),
         }
         cli.write_json(directory / "plan.json", plan)
         elapsed = 2 if optimizer is None else (27 if optimizer["treatment"] == "slotted" else 29)
@@ -357,6 +361,10 @@ def test_pipeline_charges_optimization_once_and_excludes_validation_and_diagnost
     )
     report = json.loads(capsys.readouterr().out)
     assert report == json.loads((output / "pipeline.json").read_text())
+    replay = (output / "slotted" / "proof.egg").read_text()
+    assert replay.startswith((model.FIXTURES / "inputs/slotted.egg").read_text())
+    assert replay.count("(check (= input selected_batch))") == 1
+    assert replay.endswith("(check (= input selected_batch))\n")
     costs = report["accounted_pipeline"]
     assert costs["original"]["one_time_phase_sum_seconds"] == 42
     assert costs["slotted"]["one_time_phase_sum_seconds"] == 67

@@ -363,8 +363,9 @@ pub struct Extraction {
 /// Extract directly from an evaluated slotted egraph's closed planning tables.
 /// Inputs must come from the pinned workload translator and logical.egg rules:
 /// scalar kernels are opaque, immutable functions identified by vector position.
-/// `timeout` is a finite, positive solver time limit in seconds. Returns an error
-/// for invalid planning terms or when the solver finds no feasible plan.
+/// `timeout` is a finite, positive solver time limit in seconds. At the limit,
+/// returns the best feasible plan found, falling back to the initial tree plan.
+/// Returns an error for invalid terms or missing executable alternatives.
 pub fn extract_live(graph: &egglog::EGraph, timeout: f64) -> Result<Extraction> {
     extract(Terms::live(graph, true)?, timeout)
 }

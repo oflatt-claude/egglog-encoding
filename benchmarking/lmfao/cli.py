@@ -21,7 +21,7 @@ from benchmarks.reproduction.lmfao.prepare import verify_backend
 from . import backend, model
 from .data import load_data, reference_results
 from .optimizer import collect_optimizers, seconds_summary, write_json
-from .program import DEFAULT_ROUNDS
+from .program import DEFAULT_ROUNDS, benchmark_input, plan_checks
 from .report import comparison_markdown, plan_text, preparation_costs
 
 
@@ -101,6 +101,9 @@ def run(args: argparse.Namespace, *, collected: tuple[dict[str, Any], dict[str, 
         (directory / "plan.txt").write_text(plan_text(plan))
         if label in baselines:
             continue
+        if label == "slotted":
+            source = benchmark_input("slotted", directory, args.rewrite_rounds)
+            (directory / "proof.egg").write_text(source.read_text() + plan_checks(plan))
         plans[label] = json.loads((directory / "extraction.json").read_text())
         plan_summaries[label]["structural_cost"] = plans[label]["estimated_cost"]
         signature = json.dumps(plan, sort_keys=True)

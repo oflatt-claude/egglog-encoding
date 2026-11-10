@@ -57,7 +57,7 @@ def generate(
     root_policy: str | None = None,
 ) -> dict[str, Any]:
     directory.mkdir(parents=True, exist_ok=True)
-    for name in ("workload.json", "plan.json", "extraction.json"):
+    for name in ("workload.json", "plan.json", "extraction.json", "proof.egg"):
         (directory / name).unlink(missing_ok=True)
     env = {k: v for k, v in os.environ.items() if not k.startswith("LMFAO_")}
     env["LMFAO_WORKLOAD_FILE"] = str(directory / "workload.json")
