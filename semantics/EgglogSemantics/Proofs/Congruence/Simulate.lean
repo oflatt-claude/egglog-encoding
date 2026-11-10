@@ -131,24 +131,26 @@ def Bwd (P : Program) (S : Schedule) : Prop :=
       Rounds P x x'
 
 /-- The universe of a stable state: terms over the program's vocabulary of bounded size. -/
-theorem bounded_universe (hP : P.Fragment) {x₀ : Database} (hx₀ : SrcInv P x₀) :
+theorem bounded_universe (hP : P.Fragment) (hO : P.schedule.OrderingFree) {x₀ : Database}
+    (hx₀ : SrcInv P x₀) :
     ∃ U : Set Term, U.Finite ∧
       ∀ x, Rounds P x₀ x → x.SameMeaning x₀ → ∀ t ∈ x.terms, t ∈ U := by
-  obtain ⟨M, hM⟩ := terms_bounded hP hx₀
+  obtain ⟨M, hM⟩ := terms_bounded hP hO hx₀
   refine ⟨{t | Term.VocabIn P t ∧ t.nodeSize ≤ M},
     Term.finite_nodeSize_le P.ctorSet_finite P.litSet_finite M, fun x hr hm t ht => ?_⟩
   exact ⟨(hx₀.rounds hP hr).vocab t ht, hM x hr hm t ht⟩
 
 /-- After the source has settled, the compiled saturation still terminates, at a state
 related to a partner of the same meaning. -/
-theorem extra_passes (hP : P.Fragment) {S : Schedule} (ih : Fwd P S) {e : Database}
+theorem extra_passes (hP : P.Fragment) (hO : P.schedule.OrderingFree) {S : Schedule}
+    (ih : Fwd P S) {e : Database}
     (hstable : ∀ x y, SrcInv P x → e.SameMeaning x → Reach x S y → e.SameMeaning y)
     (hpass : ∀ x, SrcInv P x → e.SameMeaning x → ∃ y, Reach x S y)
     {x₀ : Database} (hx₀ : SrcInv P x₀) (hm₀ : e.SameMeaning x₀) :
     ∀ d x, Rounds P x₀ x → e.SameMeaning x → Rel x d → Canon d →
       ∃ d' x', Reach d (.saturate (encS P S)) d' ∧ SrcInv P x' ∧ e.SameMeaning x' ∧ Rel x' d' ∧
         Canon d' ∧ Rounds P x₀ x' := by
-  obtain ⟨U, hU, hmem⟩ := bounded_universe hP hx₀
+  obtain ⟨U, hU, hmem⟩ := bounded_universe hP hO hx₀
   intro d x hr hm hd hc
   induction hn : rank U d using Nat.strong_induction_on generalizing d x with
   | _ n ihn =>
@@ -203,15 +205,18 @@ theorem extra_passes_bwd {S : Schedule} (ih : Bwd P S) {e : Database}
 
 /-! ### The simulation -/
 
-/-- Every finite source execution has a compiled execution related up to meaning. -/
-theorem sim_fwd (hP : P.Fragment) : ∀ (S : Schedule), S.rules ⊆ P.rules → Fwd P S
+/-- Every finite source execution has a compiled execution related up to meaning. The
+rules are ordering-free: a pass after the source has settled refires them at a partner
+state, which shares the meaning but not necessarily the representatives. -/
+theorem sim_fwd (hP : P.Fragment) (hO : P.schedule.OrderingFree) :
+    ∀ (S : Schedule), S.rules ⊆ P.rules → Fwd P S
   | .run R, hS => by
       rename_i src d x e
       intro hsrc hx hm hd hc hr
       cases hr
       obtain ⟨d', hd', hrel', hc'⟩ := sim_run hP (fun r hr => hS hr) hx hd hc
       exact ⟨d', RunRules R x, hd', hx.runRules hP (fun r hr => hS hr),
-        round_sameMeaning hP hsrc hx hm (fun r hr => hS hr), hrel', hc',
+        round_sameMeaning hP hO hsrc hx hm (fun r hr => hS hr), hrel', hc',
         Rounds.single (fun r hr => hS hr)⟩
   | .seq S₁ S₂, hS => by
       rename_i src d x e
@@ -219,13 +224,14 @@ theorem sim_fwd (hP : P.Fragment) : ∀ (S : Schedule), S.rules ⊆ P.rules → 
       have hS₁ : S₁.rules ⊆ P.rules := fun r hr => hS (List.mem_append_left _ hr)
       have hS₂ : S₂.rules ⊆ P.rules := fun r hr => hS (List.mem_append_right _ hr)
       obtain ⟨mid, h₁, h₂⟩ := Reach.seq_inv hr
-      obtain ⟨d₁, x₁, hd₁, hx₁, hm₁, hrel₁, hc₁, hr₁⟩ := sim_fwd hP S₁ hS₁ hsrc hx hm hd hc h₁
+      obtain ⟨d₁, x₁, hd₁, hx₁, hm₁, hrel₁, hc₁, hr₁⟩ :=
+        sim_fwd hP hO S₁ hS₁ hsrc hx hm hd hc h₁
       obtain ⟨d₂, x₂, hd₂, hx₂, hm₂, hrel₂, hc₂, hr₂⟩ :=
-        sim_fwd hP S₂ hS₂ (hsrc.reach hP hS₁ h₁) hx₁ hm₁ hrel₁ hc₁ h₂
+        sim_fwd hP hO S₂ hS₂ (hsrc.reach hP hS₁ h₁) hx₁ hm₁ hrel₁ hc₁ h₂
       exact ⟨d₂, x₂, .seq hd₁ hd₂, hx₂, hm₂, hrel₂, hc₂, hr₁.trans hr₂⟩
   | .saturate S, hS => by
       have hS' : S.rules ⊆ P.rules := hS
-      have ihS : Fwd P S := sim_fwd hP S hS'
+      have ihS : Fwd P S := sim_fwd hP hO S hS'
       rename_i src d x e
       intro hsrc hx hm hd hc hr
       generalize hT : Schedule.saturate S = T at hr
@@ -238,17 +244,17 @@ theorem sim_fwd (hP : P.Fragment) : ∀ (S : Schedule), S.rules ⊆ P.rules → 
         have he : SrcInv P e := hsrc.reach hP hS' hp
         have hstable : ∀ x y, SrcInv P x → e.SameMeaning x → Reach x S y → e.SameMeaning y := by
           intro x y hx' hex hxy
-          obtain ⟨y', hy', hey'⟩ := reach_transport hP hS' hsrc hx' (heq.trans hex) hp
+          obtain ⟨y', hy', hey'⟩ := reach_transport hP hO hS' hsrc hx' (heq.trans hex) hp
           rw [hy'.det hxy] at hey'
           exact hey'
         have hpass : ∀ x, SrcInv P x → e.SameMeaning x → ∃ y, Reach x S y := by
           intro x hx' hex
-          obtain ⟨y', hy', _⟩ := reach_transport hP hS' hsrc hx' (heq.trans hex) hp
+          obtain ⟨y', hy', _⟩ := reach_transport hP hO hS' hsrc hx' (heq.trans hex) hp
           exact ⟨y', hy'⟩
         by_cases hsame : d.SameMeaning d₁
         · exact ⟨d₁, x₁, .fixpoint hd₁ hsame, hx₁, hm₁, hrel₁, hc₁, hr₁⟩
         · obtain ⟨d', x', hd', hx', hm', hrel', hc', hr'⟩ :=
-            extra_passes hP ihS hstable hpass hx₁ hm₁ d₁ x₁ (Rounds.refl x₁) hm₁ hrel₁ hc₁
+            extra_passes hP hO ihS hstable hpass hx₁ hm₁ d₁ x₁ (Rounds.refl x₁) hm₁ hrel₁ hc₁
           exact ⟨d', x', .again hd₁ hsame hd', hx', hm', hrel', hc', hr₁.trans hr'⟩
       | @again src e₁ e _ hp hn _ _ ih₂ =>
         cases hT
@@ -259,13 +265,14 @@ theorem sim_fwd (hP : P.Fragment) : ∀ (S : Schedule), S.rules ⊆ P.rules → 
         exact ⟨d', x', .again hd₁ hne hd', hx', hm', hrel', hc', hr₁.trans hr'⟩
 
 /-- Every finite compiled execution has a source execution related up to meaning. -/
-theorem sim_bwd (hP : P.Fragment) : ∀ (S : Schedule), S.rules ⊆ P.rules → Bwd P S
+theorem sim_bwd (hP : P.Fragment) (hO : P.schedule.OrderingFree) :
+    ∀ (S : Schedule), S.rules ⊆ P.rules → Bwd P S
   | .run R, hS => by
       rename_i src d x d'
       intro hsrc hx hm hd hc hr
       obtain ⟨hrel', hc'⟩ := sim_run_bwd hP (fun r hr => hS hr) hx hd hc hr
       exact ⟨RunRules R src, RunRules R x, .run, hx.runRules hP (fun r hr => hS hr),
-        round_sameMeaning hP hsrc hx hm (fun r hr => hS hr), hrel', hc',
+        round_sameMeaning hP hO hsrc hx hm (fun r hr => hS hr), hrel', hc',
         Rounds.single (fun r hr => hS hr)⟩
   | .seq S₁ S₂, hS => by
       rename_i src d x d'
@@ -273,13 +280,14 @@ theorem sim_bwd (hP : P.Fragment) : ∀ (S : Schedule), S.rules ⊆ P.rules → 
       have hS₁ : S₁.rules ⊆ P.rules := fun r hr => hS (List.mem_append_left _ hr)
       have hS₂ : S₂.rules ⊆ P.rules := fun r hr => hS (List.mem_append_right _ hr)
       obtain ⟨mid, h₁, h₂⟩ := Reach.seq_inv hr
-      obtain ⟨e₁, x₁, he₁, hx₁, hm₁, hrel₁, hc₁, hr₁⟩ := sim_bwd hP S₁ hS₁ hsrc hx hm hd hc h₁
+      obtain ⟨e₁, x₁, he₁, hx₁, hm₁, hrel₁, hc₁, hr₁⟩ :=
+        sim_bwd hP hO S₁ hS₁ hsrc hx hm hd hc h₁
       obtain ⟨e₂, x₂, he₂, hx₂, hm₂, hrel₂, hc₂, hr₂⟩ :=
-        sim_bwd hP S₂ hS₂ (hsrc.reach hP hS₁ he₁) hx₁ hm₁ hrel₁ hc₁ h₂
+        sim_bwd hP hO S₂ hS₂ (hsrc.reach hP hS₁ he₁) hx₁ hm₁ hrel₁ hc₁ h₂
       exact ⟨e₂, x₂, .seq he₁ he₂, hx₂, hm₂, hrel₂, hc₂, hr₁.trans hr₂⟩
   | .saturate S, hS => by
       have hS' : S.rules ⊆ P.rules := hS
-      have ihS : Bwd P S := sim_bwd hP S hS'
+      have ihS : Bwd P S := sim_bwd hP hO S hS'
       rename_i src d x d'
       intro hsrc hx hm hd hc hr
       change Reach d (.saturate (encS P S)) d' at hr
@@ -302,7 +310,8 @@ theorem sim_bwd (hP : P.Fragment) : ∀ (S : Schedule), S.rules ⊆ P.rules → 
           have hstable : ∀ x y, SrcInv P x → e₁.SameMeaning x → Reach x S y →
               e₁.SameMeaning y := by
             intro x y hx' hex hxy
-            obtain ⟨y', hy', hey'⟩ := reach_transport hP hS' hsrc hx' (hsame.trans hex) he₁
+            obtain ⟨y', hy', hey'⟩ :=
+              reach_transport hP hO hS' hsrc hx' (hsame.trans hex) he₁
             rw [hy'.det hxy] at hey'
             exact hey'
           obtain ⟨x', hx', hm', hrel', hc', hr'⟩ := extra_passes_bwd ihS hstable

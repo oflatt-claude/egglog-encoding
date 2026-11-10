@@ -563,7 +563,7 @@ theorem query_fresh_argVar (q : Query) (n : Nat) {v : Var}
       exact ⟨q, List.mem_append_right _ hq, hvq⟩
 
 /-- Every variable of a compiled query is an argument of an application pattern. -/
-theorem keyed_encodeQuery {q : Query} (hsc : ∀ p ∈ q, p.Scoped) (ho : ∀ p ∈ q, p.OrderingFree)
+theorem keyed_encodeQuery {q : Query} (hsc : ∀ p ∈ q, p.Scoped) (ho : ∀ p ∈ q, p.MinOverVars)
     (hk : Query.VarsKeyed q) (n : Nat) : Query.VarsKeyed (encodeQueryWith {} q n).1 := by
   intro v hv
   rcases (query_vars_iff hsc n).mp hv with hv | hv
@@ -668,7 +668,7 @@ theorem compiled_keyed (hP : P.Fragment) :
   intro r' hr'
   rcases compiled_rules hr' with ⟨r, hr, rfl⟩ | hr'
   · exact keyed_encodeQuery (fun p hp => ((hP.queryEncodable.1 r hr).1 p hp).2)
-      (hP.noMin.1 r hr).1 (hP.queryEncodable.1 r hr).2 0
+      (rule_minOverVars hP hr).1 (hP.queryEncodable.1 r hr).2 0
   · rcases mem_maintenance.mp hr' with rfl | rfl | ⟨fk, _, _, rfl⟩
     · decide
     · decide
@@ -676,7 +676,8 @@ theorem compiled_keyed (hP : P.Fragment) :
 
 theorem compiled_check_keyed (hP : P.Fragment) : Query.VarsKeyed (Congruence.encode P).check := by
   rw [encode_check]
-  exact keyed_encodeQuery (fun p hp => (hP.queryEncodable.2.1 p hp).2) hP.noMin.2
+  exact keyed_encodeQuery (fun p hp => (hP.queryEncodable.2.1 p hp).2)
+    (fun p hp => Pattern.minOverVars_of_orderingFree p (check_orderingFree hP p hp))
     hP.queryEncodable.2.2 0
 
 /-- The congruence compiler's output satisfies the instrumentation premise. -/

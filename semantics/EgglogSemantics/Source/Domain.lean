@@ -201,6 +201,62 @@ def Schedule.monotoneB (S : Schedule) : Bool := S.rules.all Rule.monotoneB
 def Program.monotoneB (P : Program) : Bool :=
   P.schedule.monotoneB && P.check.all Pattern.monotoneB
 
+/-- The rule subsumes no row. -/
+def Rule.subsumeFreeB (r : Rule) : Bool := r.actions.all Action.monotoneB
+
+/-- No rule of the schedule subsumes a row. -/
+def Schedule.subsumeFreeB (S : Schedule) : Bool := S.rules.all Rule.subsumeFreeB
+
+/-! ### Minima over query variables
+
+A `min` compares the representatives its operands are bound to. The compiled query passes
+such an expression through unflattened, so it reads the smaller of two roots, and a
+compiled head writes the self-loops of both operands, which are keys already. An
+application under a `min` would instead be looked up by its spelling and built whether or
+not it is chosen, so `min` is admitted only over variables and such minima. -/
+
+/-- A variable, or the minimum of two such expressions. -/
+def Expr.isVarMinB : Expr → Bool
+  | .lit _ => false
+  | .var _ => true
+  | .app _ _ => false
+  | .min a b => a.isVarMinB && b.isVarMinB
+
+mutual
+
+/-- Every `min` in the expression is over `Expr.isVarMinB` operands. -/
+def Expr.minOverVarsB : Expr → Bool
+  | .lit _ => true
+  | .var _ => true
+  | .app _ args => Expr.minOverVarsListB args
+  | .min a b => a.isVarMinB && b.isVarMinB
+
+/-- `Expr.minOverVarsB` over an argument list. -/
+def Expr.minOverVarsListB : List Expr → Bool
+  | [] => true
+  | e :: es => e.minOverVarsB && Expr.minOverVarsListB es
+
+end
+
+/-- `Expr.minOverVarsB` over both sides of a pattern. -/
+def Pattern.minOverVarsB : Pattern → Bool
+  | .expr e => e.minOverVarsB
+  | .eq e₁ e₂ => e₁.minOverVarsB && e₂.minOverVarsB
+  | .ne e₁ e₂ => e₁.minOverVarsB && e₂.minOverVarsB
+
+/-- `Expr.minOverVarsB` over every expression an action evaluates. -/
+def Action.minOverVarsB : Action → Bool
+  | .expr e => e.minOverVarsB
+  | .union e₁ e₂ => e₁.minOverVarsB && e₂.minOverVarsB
+  | .subsume f es => (Expr.app f es).minOverVarsB
+
+/-- Every `min` of the rule's query and head is over query variables. -/
+def Rule.minOverVarsB (r : Rule) : Bool :=
+  r.query.all Pattern.minOverVarsB && r.actions.all Action.minOverVarsB
+
+/-- `Rule.minOverVarsB` at every rule the schedule fires. -/
+def Schedule.minOverVarsB (S : Schedule) : Bool := S.rules.all Rule.minOverVarsB
+
 /-! #### The head-scope check, and deciding it
 
 `Spec/Scope.lean`'s `Actions.Scoped` at a rule's own query variables. Every action in

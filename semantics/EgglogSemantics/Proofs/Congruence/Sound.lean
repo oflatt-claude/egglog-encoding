@@ -6,7 +6,9 @@ import EgglogSemantics.Proofs.Congruence.Atoms
 match in a reading of the compiled state, the source pattern matches, with its ids
 congruent to the source values. The reading is any database whose live edges and live
 applications are sound for the source: the compiled state itself, and the compiled state
-with subsumption forgotten, which the final check sees. -/
+with subsumption forgotten, which the final check sees. A disequality needs the reading to
+be canonical as well, so that two ids differ only when their source values are not
+congruent. -/
 
 namespace Egglog.Congruence
 
@@ -56,6 +58,12 @@ theorem evalList_of_forall₂ {σ : Env} : ∀ {es : List Expr} {ts : List Term}
 /-- A source expression's names are source names. -/
 def SrcNames (e : Expr) : Prop := ∀ g ∈ e.fns, g ≠ ufName
 
+/-- The expressions a pattern evaluates: its sides. -/
+def _root_.Egglog.Pattern.exprs : Pattern → List Expr
+  | .expr e => [e]
+  | .eq a b => [a, b]
+  | .ne a b => [a, b]
+
 theorem srcNames_app {f : FnName} {args : List Expr} (h : SrcNames (.app f args)) :
     f ≠ ufName ∧ ∀ g ∈ Expr.fnsList args, g ≠ ufName :=
   ⟨h f (by simp [Expr.fns]), fun g hg => h g (by simp [Expr.fns, hg])⟩
@@ -64,14 +72,23 @@ theorem srcNames_cons {e : Expr} {es : List Expr} (h : ∀ g ∈ Expr.fnsList (e
     SrcNames e ∧ ∀ g ∈ Expr.fnsList es, g ≠ ufName :=
   ⟨fun g hg => h g (by simp [Expr.fnsList, hg]), fun g hg => h g (by simp [Expr.fnsList, hg])⟩
 
+/-- A literal the source holds is its own representative. -/
+theorem lit_mem_reps {src : Database} (hw : src.WF) {l : Lit} (ht : Term.lit l ∈ src.terms) :
+    Term.lit l ∈ src.reps := by
+  refine ⟨ht, fun s _ hs hlt => ?_⟩
+  rw [InferredFacts.infers_eq_of_isLit hw (InferredFacts.congr_iff_infers.mp hs) (Or.inr rfl)]
+    at hlt
+  simp at hlt
+
 variable {src D : Database}
 
 mutual
 
 /-- If the atoms of a flattened expression match, the expression evaluates in the source
-and its id is congruent to the value. -/
+and its id is congruent to the value. A minimum over variables is passed through: it
+evaluates to a binding on both sides. -/
 theorem sound_expr (hr : Reads src D) : ∀ (e : Expr) (n : Nat) {σ' σ : Env},
-    e.OrderingFree → SrcNames e →
+    e.MinOverVars → SrcNames e →
     (∀ v ∈ e.vars, Env.lookup v σ' = Env.lookup v σ) →
     (∀ v t, Env.lookup v σ = some t → t ∈ src.terms) →
     (∀ p ∈ (encodeQueryExprWith {} e n).2.1, Matches D p σ') →
@@ -90,7 +107,20 @@ theorem sound_expr (hr : Reads src D) : ∀ (e : Expr) (n : Nat) {σ' σ : Env},
       simp only [Expr.eval_var] at hi
       rw [hag v (by simp)] at hi
       exact ⟨i, hi, Database.toCong (hσ v i hi)⟩
-  | .min _ _, _, _, _, ho, _, _, _, _, _, _, _ => (Expr.not_orderingFree_min ho).elim
+  | .min a b, n, σ', σ, ho, _, hag, hσ, _, _, i, hi => by
+      obtain ⟨ha, hb⟩ := Expr.minOverVars_min ho
+      rw [flat_min] at hi
+      simp only at hi
+      rw [Expr.eval_agreeOn (.min a b) hag] at hi
+      refine ⟨i, hi, Database.toCong ?_⟩
+      rw [Expr.eval_min, Option.bind_eq_some_iff] at hi
+      obtain ⟨x, hx, hmap⟩ := hi
+      obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
+      obtain ⟨v, _, hv⟩ := ha.eval_binding hx
+      obtain ⟨w, _, hw⟩ := hb.eval_binding hy
+      rcases Term.least_eq_or x y with hl | hl <;> rw [hl]
+      · exact hσ v x hv
+      · exact hσ w y hw
   | .app f args, n, σ', σ, ho, hnames, hag, hσ, hm, _, i, hi => by
       rcases hflat : encodeQueryArgsWith {} args n with ⟨xs, ps, next⟩
       have hlen := flatArgs_length args n
@@ -113,7 +143,7 @@ theorem sound_expr (hr : Reads src D) : ∀ (e : Expr) (n : Nat) {σ' σ : Env},
       simp only [Expr.eval_var] at hi hi'
       obtain rfl : i = i' := Option.some.inj (hi.symm.trans hi')
       -- The children.
-      have hargs := sound_args hr args n (Expr.orderingFree_app ho) hfns (by simpa using hag) hσ
+      have hargs := sound_args hr args n (Expr.minOverVars_app ho) hfns (by simpa using hag) hσ
         (by
           intro p hp
           rw [hflat] at hp
@@ -161,7 +191,7 @@ theorem sound_expr (hr : Reads src D) : ∀ (e : Expr) (n : Nat) {σ' σ : Env},
           (hr.edge _ _ hey).1)
 
 theorem sound_args (hr : Reads src D) : ∀ (es : List Expr) (n : Nat) {σ' σ : Env},
-    Expr.OrderingFreeList es → (∀ g ∈ Expr.fnsList es, g ≠ ufName) →
+    Expr.MinOverVarsList es → (∀ g ∈ Expr.fnsList es, g ≠ ufName) →
     (∀ v ∈ Expr.varsList es, Env.lookup v σ' = Env.lookup v σ) →
     (∀ v t, Env.lookup v σ = some t → t ∈ src.terms) →
     (∀ p ∈ (encodeQueryArgsWith {} es n).2.1, Matches D p σ') →
@@ -169,7 +199,7 @@ theorem sound_args (hr : Reads src D) : ∀ (es : List Expr) (n : Nat) {σ' σ :
       ∃ t, e.eval σ = some t ∧ Cong src t i) es (encodeQueryArgsWith {} es n).1
   | [], _, _, _, _, _, _, _, _ => by rw [flatArgs_nil]; exact .nil
   | e :: es, n, σ', σ, ho, hnames, hag, hσ, hm => by
-      obtain ⟨hoe, hoes⟩ := Expr.orderingFreeList_cons ho
+      obtain ⟨hoe, hoes⟩ := Expr.minOverVarsList_cons ho
       obtain ⟨hne, hnes⟩ := srcNames_cons hnames
       rcases h₁ : encodeQueryExprWith {} e n with ⟨x, ps, next⟩
       rcases h₂ : encodeQueryArgsWith {} es next with ⟨xs, qs, last⟩
@@ -190,7 +220,7 @@ end
 
 /-- An expression whose flattening matched also matches in the source, as its atom. -/
 theorem sound_expr_matches (hr : Reads src D) (hX : src.subsumed = ∅) {e : Expr} {n : Nat}
-    {σ' σ : Env} (ho : e.OrderingFree) (hnames : SrcNames e)
+    {σ' σ : Env} (ho : e.MinOverVars) (hnames : SrcNames e)
     (hag : ∀ v ∈ e.vars, Env.lookup v σ' = Env.lookup v σ)
     (hσ : ∀ v t, Env.lookup v σ = some t → t ∈ src.terms)
     (hm : ∀ p ∈ (encodeQueryExprWith {} e n).2.1, Matches D p σ')
@@ -201,11 +231,67 @@ theorem sound_expr_matches (hr : Reads src D) (hX : src.subsumed = ∅) {e : Exp
   obtain ⟨t, ht, hti⟩ := sound_expr hr e n ho hnames hag hσ hm hx hi
   exact ⟨t, i, ht, hi, hti, (Expr.Matches.of_eval hX ho ht (hti.trans hti.symm)).2⟩
 
-/-- If a compiled pattern's atoms match, the source pattern matches. -/
+/-- At a reading where every live edge leads to a source representative, the id of a
+flattened expression is a source representative: a held literal, a bound representative,
+the smaller of two such, or the root of an application. -/
+theorem id_mem_reps (hr : Reads src D) (hw : src.WF)
+    (hroot : ∀ k p, Edge D k p → p ∈ src.reps) (e : Expr) (n : Nat) {σ' σ : Env}
+    (ho : e.MinOverVars) (hag : ∀ v ∈ e.vars, Env.lookup v σ' = Env.lookup v σ)
+    (hσ : ∀ v t, Env.lookup v σ = some t → t ∈ src.reps)
+    (hm : ∀ p ∈ (encodeQueryExprWith {} e n).2.1, Matches D p σ')
+    (hx : Expr.Matches D σ' (encodeQueryExprWith {} e n).1) {i : Term}
+    (hi : (encodeQueryExprWith {} e n).1.eval σ' = some i) : i ∈ src.reps := by
+  cases e with
+  | lit l =>
+    rw [flat_lit] at hx hi
+    simp only [Expr.eval_lit, Option.some.injEq] at hi
+    subst hi
+    cases hx with
+    | lit hl => exact lit_mem_reps hw (hr.lit l hl)
+  | var v =>
+    rw [flat_var] at hi
+    simp only [Expr.eval_var] at hi
+    rw [hag v (by simp)] at hi
+    exact hσ v i hi
+  | min a b =>
+    obtain ⟨ha, hb⟩ := Expr.minOverVars_min ho
+    rw [flat_min] at hi
+    simp only at hi
+    rw [Expr.eval_agreeOn (.min a b) hag, Expr.eval_min, Option.bind_eq_some_iff] at hi
+    obtain ⟨x, hx', hmap⟩ := hi
+    obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
+    obtain ⟨v, _, hv⟩ := ha.eval_binding hx'
+    obtain ⟨w, _, hw⟩ := hb.eval_binding hy
+    rcases Term.least_eq_or x y with hl | hl <;> rw [hl]
+    · exact hσ v x hv
+    · exact hσ w y hw
+  | app f args =>
+    rcases hflat : encodeQueryArgsWith {} args n with ⟨xs, ps, next⟩
+    rw [flat_app hflat] at hm hi
+    simp only at hm hi
+    have hY := hm (.expr (ufRow (.app f (freshArgs next args.length))
+      (.var (freshVar (next + args.length))))) (by simp)
+    obtain ⟨_, i', _, _, _, hi', hey⟩ := matches_uf_iff.mp hY
+    simp only [Expr.eval_var] at hi hi'
+    obtain rfl : i = i' := Option.some.inj (hi.symm.trans hi')
+    exact hroot _ _ hey
+
+/-- What the soundness of a disequality needs of the reading: it is canonical, so every
+live edge leads to a source representative, the source bindings are representatives, and
+the compiled bindings are held. Two ids then differ exactly when their source values are
+not congruent. -/
+structure NeSound (src D : Database) (σ σ' : Env) : Prop where
+  wf : src.WF
+  root : ∀ k p, Edge D k p → p ∈ src.reps
+  reps : ∀ v t, Env.lookup v σ = some t → t ∈ src.reps
+  held : ∀ v t, Env.lookup v σ' = some t → t ∈ D.terms
+
+/-- If a compiled pattern's atoms match, the source pattern matches. A disequality needs
+the canonical reading. -/
 theorem sound_pattern (hr : Reads src D) (hX : src.subsumed = ∅) {p : Pattern} (n : Nat)
-    (ho : p.OrderingFree) (hmono : p.monotoneB = true) (hsc : p.Scoped)
-    (hnames : ∀ e, (p = .expr e ∨ ∃ e', p = .eq e e' ∨ p = .eq e' e) → SrcNames e)
-    {σ' σ : Env} (hag : ∀ v ∈ p.vars, Env.lookup v σ' = Env.lookup v σ)
+    (ho : p.MinOverVars) (hsc : p.Scoped) (hnames : ∀ e ∈ p.exprs, SrcNames e)
+    {σ' σ : Env} (hne : p.monotoneB = true ∨ NeSound src D σ σ')
+    (hag : ∀ v ∈ p.vars, Env.lookup v σ' = Env.lookup v σ)
     (hσ : ∀ v t, Env.lookup v σ = some t → t ∈ src.terms)
     (hm : ∀ q ∈ (encodePatternWith {} p n).1, Matches D q σ') : Matches src p σ := by
   cases p with
@@ -221,12 +307,13 @@ theorem sound_pattern (hr : Reads src D) (hX : src.subsumed = ∅) {p : Pattern}
       have hx : Expr.Matches D σ' (encodeQueryExprWith {} (.app f args) n).1 := by
         rw [flat_app hflat]; exact hxm
       obtain ⟨t, i, ht, _, _, hmatch⟩ := sound_expr_matches hr hX ho
-        (hnames _ (Or.inl rfl)) hag hσ hm hx
+        (hnames _ (by simp [Pattern.exprs])) hag hσ hm hx
       exact .atom hmatch
     | lit _ => exact hsc.elim
     | var _ => exact hsc.elim
     | min _ _ => exact hsc.elim
   | eq l r =>
+    obtain ⟨hol, hor⟩ := Pattern.minOverVars_eq ho
     rcases h₁ : encodeQueryExprWith {} l n with ⟨x₁, ps, next⟩
     rcases h₂ : encodeQueryExprWith {} r next with ⟨x₂, qs, last⟩
     rw [pattern_eq h₁ h₂] at hm
@@ -236,11 +323,11 @@ theorem sound_pattern (hr : Reads src D) (hX : src.subsumed = ∅) {p : Pattern}
       hag v (by simp [Pattern.vars, hv])
     have hag₂ : ∀ v ∈ r.vars, Env.lookup v σ' = Env.lookup v σ := fun v hv =>
       hag v (by simp [Pattern.vars, hv])
-    obtain ⟨t₁, i₁', ht₁, hi₁', hc₁, hl⟩ := sound_expr_matches hr hX ho.1
-      (hnames l (Or.inr ⟨r, Or.inl rfl⟩)) hag₁ hσ
+    obtain ⟨t₁, i₁', ht₁, hi₁', hc₁, hl⟩ := sound_expr_matches hr hX hol
+      (hnames l (by simp [Pattern.exprs])) hag₁ hσ
       (fun q hq => hm q (by rw [h₁] at hq; simp [hq])) (by rw [h₁]; exact hm₁)
-    obtain ⟨t₂, i₂', ht₂, hi₂', hc₂, hrm⟩ := sound_expr_matches hr hX ho.2
-      (hnames r (Or.inr ⟨l, Or.inr rfl⟩)) hag₂ hσ
+    obtain ⟨t₂, i₂', ht₂, hi₂', hc₂, hrm⟩ := sound_expr_matches hr hX hor
+      (hnames r (by simp [Pattern.exprs])) hag₂ hσ
       (fun q hq => hm q (by rw [h₂] at hq; simp [hq])) (by rw [h₂]; exact hm₂)
     rw [h₁] at hi₁'
     rw [h₂] at hi₂'
@@ -250,14 +337,49 @@ theorem sound_pattern (hr : Reads src D) (hX : src.subsumed = ∅) {p : Pattern}
     have heq : i₁ = i₂ := hc.eq_of_diag hr.diag
     subst heq
     exact .equal hl hrm ht₁ ht₂ (hc₁.trans hc₂.symm)
-  | ne l r => simp [Pattern.monotoneB] at hmono
+  | ne l r =>
+    rcases hne with hmono | hne
+    · simp [Pattern.monotoneB] at hmono
+    obtain ⟨hol, hor⟩ := Pattern.minOverVars_ne ho
+    rcases h₁ : encodeQueryExprWith {} l n with ⟨x₁, ps, next⟩
+    rcases h₂ : encodeQueryExprWith {} r next with ⟨x₂, qs, last⟩
+    rw [pattern_ne h₁ h₂] at hm
+    have hE := hm (.ne x₁ x₂) (by simp)
+    obtain ⟨i₁, i₂, hm₁, hm₂, hi₁, hi₂, hc⟩ := matches_ne_iff.mp hE
+    have hag₁ : ∀ v ∈ l.vars, Env.lookup v σ' = Env.lookup v σ := fun v hv =>
+      hag v (by simp [Pattern.vars, hv])
+    have hag₂ : ∀ v ∈ r.vars, Env.lookup v σ' = Env.lookup v σ := fun v hv =>
+      hag v (by simp [Pattern.vars, hv])
+    have hml : ∀ q ∈ (encodeQueryExprWith {} l n).2.1, Matches D q σ' := fun q hq =>
+      hm q (by rw [h₁] at hq; simp [hq])
+    have hmr : ∀ q ∈ (encodeQueryExprWith {} r next).2.1, Matches D q σ' := fun q hq =>
+      hm q (by rw [h₂] at hq; simp [hq])
+    have hxl : Expr.Matches D σ' (encodeQueryExprWith {} l n).1 := by rw [h₁]; exact hm₁
+    have hxr : Expr.Matches D σ' (encodeQueryExprWith {} r next).1 := by rw [h₂]; exact hm₂
+    have hil : (encodeQueryExprWith {} l n).1.eval σ' = some i₁ := by rw [h₁]; exact hi₁
+    have hir : (encodeQueryExprWith {} r next).1.eval σ' = some i₂ := by rw [h₂]; exact hi₂
+    -- Both ids are source representatives, so congruent values would make them one.
+    have hr₁ : i₁ ∈ src.reps :=
+      id_mem_reps hr hne.wf hne.root l n hol hag₁ hne.reps hml hxl hil
+    have hr₂ : i₂ ∈ src.reps :=
+      id_mem_reps hr hne.wf hne.root r next hor hag₂ hne.reps hmr hxr hir
+    obtain ⟨t₁, i₁', ht₁, hi₁', hc₁, hl⟩ := sound_expr_matches hr hX hol
+      (hnames l (by simp [Pattern.exprs])) hag₁ hσ hml hxl
+    obtain ⟨t₂, i₂', ht₂, hi₂', hc₂, hrm⟩ := sound_expr_matches hr hX hor
+      (hnames r (by simp [Pattern.exprs])) hag₂ hσ hmr hxr
+    obtain rfl : i₁ = i₁' := Option.some.inj (hil.symm.trans hi₁')
+    obtain rfl : i₂ = i₂' := Option.some.inj (hir.symm.trans hi₂')
+    refine .unequal hl hrm ht₁ ht₂ fun hcong => hc ?_
+    have heq : i₁ = i₂ := Database.reps_eq_of_cong hr₁ hr₂ (hc₁.symm.trans (hcong.trans hc₂))
+    subst heq
+    exact Expr.Matches.eval_cong (fun v t h => Database.toCong (hne.held v t h)) ⟨hi₁, hm₁⟩
 
 /-- If a compiled query's atoms match, every source pattern matches. -/
 theorem sound_query (hr : Reads src D) (hX : src.subsumed = ∅) {q : Query} (n : Nat)
-    (ho : ∀ p ∈ q, p.OrderingFree) (hmono : ∀ p ∈ q, p.monotoneB = true)
-    (hsc : ∀ p ∈ q, p.Scoped)
-    (hnames : ∀ p ∈ q, ∀ e, (p = .expr e ∨ ∃ e', p = .eq e e' ∨ p = .eq e' e) → SrcNames e)
-    {σ' σ : Env} (hag : ∀ v ∈ Query.vars q, Env.lookup v σ' = Env.lookup v σ)
+    (ho : ∀ p ∈ q, p.MinOverVars) (hsc : ∀ p ∈ q, p.Scoped)
+    (hnames : ∀ p ∈ q, ∀ e ∈ p.exprs, SrcNames e)
+    {σ' σ : Env} (hne : (∀ p ∈ q, p.monotoneB = true) ∨ NeSound src D σ σ')
+    (hag : ∀ v ∈ Query.vars q, Env.lookup v σ' = Env.lookup v σ)
     (hσ : ∀ v t, Env.lookup v σ = some t → t ∈ src.terms)
     (hm : ∀ p ∈ (encodeQueryWith {} q n).1, Matches D p σ') : ∀ p ∈ q, Matches src p σ := by
   induction q generalizing n with
@@ -269,11 +391,11 @@ theorem sound_query (hr : Reads src D) (hX : src.subsumed = ∅) {q : Query} (n 
     simp only at hm
     intro p' hp'
     rcases List.mem_cons.mp hp' with rfl | hp'
-    · exact sound_pattern hr hX n (ho _ (by simp)) (hmono _ (by simp)) (hsc _ (by simp))
-        (hnames _ (by simp)) (fun v hv => hag v (by simp [hv])) hσ
+    · exact sound_pattern hr hX n (ho _ (by simp)) (hsc _ (by simp)) (hnames _ (by simp))
+        (hne.imp_left fun h => h p' (by simp)) (fun v hv => hag v (by simp [hv])) hσ
         (fun q hq => hm q (by rw [h₁] at hq; exact List.mem_append_left _ hq))
-    · exact ih next (fun p hp => ho p (by simp [hp])) (fun p hp => hmono p (by simp [hp]))
-        (fun p hp => hsc p (by simp [hp])) (fun p hp => hnames p (by simp [hp]))
+    · exact ih next (fun p hp => ho p (by simp [hp])) (fun p hp => hsc p (by simp [hp]))
+        (fun p hp => hnames p (by simp [hp])) (hne.imp_left fun h p hp => h p (by simp [hp]))
         (fun v hv => hag v (by simp [hv]))
         (fun q hq => hm q (by rw [h₂] at hq; exact List.mem_append_right _ hq)) p' hp'
 

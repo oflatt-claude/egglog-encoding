@@ -117,28 +117,46 @@ theorem srcNames_of_ctors (hP : P.Fragment) {e : Expr} (hc : ∀ fk ∈ e.ctors,
 theorem notFresh_of_mem_vars (hP : P.Fragment) {v : Var} (hv : v ∈ P.vars) : NotFresh v :=
   notFresh_of_not_at (hP.noAt v (List.mem_append_right _ hv))
 
+/-- The constructors of a side of a pattern are constructors of the pattern. -/
+theorem Pattern.ctors_of_mem_exprs {p : Pattern} {e : Expr} (he : e ∈ p.exprs) :
+    ∀ fk ∈ e.ctors, fk ∈ p.ctors := by
+  cases p with
+  | expr e' =>
+    simp only [Pattern.exprs, List.mem_singleton] at he
+    subst he
+    exact fun _ hk => hk
+  | eq a b | ne a b =>
+    simp only [Pattern.exprs, List.mem_cons, List.not_mem_nil, or_false] at he
+    rcases he with rfl | rfl
+    · exact fun _ hk => List.mem_append_left _ hk
+    · exact fun _ hk => List.mem_append_right _ hk
+
 theorem pattern_names {q : Query} (hq : ∀ fk ∈ q.flatMap Pattern.ctors, fk ∈ P.ctors)
-    (hP : P.Fragment) :
-    ∀ p ∈ q, ∀ e, (p = .expr e ∨ ∃ e', p = .eq e e' ∨ p = .eq e' e) → SrcNames e := by
+    (hP : P.Fragment) : ∀ p ∈ q, ∀ e ∈ p.exprs, SrcNames e := by
   intro p hp e he
   apply srcNames_of_ctors hP
   intro fk hk
   apply hq
-  apply List.mem_flatMap.mpr ⟨p, hp, ?_⟩
-  rcases he with rfl | ⟨e', rfl | rfl⟩
-  · exact hk
-  · exact List.mem_append_left _ hk
-  · exact List.mem_append_right _ hk
+  exact List.mem_flatMap.mpr ⟨p, hp, Pattern.ctors_of_mem_exprs he fk hk⟩
+
+/-- The final check tests no disequality. -/
+theorem check_monotone (hP : P.Fragment) : ∀ p ∈ P.check, p.monotoneB = true :=
+  fun p hp => List.all_eq_true.mp (Bool.and_eq_true_iff.mp hP.monotone).2 p hp
+
+/-- The final check takes no minimum. -/
+theorem check_orderingFree (hP : P.Fragment) : ∀ p ∈ P.check, p.OrderingFree := hP.noMin.2
+
+/-- Every minimum of a rule is over query variables. -/
+theorem rule_minOverVars (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) :
+    (∀ p ∈ r.query, p.MinOverVars) ∧ Actions.MinOverVars r.actions :=
+  Rule.minOverVars_of_orderingFree (hP.noMin.1 r hr)
 
 /-- Every rule of a fragment program satisfies the round correspondence's conditions. -/
 theorem ruleOk_of_fragment (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : RuleOk r := by
-  have hmono : r.monotoneB = true :=
-    List.all_eq_true.mp (Bool.and_eq_true_iff.mp hP.monotone).1 r hr
-  have hord : r.OrderingFree := hP.noMin.1 r hr
   have henc : r.query.Encodable := hP.queryEncodable.1 r hr
-  refine ⟨⟨hord.1, fun p hp => List.all_eq_true.mp (Bool.and_eq_true_iff.mp hmono).1 p hp,
-    fun p hp => (henc.1 p hp).2, pattern_names ?_ hP, fun v hv => ?_⟩, henc.2,
-    hP.headsScoped r hr, hord.2, Rule.subsumeFree_of_monotone hmono⟩
+  obtain ⟨hoq, hoa⟩ := rule_minOverVars hP hr
+  refine ⟨⟨hoq, fun p hp => (henc.1 p hp).2, pattern_names ?_ hP, fun v hv => ?_⟩, henc.2,
+    hP.headsScoped r hr, hoa, subsumeFree_of_mem hP hr⟩
   · intro fk hk
     apply mem_program_ctors (S := P.schedule) (fun r hr => hr)
     exact List.mem_flatMap.mpr ⟨r, hr, List.mem_append_left _ hk⟩
@@ -151,8 +169,7 @@ theorem ruleOk_of_fragment (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : R
 
 /-- The final check satisfies the query conditions. -/
 theorem queryOk_check (hP : P.Fragment) : QueryOk P.check where
-  orderingFree := hP.noMin.2
-  monotone := fun p hp => List.all_eq_true.mp (Bool.and_eq_true_iff.mp hP.monotone).2 p hp
+  minOverVars := fun p hp => Pattern.minOverVars_of_orderingFree p (check_orderingFree hP p hp)
   shape := fun p hp => (hP.queryEncodable.2.1 p hp).2
   names := pattern_names (by
     intro fk hk
@@ -205,19 +222,22 @@ theorem source_writes_some (hP : P.Fragment) {x : Database} (hx : SrcInv P x) {r
 
 /-! ### Rounds respect meaning -/
 
-theorem round_sameMeaning (hP : P.Fragment) {x y : Database} (hx : SrcInv P x) (hy : SrcInv P y)
-    (hm : x.SameMeaning y) {R : List Rule} (hR : ∀ r ∈ R, r ∈ P.rules) :
-    (RunRules R x).SameMeaning (RunRules R y) :=
+/-- Rounds of ordering-free rules respect meaning. A rule that takes a minimum does not: the
+minimum compares representatives, which two states of one meaning need not share. -/
+theorem round_sameMeaning (hP : P.Fragment) (hO : P.schedule.OrderingFree) {x y : Database}
+    (hx : SrcInv P x) (hy : SrcInv P y) (hm : x.SameMeaning y) {R : List Rule}
+    (hR : ∀ r ∈ R, r ∈ P.rules) : (RunRules R x).SameMeaning (RunRules R y) :=
   SourceMeaning.round_sameMeaning hx.wf hy.wf hm (hx.subsumed.trans hy.subsumed.symm) hx.hasReps
-    hy.hasReps (fun r hr => subsumeFree_of_mem hP (hR r hr)) (fun r hr => hP.noMin.1 r (hR r hr))
+    hy.hasReps (fun r hr => subsumeFree_of_mem hP (hR r hr)) (fun r hr => hO r (hR r hr))
 
 /-- A finite source run from a state of the same meaning reaches a state of the same
 meaning. -/
-theorem reach_transport (hP : P.Fragment) {S : Schedule} (hS : S.rules ⊆ P.rules)
-    {x y e : Database} (hx : SrcInv P x) (hy : SrcInv P y) (hm : x.SameMeaning y)
-    (hr : Reach x S e) : ∃ e', Reach y S e' ∧ e.SameMeaning e' :=
+theorem reach_transport (hP : P.Fragment) (hO : P.schedule.OrderingFree) {S : Schedule}
+    (hS : S.rules ⊆ P.rules) {x y e : Database} (hx : SrcInv P x) (hy : SrcInv P y)
+    (hm : x.SameMeaning y) (hr : Reach x S e) : ∃ e', Reach y S e' ∧ e.SameMeaning e' :=
   Reach.transport (I := SrcInv P) (good := fun r => r ∈ P.rules)
-    (fun _ _ hg hd => hd.runRules hP hg) (fun _ _ _ hg hd he hm => round_sameMeaning hP hd he hm hg)
+    (fun _ _ hg hd => hd.runRules hP hg)
+    (fun _ _ _ hg hd he hm => round_sameMeaning hP hO hd he hm hg)
     hr (fun _ hr => hS hr) hx hy hm
 
 /-- Rounds only grow the congruence, so a state between two states of one meaning has
@@ -234,7 +254,8 @@ theorem sameMeaning_of_between {x z y : Database} (hxz : Rounds P x z) (hzy : Ro
 
 /-- From a state, the rounds of the program that keep its meaning build terms of bounded
 size: every representative is bounded by a representative of the state. -/
-theorem terms_bounded (hP : P.Fragment) {x₀ : Database} (hx₀ : SrcInv P x₀) :
+theorem terms_bounded (hP : P.Fragment) (hO : P.schedule.OrderingFree) {x₀ : Database}
+    (hx₀ : SrcInv P x₀) :
     ∃ M, ∀ x, Rounds P x₀ x → x.SameMeaning x₀ → ∀ t ∈ x.terms, t.nodeSize ≤ M := by
   have hfin : x₀.terms.Finite := Database.finite_terms hx₀.finite
   obtain ⟨N, hN⟩ := (hfin.image Term.nodeSize).bddAbove
@@ -251,7 +272,7 @@ theorem terms_bounded (hP : P.Fragment) {x₀ : Database} (hx₀ : SrcInv P x₀
       · assumption
       · rw [hx₀.subsumed, (hx₀.rounds hP (by assumption)).subsumed]
     have hz' : SrcInv P z := hx₀.rounds hP (by assumption)
-    apply RunRules.nodeSize_le hR (fun r hr => (hP.noMin.1 r (hR r hr)).2)
+    apply RunRules.nodeSize_le hR (fun r hr => (hO r (hR r hr)).2)
       (reps_nodeSize_le hx₀.hasReps hz (Rounds.terms_subset (by assumption)) hN')
       (Nat.le_max_right _ _) (ih hz)
 

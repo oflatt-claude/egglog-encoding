@@ -5,20 +5,12 @@ import EgglogSemantics.Proofs.Writes
 import EgglogSemantics.Proofs.Diagonal
 
 /-! The writes of a compiled head: a build writes the self-loop of every subexpression's
-value, a union adds the two edges to the smaller side. Each compiled row is between
-congruent source terms, goes down the term order, comes with the self-loops of its
-endpoints, and every source write is derivable from the compiled rows. -/
+value, including both operands of a `min`, and a union adds the two edges to the smaller
+side. Each compiled row is between congruent source terms, goes down the term order, comes
+with the self-loops of its endpoints, and every source write is derivable from the compiled
+rows. -/
 
 namespace Egglog.Congruence
-
-theorem orderingFreeList_mem {a : Expr} : ∀ {es : List Expr}, a ∈ es →
-    Expr.OrderingFreeList es → a.OrderingFree
-  | [], h, _ => by simp at h
-  | e :: es, h, ho => by
-      obtain ⟨hoe, hoes⟩ := Expr.orderingFreeList_cons ho
-      rcases List.mem_cons.mp h with rfl | h
-      · exact hoe
-      · exact orderingFreeList_mem h hoes
 
 /-- A variable of an argument is a variable of the list. -/
 theorem var_mem_varsList_of_mem {v : Var} {e : Expr} : ∀ {es : List Expr}, e ∈ es →
@@ -30,7 +22,8 @@ theorem var_mem_varsList_of_mem {v : Var} {e : Expr} : ∀ {es : List Expr}, e �
       · exact Or.inl hv
       · exact Or.inr (var_mem_varsList_of_mem h hv)
 
-/-- The values a build writes self-loops for: every subexpression's value. -/
+/-- The values a build writes self-loops for: every subexpression's value, with both
+operands of a `min`. -/
 inductive BuildTerm (σ : Env) : Expr → Term → Prop
   | lit (l : Lit) : BuildTerm σ (.lit l) (.lit l)
   | var {v : Var} {t : Term} : Env.lookup v σ = some t → BuildTerm σ (.var v) t
@@ -38,19 +31,39 @@ inductive BuildTerm (σ : Env) : Expr → Term → Prop
       Expr.evalList args σ = some ts → BuildTerm σ (.app f args) (.app f ts)
   | app_arg {f : FnName} {args : List Expr} {e : Expr} {u : Term} :
       e ∈ args → BuildTerm σ e u → BuildTerm σ (.app f args) u
+  | min_left {a b : Expr} {u : Term} : BuildTerm σ a u → BuildTerm σ (.min a b) u
+  | min_right {a b : Expr} {u : Term} : BuildTerm σ b u → BuildTerm σ (.min a b) u
 
-/-- The value of an ordering-free expression is a build term of it. -/
-theorem BuildTerm.self {σ : Env} : ∀ {e : Expr} {t : Term}, e.OrderingFree →
+/-- The value of an expression whose minima are over variables is a build term of it. -/
+theorem BuildTerm.self {σ : Env} : ∀ {e : Expr} {t : Term}, e.MinOverVars →
     e.eval σ = some t → BuildTerm σ e t
   | .lit _, _, _, h => by
       rw [Expr.eval_lit, Option.some.injEq] at h
       rw [← h]; exact .lit _
   | .var _, _, _, h => .var h
-  | .min _ _, _, ho, _ => (Expr.not_orderingFree_min ho).elim
+  | .min a b, _, ho, h => by
+      obtain ⟨ha, hb⟩ := Expr.minOverVars_min ho
+      rw [Expr.eval_min, Option.bind_eq_some_iff] at h
+      obtain ⟨x, hx, hmap⟩ := h
+      obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
+      rcases Term.least_eq_or x y with hl | hl <;> rw [hl]
+      · exact .min_left (BuildTerm.self ha.minOverVars hx)
+      · exact .min_right (BuildTerm.self hb.minOverVars hy)
   | .app f args, t, _, h => by
       rw [Expr.eval_app_ctor] at h
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
       exact .app_self hts
+
+/-- A build term of a variable minimum is a binding. -/
+theorem BuildTerm.binding_of_isVarMin {σ : Env} {e : Expr} {u : Term} (hb : BuildTerm σ e u)
+    (he : e.IsVarMin) : ∃ v, Env.lookup v σ = some u := by
+  induction hb with
+  | lit l => simp [Expr.IsVarMin, Expr.isVarMinB] at he
+  | var hv => exact ⟨_, hv⟩
+  | app_self => simp [Expr.IsVarMin, Expr.isVarMinB] at he
+  | app_arg => simp [Expr.IsVarMin, Expr.isVarMinB] at he
+  | min_left _ ih => exact ih (Expr.isVarMin_min he).1
+  | min_right _ ih => exact ih (Expr.isVarMin_min he).2
 
 /-- An argument's value is among the evaluated arguments. -/
 theorem eval_mem_of_evalList {σ : Env} {es : List Expr} {ts : List Term}
@@ -60,28 +73,34 @@ theorem eval_mem_of_evalList {σ : Env} {es : List Expr} {ts : List Term}
   obtain ⟨t, ht, hev⟩ := Expr.getElem?_of_evalList hts i (List.getElem?_eq_getElem hi)
   exact ⟨t, hev, List.mem_of_getElem? ht⟩
 
-/-- Build terms are subterms of the value. -/
-theorem BuildTerm.subterm {σ : Env} {e : Expr} {u t : Term} (hb : BuildTerm σ e u)
-    (h : e.eval σ = some t) : Term.IsSubterm u t := by
+/-- A build term is a subterm of the value or a binding: the operand of a `min` that is not
+chosen is a bound variable. -/
+theorem BuildTerm.subterm_or_bound {σ : Env} {e : Expr} {u t : Term} (ho : e.MinOverVars)
+    (hb : BuildTerm σ e u) (h : e.eval σ = some t) :
+    Term.IsSubterm u t ∨ ∃ v, Env.lookup v σ = some u := by
   induction hb generalizing t with
   | lit l =>
     rw [Expr.eval_lit, Option.some.injEq] at h
-    rw [← h]; exact .refl _
+    rw [← h]; exact Or.inl (.refl _)
   | var hv =>
     rw [Expr.eval_var] at h
     rw [Option.some.inj (hv.symm.trans h)]
-    exact .refl _
+    exact Or.inl (.refl _)
   | app_self hts =>
     rw [Expr.eval_app_ctor, hts, Option.map_some, Option.some.injEq] at h
-    rw [← h]; exact .refl _
+    rw [← h]; exact Or.inl (.refl _)
   | app_arg he _ ih =>
     rw [Expr.eval_app_ctor] at h
     obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
     obtain ⟨te, hev, hmem⟩ := eval_mem_of_evalList hts he
-    exact (ih hev).trans (.arg hmem (.refl _))
+    rcases ih (Expr.minOverVarsList_mem he (Expr.minOverVars_app ho)) hev with hs | hbound
+    · exact Or.inl (hs.trans (.arg hmem (.refl _)))
+    · exact Or.inr hbound
+  | min_left hba _ => exact Or.inr (hba.binding_of_isVarMin (Expr.minOverVars_min ho).1)
+  | min_right hbb _ => exact Or.inr (hbb.binding_of_isVarMin (Expr.minOverVars_min ho).2)
 
 /-- Every subterm of a value is a build term or lies inside a variable's binding. -/
-theorem subterm_build {σ : Env} (e : Expr) : ∀ {t u : Term}, e.OrderingFree →
+theorem subterm_build {σ : Env} (e : Expr) : ∀ {t u : Term}, e.MinOverVars →
     e.eval σ = some t → Term.IsSubterm u t →
     BuildTerm σ e u ∨ ∃ v ∈ e.vars, ∃ w, Env.lookup v σ = some w ∧ Term.IsSubterm u w := by
   induction e using Expr.recExpr with
@@ -96,8 +115,16 @@ theorem subterm_build {σ : Env} (e : Expr) : ∀ {t u : Term}, e.OrderingFree �
     rw [Expr.eval_var] at h
     exact Or.inr ⟨v, by simp, t, h, hu⟩
   | min a b _ _ =>
-    intro _ _ ho _ _
-    exact (Expr.not_orderingFree_min ho).elim
+    intro t u ho h hu
+    obtain ⟨ha, hb⟩ := Expr.minOverVars_min ho
+    rw [Expr.eval_min, Option.bind_eq_some_iff] at h
+    obtain ⟨x, hx, hmap⟩ := h
+    obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
+    rcases Term.least_eq_or x y with hl | hl <;> rw [hl] at hu
+    · obtain ⟨v, hv, hvx⟩ := ha.eval_binding hx
+      exact Or.inr ⟨v, by simp [hv], x, hvx, hu⟩
+    · obtain ⟨v, hv, hvy⟩ := hb.eval_binding hy
+      exact Or.inr ⟨v, by simp [hv], y, hvy, hu⟩
   | app f args ih =>
     intro t u ho h hu
     rw [Expr.eval_app_ctor] at h
@@ -110,8 +137,8 @@ theorem subterm_build {σ : Env} (e : Expr) : ∀ {t u : Term}, e.OrderingFree �
       obtain ⟨te, hte, hev⟩ := Expr.getElem?_of_evalList hts i (List.getElem?_eq_getElem hi')
       rw [List.getElem?_eq_getElem hi, Option.some.injEq] at hte
       rw [hte] at hua
-      have hoa : args[i].OrderingFree :=
-        orderingFreeList_mem (List.getElem_mem hi') (Expr.orderingFree_app ho)
+      have hoa : args[i].MinOverVars :=
+        Expr.minOverVarsList_mem (List.getElem_mem hi') (Expr.minOverVars_app ho)
       rcases ih _ (List.getElem_mem hi') hoa hev hua with hb | ⟨v, hv, w, hw, huw⟩
       · exact Or.inl (.app_arg (List.getElem_mem hi') hb)
       · exact Or.inr ⟨v, by
@@ -145,7 +172,7 @@ theorem writes_ufRow {σ : Env} {a b : Expr} {s t : Term} (ha : a.eval σ = some
 mutual
 
 /-- A build writes exactly the self-loops of its build terms. -/
-theorem build_writes {σ : Env} : ∀ (e : Expr), e.OrderingFree →
+theorem build_writes {σ : Env} : ∀ (e : Expr), e.MinOverVars →
     (∀ v ∈ e.vars, (Env.lookup v σ).isSome) →
     ∃ W, Action.writes σ (encodeBuildWith {} e) = some W ∧
       ∀ q, q ∈ W ↔ ∃ u, BuildTerm σ e u ∧ q = selfRow u
@@ -165,9 +192,24 @@ theorem build_writes {σ : Env} : ∀ (e : Expr), e.OrderingFree →
       · rintro ⟨u, hu, rfl⟩
         cases hu with
         | var hu => rw [Option.some.inj (hu.symm.trans ht)]
-  | .min _ _, ho, _ => (Expr.not_orderingFree_min ho).elim
+  | .min a b, ho, hb => by
+      obtain ⟨ha, hb'⟩ := Expr.minOverVars_min ho
+      obtain ⟨W₁, hW₁, hmem₁⟩ := build_writes a ha.minOverVars (fun v hv => hb v (by simp [hv]))
+      obtain ⟨W₂, hW₂, hmem₂⟩ := build_writes b hb'.minOverVars (fun v hv => hb v (by simp [hv]))
+      refine ⟨W₁ ∪ W₂, ?_, fun q => ?_⟩
+      · simp only [encodeBuildWith]
+        rw [Action.writes_append, hW₁, Option.bind_some, hW₂, Option.map_some]
+      · simp only [Set.mem_union, hmem₁, hmem₂]
+        constructor
+        · rintro (⟨u, hu, rfl⟩ | ⟨u, hu, rfl⟩)
+          · exact ⟨u, .min_left hu, rfl⟩
+          · exact ⟨u, .min_right hu, rfl⟩
+        · rintro ⟨u, hu, rfl⟩
+          cases hu with
+          | min_left h => exact Or.inl ⟨u, h, rfl⟩
+          | min_right h => exact Or.inr ⟨u, h, rfl⟩
   | .app f args, ho, hb => by
-      obtain ⟨W, hW, hmem⟩ := buildArgs_writes args (Expr.orderingFree_app ho) (by simpa using hb)
+      obtain ⟨W, hW, hmem⟩ := buildArgs_writes args (Expr.minOverVars_app ho) (by simpa using hb)
       obtain ⟨ts, hts⟩ := Expr.evalList_isSome args (fun v hv =>
         Env.lookup_isSome_iff_mem_dom.mp (hb v (by simpa using hv)))
       have hself : Action.writes σ [.expr (ufRow (.app f args) (.app f args))] =
@@ -187,13 +229,13 @@ theorem build_writes {σ : Env} : ∀ (e : Expr), e.OrderingFree →
             rw [Option.some.inj (hts'.symm.trans hts)]
           | app_arg he hu => exact Or.inl ⟨_, he, u, hu, rfl⟩
 
-theorem buildArgs_writes {σ : Env} : ∀ (es : List Expr), Expr.OrderingFreeList es →
+theorem buildArgs_writes {σ : Env} : ∀ (es : List Expr), Expr.MinOverVarsList es →
     (∀ v ∈ Expr.varsList es, (Env.lookup v σ).isSome) →
     ∃ W, Action.writes σ (encodeBuildArgsWith {} es) = some W ∧
       ∀ q, q ∈ W ↔ ∃ e ∈ es, ∃ u, BuildTerm σ e u ∧ q = selfRow u
   | [], _, _ => ⟨∅, by rw [buildArgs_nil]; rfl, by simp⟩
   | e :: es, ho, hb => by
-      obtain ⟨hoe, hoes⟩ := Expr.orderingFreeList_cons ho
+      obtain ⟨hoe, hoes⟩ := Expr.minOverVarsList_cons ho
       obtain ⟨W₁, hW₁, hmem₁⟩ := build_writes e hoe (fun v hv => hb v (by simp [hv]))
       obtain ⟨W₂, hW₂, hmem₂⟩ := buildArgs_writes es hoes (fun v hv => hb v (by simp [hv]))
       refine ⟨W₁ ∪ W₂, ?_, fun q => ?_⟩

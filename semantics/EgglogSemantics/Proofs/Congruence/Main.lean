@@ -51,6 +51,7 @@ theorem canon_empty : Canon Database.empty where
 theorem encode_correct (P : Program) (_hW : P.WellFormed) (hP : P.Fragment) :
     (∀ o : Result, Eval Database.empty (encode P) o ↔ Eval Database.empty P o) ∧
     (Diverges Database.empty (encode P).schedule ↔ Diverges Database.empty P.schedule) := by
+  have hO : P.schedule.OrderingFree := hP.noMin.1
   have hinv : SrcInv P Database.empty := SrcInv.empty P
   have hrel : RelC P Database.empty Database.empty :=
     ⟨Database.empty, hinv, Database.SameMeaning.refl _, rel_empty, canon_empty⟩
@@ -62,28 +63,29 @@ theorem encode_correct (P : Program) (_hW : P.WellFormed) (hP : P.Fragment) :
     intro e d he ⟨x, hx, hm, hd, hc⟩
     rw [encode_check, Database.forgetSubsumed_eq_self he.subsumed]
     rw [← check_corr hP hx hd hc]
-    exact SourceMeaning.queryHolds_iff he.wf hx.wf hm he.hasReps hx.hasReps hP.noMin.2
+    exact SourceMeaning.queryHolds_iff he.wf hx.wf hm he.hasReps hx.hasReps
+      (check_orderingFree hP)
   refine ⟨fun o => ?_, ?_⟩
   · cases o with
     | ok =>
       rw [Eval.ok_iff, Eval.ok_iff, encode_schedule]
       constructor
       · rintro ⟨d, hd, hq⟩
-        obtain ⟨e, he, hrel'⟩ := bwd_relC hP hS hinv hrel hd
+        obtain ⟨e, he, hrel'⟩ := bwd_relC hP hO hS hinv hrel hd
         exact ⟨e, he, (hcheck (hinv.reach hP hS he) hrel').mpr hq⟩
       · rintro ⟨e, he, hq⟩
-        obtain ⟨d, hd, hrel'⟩ := fwd_relC hP hS hinv hrel he
+        obtain ⟨d, hd, hrel'⟩ := fwd_relC hP hO hS hinv hrel he
         exact ⟨d, hd, (hcheck (hinv.reach hP hS he) hrel').mp hq⟩
     | checkFailed =>
       rw [Eval.failed_iff, Eval.failed_iff, encode_schedule]
       constructor
       · rintro ⟨d, hd, hq⟩
-        obtain ⟨e, he, hrel'⟩ := bwd_relC hP hS hinv hrel hd
+        obtain ⟨e, he, hrel'⟩ := bwd_relC hP hO hS hinv hrel hd
         exact ⟨e, he, fun h => hq ((hcheck (hinv.reach hP hS he) hrel').mp h)⟩
       · rintro ⟨e, he, hq⟩
-        obtain ⟨d, hd, hrel'⟩ := fwd_relC hP hS hinv hrel he
+        obtain ⟨d, hd, hrel'⟩ := fwd_relC hP hO hS hinv hrel he
         exact ⟨d, hd, fun h => hq ((hcheck (hinv.reach hP hS he) hrel').mpr h)⟩
   · rw [encode_schedule]
-    exact (sim_div hP P.schedule hS hinv hrel).symm
+    exact (sim_div hP hO P.schedule hS hinv hrel).symm
 
 end Egglog.Congruence

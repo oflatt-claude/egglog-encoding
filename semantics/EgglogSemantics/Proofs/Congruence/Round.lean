@@ -160,16 +160,19 @@ theorem Actions.vars_subset_of_scoped : ∀ {as : List Action} {Γ : Scope},
 /-! ### The compiled rows of a head against its source writes -/
 
 /-- How the compiled rows `V'` of a head stand to its source writes `V`: rows between
-terms congruent and held once `V` is asserted, going down the term order, with their
-endpoints' self-loops; every source write derivable from the rows; and every subterm of a
-source write a self-loop or inside a binding. -/
+terms congruent and held once `V` is asserted and the bindings are held, going down the
+term order, with their endpoints' self-loops; every source write derivable from the rows;
+and every subterm of a source write a self-loop or inside a binding. The bindings matter
+for a `min`: the compiled head writes the self-loop of the operand it does not choose,
+which is a bound representative. -/
 structure HeadWrites (σ : Env) (V V' : Set (Term × Term)) : Prop where
   uf : ∀ q ∈ V', ∃ k p, q = (ufRowT k p, ufRowT k p)
   down : ∀ k p, (ufRowT k p, ufRowT k p) ∈ V' → p = k ∨ Term.blt p k = true
   selfLoop : ∀ k p, (ufRowT k p, ufRowT k p) ∈ V' → selfRow k ∈ V' ∧ selfRow p ∈ V'
-  cong : ∀ k p, (ufRowT k p, ufRowT k p) ∈ V' → ∀ D : Database, V ⊆ D.eqs → Cong D k p
+  cong : ∀ k p, (ufRowT k p, ufRowT k p) ∈ V' → ∀ D : Database, V ⊆ D.eqs →
+    (∀ v w, Env.lookup v σ = some w → w ∈ D.terms) → Cong D k p
   ends : ∀ k p, (ufRowT k p, ufRowT k p) ∈ V' → ∀ D : Database, V ⊆ D.eqs →
-    k ∈ D.terms ∧ p ∈ D.terms
+    (∀ v w, Env.lookup v σ = some w → w ∈ D.terms) → k ∈ D.terms ∧ p ∈ D.terms
   derivable : ∀ q ∈ V, ∀ E : Database,
     (∀ k p, (ufRowT k p, ufRowT k p) ∈ V' → (k, p) ∈ E.eqs) → Cong E q.1 q.2
   covers : ∀ q ∈ V, ∀ u, Term.IsSubterm u q.1 ∨ Term.IsSubterm u q.2 →
@@ -192,12 +195,12 @@ theorem HeadWrites.union {σ : Env} {V₁ V₁' V₂ V₂' : Set (Term × Term)}
   selfLoop := fun k p hq => hq.elim
     (fun hq => ⟨Or.inl (h₁.selfLoop k p hq).1, Or.inl (h₁.selfLoop k p hq).2⟩)
     (fun hq => ⟨Or.inr (h₂.selfLoop k p hq).1, Or.inr (h₂.selfLoop k p hq).2⟩)
-  cong := fun k p hq D hD => hq.elim
-    (fun hq => h₁.cong k p hq D (Set.subset_union_left.trans hD))
-    (fun hq => h₂.cong k p hq D (Set.subset_union_right.trans hD))
-  ends := fun k p hq D hD => hq.elim
-    (fun hq => h₁.ends k p hq D (Set.subset_union_left.trans hD))
-    (fun hq => h₂.ends k p hq D (Set.subset_union_right.trans hD))
+  cong := fun k p hq D hD hσ => hq.elim
+    (fun hq => h₁.cong k p hq D (Set.subset_union_left.trans hD) hσ)
+    (fun hq => h₂.cong k p hq D (Set.subset_union_right.trans hD) hσ)
+  ends := fun k p hq D hD hσ => hq.elim
+    (fun hq => h₁.ends k p hq D (Set.subset_union_left.trans hD) hσ)
+    (fun hq => h₂.ends k p hq D (Set.subset_union_right.trans hD) hσ)
   derivable := fun q hq E hE => hq.elim
     (fun hq => h₁.derivable q hq E fun k p hkp => hE k p (Or.inl hkp))
     (fun hq => h₂.derivable q hq E fun k p hkp => hE k p (Or.inr hkp))
@@ -213,12 +216,13 @@ theorem mem_terms_of_mem_eqs {D : Database} {q : Term × Term} (hq : q ∈ D.eqs
 theorem subterm_mem_terms {D : Database} {t u : Term} (ht : t ∈ D.terms) (hu : Term.IsSubterm u t) :
     u ∈ D.terms := D.subtermClosed t ht hu
 
-/-- The rows a build writes, relative to its value: self-loops of subterms, including the
-value's own, covering every subterm not inside a binding. -/
-theorem build_rows {σ : Env} {e : Expr} (ho : e.OrderingFree)
+/-- The rows a build writes, relative to its value: self-loops of subterms of the value or
+of bindings, including the value's own, covering every subterm not inside a binding. -/
+theorem build_rows {σ : Env} {e : Expr} (ho : e.MinOverVars)
     (hb : ∀ v ∈ e.vars, (Env.lookup v σ).isSome) {t : Term} (ht : e.eval σ = some t)
     {V' : Set (Term × Term)} (hV' : Action.writes σ (encodeBuildWith {} e) = some V') :
-    (∀ q ∈ V', ∃ u, q = selfRow u ∧ Term.IsSubterm u t) ∧ selfRow t ∈ V' ∧
+    (∀ q ∈ V', ∃ u, q = selfRow u ∧ (Term.IsSubterm u t ∨ ∃ v, Env.lookup v σ = some u)) ∧
+      selfRow t ∈ V' ∧
       ∀ u, Term.IsSubterm u t →
         selfRow u ∈ V' ∨ ∃ v w, Env.lookup v σ = some w ∧ Term.IsSubterm u w := by
   obtain ⟨W, hW, hmem⟩ := build_writes e ho hb
@@ -226,7 +230,7 @@ theorem build_rows {σ : Env} {e : Expr} (ho : e.OrderingFree)
   obtain rfl := Option.some.inj hV'
   refine ⟨fun q hq => ?_, (hmem _).mpr ⟨t, BuildTerm.self ho ht, rfl⟩, fun u hu => ?_⟩
   · obtain ⟨u, hu, rfl⟩ := (hmem q).mp hq
-    exact ⟨u, rfl, hu.subterm ht⟩
+    exact ⟨u, rfl, hu.subterm_or_bound ho ht⟩
   · rcases subterm_build e ho ht hu with hbt | ⟨v, _, w, hw, huw⟩
     · exact Or.inl ((hmem _).mpr ⟨u, hbt, rfl⟩)
     · exact Or.inr ⟨v, w, hw, huw⟩
@@ -238,7 +242,7 @@ theorem mem_terms_of_subterm_eq {D : Database} {t u : Term} {q : Term × Term} (
   · exact subterm_mem_terms (mem_terms_of_mem_eqs hq).2 hu
 
 /-- The compiled rows of a source action. -/
-theorem action_headWrites {σ : Env} {a : Action} (ho : a.OrderingFree) (hsf : a.SubsumeFree)
+theorem action_headWrites {σ : Env} {a : Action} (ho : a.MinOverVars) (hsf : a.SubsumeFree)
     (hb : ∀ v ∈ a.vars, (Env.lookup v σ).isSome) {V : Set (Term × Term)}
     (hV : a.write σ = some V) :
     ∃ V', Action.writes σ (encodeActionWith {} a) = some V' ∧ HeadWrites σ V V' := by
@@ -250,23 +254,30 @@ theorem action_headWrites {σ : Env} {a : Action} (ho : a.OrderingFree) (hsf : a
     obtain ⟨W, hW, _⟩ := build_writes e ho hb
     obtain ⟨hrows, hself, hcov⟩ := build_rows ho hb ht hW
     refine ⟨W, hW, ?_⟩
-    have hpair : ∀ k p, (ufRowT k p, ufRowT k p) ∈ W → k = p ∧ Term.IsSubterm k t := by
+    have hpair : ∀ k p, (ufRowT k p, ufRowT k p) ∈ W →
+        k = p ∧ (Term.IsSubterm k t ∨ ∃ v, Env.lookup v σ = some k) := by
       intro k p hkp
       obtain ⟨u, heq, hu⟩ := hrows _ hkp
       obtain ⟨rfl, rfl⟩ := ufRowT_inj (Prod.mk.inj heq).1
       exact ⟨rfl, hu⟩
-    refine ⟨fun q hq => ?_, fun k p hkp => ?_, fun k p hkp => ?_, fun k p hkp D hD => ?_,
-      fun k p hkp D hD => ?_, fun q hq E hE => ?_, fun q hq u hu => ?_⟩
+    -- A build term is held once the value is asserted and the bindings are held.
+    have hheld : ∀ k, (Term.IsSubterm k t ∨ ∃ v, Env.lookup v σ = some k) → ∀ D : Database,
+        {(t, t)} ⊆ D.eqs → (∀ v w, Env.lookup v σ = some w → w ∈ D.terms) → k ∈ D.terms := by
+      intro k hk D hD hσ
+      rcases hk with hk | ⟨v, hv⟩
+      · exact mem_terms_of_subterm_eq (hD rfl) (Or.inl rfl) hk
+      · exact hσ v k hv
+    refine ⟨fun q hq => ?_, fun k p hkp => ?_, fun k p hkp => ?_, fun k p hkp D hD hσ => ?_,
+      fun k p hkp D hD hσ => ?_, fun q hq E hE => ?_, fun q hq u hu => ?_⟩
     · obtain ⟨u, rfl, _⟩ := hrows q hq
       exact ⟨u, u, rfl⟩
     · exact Or.inl (hpair k p hkp).1.symm
     · obtain ⟨rfl, _⟩ := hpair k p hkp
       exact ⟨hkp, hkp⟩
     · obtain ⟨rfl, hk⟩ := hpair k p hkp
-      exact Database.toCong (mem_terms_of_subterm_eq (hD rfl) (Or.inl rfl) hk)
+      exact Database.toCong (hheld k hk D hD hσ)
     · obtain ⟨rfl, hk⟩ := hpair k p hkp
-      exact ⟨mem_terms_of_subterm_eq (hD rfl) (Or.inl rfl) hk,
-        mem_terms_of_subterm_eq (hD rfl) (Or.inl rfl) hk⟩
+      exact ⟨hheld k hk D hD hσ, hheld k hk D hD hσ⟩
     · rw [Set.mem_singleton_iff] at hq
       subst hq
       exact .direct (hE t t hself)
@@ -274,6 +285,7 @@ theorem action_headWrites {σ : Env} {a : Action} (ho : a.OrderingFree) (hsf : a
       subst hq
       exact hcov u (hu.elim id id)
   | union a b =>
+    obtain ⟨hoa, hob⟩ := Action.minOverVars_union ho
     rw [Action.write] at hV
     obtain ⟨t₁, ht₁, hV⟩ := Option.bind_eq_some_iff.mp hV
     obtain ⟨t₂, ht₂, hV⟩ := Option.bind_eq_some_iff.mp hV
@@ -284,10 +296,10 @@ theorem action_headWrites {σ : Env} {a : Action} (ho : a.OrderingFree) (hsf : a
         hb v (by simp [Action.vars, hv])
       have hbb : ∀ v ∈ b.vars, (Env.lookup v σ).isSome := fun v hv =>
         hb v (by simp [Action.vars, hv])
-      obtain ⟨W₁, hW₁, _⟩ := build_writes a ho.1 hba
-      obtain ⟨W₂, hW₂, _⟩ := build_writes b ho.2 hbb
-      obtain ⟨hrows₁, hself₁, hcov₁⟩ := build_rows ho.1 hba ht₁ hW₁
-      obtain ⟨hrows₂, hself₂, hcov₂⟩ := build_rows ho.2 hbb ht₂ hW₂
+      obtain ⟨W₁, hW₁, _⟩ := build_writes a hoa hba
+      obtain ⟨W₂, hW₂, _⟩ := build_writes b hob hbb
+      obtain ⟨hrows₁, hself₁, hcov₁⟩ := build_rows hoa hba ht₁ hW₁
+      obtain ⟨hrows₂, hself₂, hcov₂⟩ := build_rows hob hbb ht₂ hW₂
       set m := Term.least t₁ t₂ with hm
       have hmin : (Expr.min a b).eval σ = some m := by
         rw [Expr.eval_min, ht₁, Option.bind_some, ht₂, Option.map_some]
@@ -324,23 +336,27 @@ theorem action_headWrites {σ : Env} {a : Action} (ho : a.OrderingFree) (hsf : a
         by_cases h12 : Term.blt t₁ t₂ = true
         · rw [if_pos h12] at hm; exact Or.inr (hm ▸ h12)
         · rw [if_neg h12] at hm; exact Or.inl hm
-      -- Rows of the builds: self-loops of subterms of an endpoint.
+      -- Rows of the builds: self-loops of subterms of an endpoint, or of a binding.
       have hW : ∀ k p, (ufRowT k p, ufRowT k p) ∈ W₁ ∪ W₂ →
-          k = p ∧ (Term.IsSubterm k t₁ ∨ Term.IsSubterm k t₂) := by
+          k = p ∧ (Term.IsSubterm k t₁ ∨ Term.IsSubterm k t₂ ∨
+            ∃ v, Env.lookup v σ = some k) := by
         intro k p hkp
         rcases hkp with hkp | hkp
         · obtain ⟨u, heq, hu⟩ := hrows₁ _ hkp
           obtain ⟨rfl, rfl⟩ := ufRowT_inj (Prod.mk.inj heq).1
-          exact ⟨rfl, Or.inl hu⟩
+          exact ⟨rfl, hu.imp_right Or.inr⟩
         · obtain ⟨u, heq, hu⟩ := hrows₂ _ hkp
           obtain ⟨rfl, rfl⟩ := ufRowT_inj (Prod.mk.inj heq).1
           exact ⟨rfl, Or.inr hu⟩
-      have hendD : ∀ D : Database, {(t₁, t₂)} ⊆ D.eqs → ∀ u,
-          Term.IsSubterm u t₁ ∨ Term.IsSubterm u t₂ → u ∈ D.terms := by
-        intro D hD u hu
-        rcases hu with hu | hu
+      have hendD : ∀ D : Database, {(t₁, t₂)} ⊆ D.eqs →
+          (∀ v w, Env.lookup v σ = some w → w ∈ D.terms) → ∀ u,
+          Term.IsSubterm u t₁ ∨ Term.IsSubterm u t₂ ∨ (∃ v, Env.lookup v σ = some u) →
+          u ∈ D.terms := by
+        intro D hD hσ u hu
+        rcases hu with hu | hu | ⟨v, hv⟩
         · exact mem_terms_of_subterm_eq (hD rfl) (Or.inl rfl) hu
         · exact mem_terms_of_subterm_eq (hD rfl) (Or.inr rfl) hu
+        · exact hσ v u hv
       have hmD : ∀ D : Database, {(t₁, t₂)} ⊆ D.eqs → m ∈ D.terms := by
         intro D hD
         rcases hm_or with hm' | hm' <;> rw [hm']
@@ -352,8 +368,8 @@ theorem action_headWrites {σ : Env} {a : Action} (ho : a.OrderingFree) (hsf : a
         rcases hm_or with hm' | hm' <;> rw [hm']
         · exact ⟨h12.trans h12.symm, h12.symm⟩
         · exact ⟨h12, h12.symm.trans h12⟩
-      refine ⟨fun q hq => ?_, fun k p hkp => ?_, fun k p hkp => ?_, fun k p hkp D hD => ?_,
-        fun k p hkp D hD => ?_, fun q hq E hE => ?_, fun q hq u hu => ?_⟩
+      refine ⟨fun q hq => ?_, fun k p hkp => ?_, fun k p hkp => ?_, fun k p hkp D hD hσ => ?_,
+        fun k p hkp D hD hσ => ?_, fun q hq E hE => ?_, fun q hq u hu => ?_⟩
       · rcases hq with hq | hq
         · rcases hq with hq | hq
           · obtain ⟨u, rfl, _⟩ := hrows₁ q hq; exact ⟨u, u, rfl⟩
@@ -376,14 +392,14 @@ theorem action_headWrites {σ : Env} {a : Action} (ho : a.OrderingFree) (hsf : a
           · exact ⟨Or.inl (Or.inr hself₂), Or.inl hselfm⟩
       · rcases hkp with hkp | hkp
         · obtain ⟨rfl, hk⟩ := hW k p hkp
-          exact Database.toCong (hendD D hD k hk)
+          exact Database.toCong (hendD D hD hσ k hk)
         · rcases (hPmem _).mp hkp with heq | heq <;>
             obtain ⟨rfl, rfl⟩ := ufRowT_inj (Prod.mk.inj heq).1
           · exact (hcongm D hD).1
           · exact (hcongm D hD).2
       · rcases hkp with hkp | hkp
         · obtain ⟨rfl, hk⟩ := hW k p hkp
-          exact ⟨hendD D hD k hk, hendD D hD k hk⟩
+          exact ⟨hendD D hD hσ k hk, hendD D hD hσ k hk⟩
         · rcases (hPmem _).mp hkp with heq | heq <;>
             obtain ⟨rfl, rfl⟩ := ufRowT_inj (Prod.mk.inj heq).1
           · exact ⟨(mem_terms_of_mem_eqs (hD rfl)).1, hmD D hD⟩
@@ -401,7 +417,7 @@ theorem action_headWrites {σ : Env} {a : Action} (ho : a.OrderingFree) (hsf : a
   | subsume _ _ => simp [Action.SubsumeFree, Action.monotoneB] at hsf
 
 /-- The compiled rows of a head. -/
-theorem actions_headWrites {σ : Env} : ∀ {as : List Action}, Actions.OrderingFree as →
+theorem actions_headWrites {σ : Env} : ∀ {as : List Action}, Actions.MinOverVars as →
     Actions.SubsumeFree as → (∀ a ∈ as, ∀ v ∈ a.vars, (Env.lookup v σ).isSome) →
     ∀ {V : Set (Term × Term)}, Action.writes σ as = some V →
     ∃ V', Action.writes σ (encodeActionsWith {} as) = some V' ∧ HeadWrites σ V V'
@@ -413,9 +429,10 @@ theorem actions_headWrites {σ : Env} : ∀ {as : List Action}, Actions.Ordering
       rw [Action.writes] at hV
       obtain ⟨V₁, hV₁, hV⟩ := Option.bind_eq_some_iff.mp hV
       obtain ⟨V₂, hV₂, rfl⟩ := Option.map_eq_some_iff.mp hV
-      obtain ⟨W₁, hW₁, hh₁⟩ := action_headWrites ho.1 (hsf a (by simp)) (hb a (by simp)) hV₁
-      obtain ⟨W₂, hW₂, hh₂⟩ := actions_headWrites ho.2 (fun x hx => hsf x (by simp [hx]))
-        (fun x hx => hb x (by simp [hx])) hV₂
+      obtain ⟨W₁, hW₁, hh₁⟩ := action_headWrites (ho a (by simp)) (hsf a (by simp))
+        (hb a (by simp)) hV₁
+      obtain ⟨W₂, hW₂, hh₂⟩ := actions_headWrites (fun x hx => ho x (by simp [hx]))
+        (fun x hx => hsf x (by simp [hx])) (fun x hx => hb x (by simp [hx])) hV₂
       refine ⟨W₁ ∪ W₂, ?_, hh₁.union hh₂⟩
       rw [encodeActions_cons, Action.writes_append, hW₁, Option.bind_some, hW₂, Option.map_some]
 
@@ -440,7 +457,7 @@ structure RuleOk (r : Rule) : Prop where
   query : QueryOk r.query
   keyed : Query.VarsKeyed r.query
   heads : r.HeadScoped
-  orderingFree : Actions.OrderingFree r.actions
+  minOverVars : Actions.MinOverVars r.actions
   subsumeFree : r.SubsumeFree
 
 theorem encodeRule_query (r : Rule) :
@@ -475,7 +492,7 @@ theorem firing_data (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
     intro a ha v hv
     apply Env.lookup_isSome_iff_mem_dom.mpr
     exact hσ.1.1.mem_iff.mpr (Actions.vars_subset_of_scoped hok.heads a ha v hv)
-  obtain ⟨V', hV', hhead⟩ := actions_headWrites hok.orderingFree hok.subsumeFree hbound hV
+  obtain ⟨V', hV', hhead⟩ := actions_headWrites hok.minOverVars hok.subsumeFree hbound hV
   obtain ⟨σ', hσ', hag⟩ := fire_complete h hc hw hok.query hσ
   have hag' : ∀ a ∈ r.actions, ∀ v ∈ a.vars, Env.lookup v σ' = Env.lookup v σ :=
     fun a ha v hv => hag v (Actions.vars_subset_of_scoped hok.heads a ha v hv)
@@ -565,11 +582,15 @@ theorem run_rel (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
     intro q hq
     obtain ⟨k, p, rfl⟩ := hufOnly q hq
     rfl
+  -- The bindings of a firing are source representatives, held before and after the round.
+  have hbind : ∀ {r : Rule} {σ : Env} {V V' : Set (Term × Term)}, Firing src d R r σ V V' →
+      ∀ v w, Env.lookup v σ = some w → w ∈ src'.terms := fun hf v w hvw =>
+    Database.mem_terms_of_eqs hsmono (hf.qmatch.1.2 (v, w) (Env.mem_of_lookup hvw)).1
   have hkeys_sub : ∀ k p, Row d' k p → k ∈ src'.terms := by
     intro k p hr
     rcases hrow k p hr with hr | ⟨r, σ, V, V', hf, hkp⟩
     · exact Database.mem_terms_of_eqs hsmono (h.key_mem_src hr.mem_keys)
-    · exact (hf.head.ends k p hkp src' (hf.src_sub.trans hsrcW)).1
+    · exact (hf.head.ends k p hkp src' (hf.src_sub.trans hsrcW) (hbind hf)).1
   have hself : ∀ k p, Row d' k p → Row d' k k ∧ Row d' p p := by
     intro k p hr
     rcases hrow k p hr with hr | ⟨r, σ, V, V', hf, hkp⟩
@@ -606,7 +627,7 @@ theorem run_rel (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
       refine Cong.replay (D := view d') (E := src') (fun q hq => ?_) hab
       rcases hrow q.1 q.2 hq with hr | ⟨r, σ, V, V', hf, hkp⟩
       · exact Cong.mono_eqs hsmono ((h.cong q.1 q.2).mpr hr.cong_view)
-      · exact hf.head.cong q.1 q.2 hkp src' (hf.src_sub.trans hsrcW)
+      · exact hf.head.cong q.1 q.2 hkp src' (hf.src_sub.trans hsrcW) (hbind hf)
   exact {
     diag := hdiag
     ufOnly := hufOnly

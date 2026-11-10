@@ -119,10 +119,12 @@ theorem check_corr (hP : P.Fragment) {x d : Database} (hx : SrcInv P x) (h : Rel
     (hc : Canon d) :
     QueryHolds x P.check ↔ QueryHolds d.forgetSubsumed (encodeQueryWith {} P.check 0).1 := by
   have hq := queryOk_check hP
+  have hmono := check_monotone hP
+  have hof := check_orderingFree hP
   constructor
   · rintro ⟨σ, hσ⟩
     obtain ⟨σ', hσ', _⟩ := fire_complete h hc hx.wf hq hσ
-    exact ⟨σ', queryMatches_forget h.diag (query_monotone hq.monotone 0) hσ'⟩
+    exact ⟨σ', queryMatches_forget h.diag (query_monotone hmono 0) hσ'⟩
   · rintro ⟨σ', hσ'⟩
     have hreads := h.reads_forget
     have hbound : ∀ v ∈ Query.vars P.check, (Env.lookup v σ').isSome := by
@@ -137,12 +139,12 @@ theorem check_corr (hP : P.Fragment) {x d : Database} (hx : SrcInv P x) (h : Rel
       obtain ⟨hv, hlk⟩ := mem_restrict (vs := Query.vars P.check) (σ := σ') (b := (v, t))
         (Env.mem_of_lookup hvt)
       obtain ⟨p, hp, hpv⟩ := check_keyed hP v hv
-      obtain ⟨a, ha⟩ := query_argVar_atom 0 hq.orderingFree hp hpv
+      obtain ⟨a, ha⟩ := query_argVar_atom 0 hq.minOverVars hp hpv
       obtain ⟨a', t', ha', ht', hedge⟩ := matches_uf_var_var_iff.mp (hσ'.2 _ ha)
       obtain rfl : t = t' := Option.some.inj (hlk.symm.trans ht')
       exact (hreads.edge _ _ hedge).2.2
     have hm : ∀ p ∈ P.check, Matches x p σ :=
-      sound_query hreads hx.subsumed 0 hq.orderingFree hq.monotone hq.shape hq.names
+      sound_query hreads hx.subsumed 0 hq.minOverVars hq.shape hq.names (Or.inl hmono)
         (fun v hv => (hlook v hv).symm) hvals hσ'.2
     have hdom : (Env.dom σ).Perm (Query.vars P.check) := by
       rw [hσdef, dom_restrict hbound]
@@ -150,7 +152,7 @@ theorem check_corr (hP : P.Fragment) {x d : Database} (hx : SrcInv P x) (h : Rel
     obtain ⟨τ, hτ, _⟩ := SourceMeaning.querySubst_of_matches_transport hx.wf hx.wf
       (Database.SameMeaning.refl x) hx.hasReps hdom
       (fun b hb => hvals b.1 b.2 ((Env.lookup_eq_some_iff_mem hnd).mpr hb))
-      hq.orderingFree hm
+      hof hm
     exact queryHolds_iff_validQuerySubst.mpr ⟨τ, hτ⟩
 
 end Egglog.Congruence
