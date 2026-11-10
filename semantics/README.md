@@ -26,8 +26,8 @@ and brief rationale are in [Spec/Step.lean](EgglogSemantics/Spec/Step.lean).
 ## Reading guide
 
 Start with [ExtlogTheorems.lean](ExtlogTheorems.lean). It states every theorem the paper claims,
-in full and in the vocabulary of the specification, and proves each by one reference into
-`EgglogSemantics/Proofs/`:
+in full and in the vocabulary of the specification; the proofs are under
+`EgglogSemantics/Proofs/`.
 
 | Theorem | Statement |
 | --- | --- |

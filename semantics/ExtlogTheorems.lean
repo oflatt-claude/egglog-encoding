@@ -27,8 +27,8 @@ import Mathlib.Util.AssertNoSorry
 # The paper's theorems
 
 Every theorem the paper claims, stated in full in the vocabulary of the specification
-(`EgglogSemantics/Spec/`) and of the passes, and proved by one reference into
-`EgglogSemantics/Proofs/`. Nothing in the specification or the passes imports a proof.
+(`EgglogSemantics/Spec/`) and of the passes. The proofs are under `EgglogSemantics/Proofs/`;
+nothing in the specification or the passes imports a proof.
 
 * Section 4 (semantics): `Spec/Syntax`, `Term`, `Database`, `Congruence`, `Match`, `Eval`,
   `Step` (rounds, schedules, outcomes), `Divergence`, `Behavior`, `Order`.
