@@ -43,6 +43,54 @@ fn congruence_restores_binders_in_independent_scopes() {
 }
 
 #[test]
+fn rejected_shared_candidates_do_not_render_their_terms() {
+    use crate::slotted::proofs::terms::slot_term;
+
+    let mut dag = TermDag::default();
+    let mut program = ProofContext::default();
+    program.add_constructor("Z", vec![]);
+    program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+    program.add_constructor("V", vec![ColumnKind::Var]);
+    let mut shared = dag.app("Z".into(), vec![]);
+    for _ in 0..32 {
+        shared = dag.app("Pair".into(), vec![shared, shared]);
+    }
+    let slot = slot_term(&mut dag, 0);
+    let good = dag.app("V".into(), vec![slot]);
+    let slot = slot_term(&mut dag, 1);
+    let target = dag.app("V".into(), vec![slot]);
+    program.lets.insert("bad".into(), shared);
+    program.lets.insert("good".into(), good);
+    let mut store = SlottedProofStore::new(dag);
+    let bad = store.fiat(shared, shared);
+    let good = store.fiat(good, good);
+    let mut witnesses = Witnesses::new(&mut store, &program, vec![bad, good]);
+    // Candidate order is by term ID, so the large shared terms fail first.
+    let proof = witnesses.exists(target).unwrap();
+    assert_eq!(witnesses.store.proposition(proof).rhs, target);
+    check_proof(&mut store, &program, proof).unwrap();
+}
+
+#[test]
+fn failed_equality_reports_both_terms() {
+    let mut dag = TermDag::default();
+    let mut program = ProofContext::default();
+    for head in ["F", "G"] {
+        program.add_constructor(head, vec![]);
+    }
+    let from = dag.app("F".into(), vec![]);
+    let to = dag.app("G".into(), vec![]);
+    program.lets.insert("input".into(), from);
+    let mut store = SlottedProofStore::new(dag);
+    let root = store.fiat(from, from);
+    let mut witnesses = Witnesses::new(&mut store, &program, vec![root]);
+    assert_eq!(
+        witnesses.equality(from, to).unwrap_err(),
+        "cannot reconstruct (F) = (G) from matched atoms"
+    );
+}
+
+#[test]
 fn witness_search_crosses_incompatible_shared_shapes() {
     for depth in [4, 32] {
         let mut dag = TermDag::default();
