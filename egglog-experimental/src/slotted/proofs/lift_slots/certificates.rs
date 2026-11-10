@@ -548,10 +548,10 @@ mod tests {
             .flattened
             .context(&mut dag, BTreeMap::new())
             .unwrap();
-        let mut lifter = SlotLifter::new(&context, dag, &request.names, &egg);
-        let (proof, class, slot) = egg
+        let mut lifter = SlotLifter::new(&context, dag.clone(), &request.names, &egg);
+        let cases: Vec<_> = egg
             .proofs()
-            .find_map(|(id, proof)| {
+            .filter_map(|(id, proof)| {
                 let Justification::Rule {
                     name, substitution, ..
                 } = proof.justification()
@@ -565,20 +565,40 @@ mod tests {
                 let old = lifter
                     .slot_map(lifter.sub(substitution, "_slots").unwrap())
                     .unwrap();
+                let (head, args) = lifter.app(proof.rhs())?;
+                if !head.starts_with("FreeVars_") {
+                    return None;
+                }
+                let new = lifter.slot_map(args[1]).unwrap();
                 let term = lifter.dec(class).unwrap();
-                all_slots(&lifter.out.term_dag, term)
-                    .into_iter()
-                    .find(|slot| !old.contains_key(slot))
-                    .map(|slot| (id, class, slot))
+                Some(
+                    all_slots(&lifter.out.term_dag, term)
+                        .into_iter()
+                        .filter(|slot| !new.contains_key(slot))
+                        .map(|slot| (id, class, slot, old.contains_key(&slot)))
+                        .collect::<Vec<_>>(),
+                )
             })
-            .expect("closure must retain a previously absent slot");
-        let fresh = lifter.fresh();
-        let term = lifter.dec(class).unwrap();
-        let swap = Renaming::new([(slot, fresh), (fresh, slot)]).unwrap();
-        let target = rename(&mut lifter.out.term_dag, &swap, term);
-        let proof = lifter.cert_from(proof, class, slot, fresh).unwrap();
-        let (mut store, proof) = lifter.out.finish(proof);
-        crate::slotted::proofs::check_proof(&mut store, &request.flattened, proof).unwrap();
-        assert_eq!(store.proposition(proof), &Proposition::new(term, target));
+            .flatten()
+            .collect();
+        assert!(
+            cases.iter().any(|(_, _, _, present)| !present),
+            "closure must retain a previously absent slot"
+        );
+        assert!(
+            cases.iter().any(|(_, _, _, present)| *present),
+            "closure must also remove a slot through symmetry"
+        );
+        for (proof, class, slot, _) in cases {
+            let mut lifter = SlotLifter::new(&context, dag.clone(), &request.names, &egg);
+            let fresh = lifter.fresh();
+            let term = lifter.dec(class).unwrap();
+            let swap = Renaming::new([(slot, fresh), (fresh, slot)]).unwrap();
+            let target = rename(&mut lifter.out.term_dag, &swap, term);
+            let proof = lifter.cert_from(proof, class, slot, fresh).unwrap();
+            let (mut store, proof) = lifter.out.finish(proof);
+            crate::slotted::proofs::check_proof(&mut store, &request.flattened, proof).unwrap();
+            assert_eq!(store.proposition(proof), &Proposition::new(term, target));
+        }
     }
 }
