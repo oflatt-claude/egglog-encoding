@@ -61,10 +61,17 @@ private def nested : Query := [.eq (.app "F" [atom "A"]) (.app "F" [atom "B"])]
 #guard !(Program.WellFormed ⟨.seq base (global [.expr (.app "F" [.var "x"])]), joined⟩)
 #guard Program.WellFormed ⟨global [.union (.lit (.int 0)) (.lit (.int 1))], []⟩
 #guard !(Program.Fragment ⟨global [.union (.lit (.int 0)) (.lit (.int 1))], []⟩)
--- The check is part of the fragment: a disequality or a minimum there is outside it.
-#guard !(Program.Fragment ⟨base, [.ne (atom "A") (atom "B")]⟩)
-#guard !(Program.Fragment ⟨base,
-  [.expr (.app "F" [.var "x"]), .eq (.var "x") (.min (.var "x") (.var "x"))]⟩)
+-- The check is a query like a rule's: it may test a disequality, under saturation too, and
+-- it may take the minimum of query variables when the program has no saturation.
+private def leastCheck : Query :=
+  [.expr (.app "F" [.var "x"]), .expr (.app "G" [.var "y"]),
+   .eq (.var "x") (.min (.var "x") (.var "y"))]
+#guard Program.Fragment ⟨base, [.ne (atom "A") (atom "B")]⟩
+#guard Program.Fragment ⟨.seq base (.saturate (.run [])), [.ne (atom "A") (atom "B")]⟩
+#guard Program.Fragment ⟨base, leastCheck⟩
+#guard !(Program.Fragment ⟨.seq base (.saturate (.run [])), leastCheck⟩)
+#guard !(SourceProof.Fragment ⟨base, [.ne (atom "A") (atom "B")]⟩)
+#guard !(SourceProof.Fragment ⟨base, leastCheck⟩)
 -- A rule may test a disequality, under saturation too.
 private def guarded : Rule :=
   ⟨[.expr (.app "F" [.var "x"]), .expr (.app "G" [.var "y"]), .ne (.var "x") (.var "y")],

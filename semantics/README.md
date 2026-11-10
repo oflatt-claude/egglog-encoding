@@ -9,8 +9,9 @@ The reference interpreter targets the extended egglog implementation in this wor
 
 The language is untyped and has no declarations. A program is a schedule, built from
 runs of rule lists, saturations and sequences nested as in egglog's `run-schedule`, and
-one check that decides its outcome; applying any name to any arguments builds a
-term, and an initial fact is a run of an empty-query rule. A rule's query is a
+one check, a query like a rule's over the final e-graph, that decides its outcome;
+applying any name to any arguments builds a term, and an initial fact is a run of an
+empty-query rule. A rule's query is a
 conjunction of term patterns, equalities and disequalities, and its actions build terms,
 assert equalities with `union`, and `subsume` rows. egglog's named rulesets are resolved by
 the parser: a run of a ruleset fires the rules registered in it so far.
@@ -60,9 +61,9 @@ show only `propext`, `Classical.choice` and `Quot.sound`.
 
 The congruence compiler translates source programs that subsume no rows into an explicit
 union-find relation maintained by rules that subsume a stale row and write its
-replacement; the output has no merge function. Source rules may test disequalities, and
-the rules of a program without saturation may take the minimum of query variables; the
-final check does neither (`Program.Fragment`). It handles query flattening and rebuilding,
+replacement; the output has no merge function. Source rules and the final check may test
+disequalities, and may take the minimum of query variables when the program has no
+saturation (`Program.Fragment`). It handles query flattening and rebuilding,
 with one id column per relation. The provenance pass adds a firing log, one relation per
 rule recording the values each firing bound, and proofs are reconstructed from the log
 afterwards. Proof lifting turns them into source proofs that both the Lean and Rust

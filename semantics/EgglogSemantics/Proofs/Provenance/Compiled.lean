@@ -676,8 +676,7 @@ theorem compiled_keyed (hP : P.Fragment) :
 
 theorem compiled_check_keyed (hP : P.Fragment) : Query.VarsKeyed (Congruence.encode P).check := by
   rw [encode_check]
-  exact keyed_encodeQuery (fun p hp => (hP.queryEncodable.2.1 p hp).2)
-    (fun p hp => Pattern.minOverVars_of_orderingFree p (check_orderingFree hP p hp))
+  exact keyed_encodeQuery (fun p hp => (hP.queryEncodable.2.1 p hp).2) (check_minOverVars hP)
     hP.queryEncodable.2.2 0
 
 /-- The congruence compiler's output satisfies the instrumentation premise. -/

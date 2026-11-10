@@ -15,7 +15,7 @@ congruence compiler emits no merge function. Its one table, `@UF(key, parent)`, 
 relation, and every change to a row is a rule that subsumes the stale row and writes its
 replacement. Two language features support this: a `subsume` action and a disequality
 pattern `e ≠ e`. Source programs subsume no rows (`Program.Fragment.subsumeFree`); their
-rules may test disequalities.
+rules and their check may test disequalities.
 
 ### Semantics
 
@@ -184,28 +184,26 @@ for the composition with provenance instrumentation. Their proofs are under
 
 ### The fragment's boundary
 
-`Program.Fragment` (`Source/Domain.lean`) admits disequality patterns in rule queries, and
-minima in the rules of a program without saturation; a `min` applies only to query
-variables and to such minima, and the final check tests no disequality and takes no
-minimum. Each boundary is where the theorem fails:
+`Program.Fragment` (`Source/Domain.lean`) admits disequality patterns in rule queries and in
+the final check, and minima in the rules and the check of a program without saturation; a
+`min` applies only to query variables and to such minima. A disequality compares the ids of
+its two sides, and at a canonical compiled state every live edge leads to a root, the
+representative of a source class, so two ids differ exactly when the source values are not
+congruent; rule queries and the final check are both read at such a state
+(`Proofs/Congruence/QueryCorr.lean`, `Check.lean`). Each boundary is where the theorem
+fails:
 
-- The final check reads the compiled state with subsumption forgotten, as egglog's `check`
-  does, so a stale edge can bind an id to a former parent. After `(union (F (A)) (E))`,
-  where `E()` is below `F(A())` in the term order, the subsumed self-loop
-  `@UF(F(A()), F(A()))` lets the compiled check `(!= (F (A)) (E))` succeed, while the
-  source check fails. A `min` in the check can pick such a former parent in the same way.
-  Rule queries never see subsumed rows, so a disequality there compares two roots, which
-  are the representatives of its sides.
 - A compiled saturation may run passes after the source has settled, at states with the
   meaning of the source fixpoint but with new spellings, and a new spelling can be the new
   representative of its class. A minimum compares representatives, so a rule that takes one
-  can then build a term the source never builds. With `(A)`, `(F (B))`, `(K (F (B)))` and
+  can then build a term the source never builds, and a check that takes one can decide
+  differently. With `(A)`, `(F (B))`, `(K (F (B)))` and
   `(M (F (AB)))` as facts, the saturation of `(rule ((F x)) ((F x)))`,
   `(rule ((A) (B)) ((union (A) (B))))` and `(rule ((K z) (M w)) ((H (min z w))))` stops in
   the source once `F(A())` is stored, before any rule binds `z` to it, whereas the compiled
   program runs one more pass and builds `H(F(A()))`. A program without saturation is
-  simulated exactly, run by run (`Proofs/Congruence/Exact.lean`), and its rules may take
-  minima.
+  simulated exactly, run by run (`Proofs/Congruence/Exact.lean`), and its rules and its
+  check may take minima.
 - A `min` over an application would be looked up by its spelling in a compiled query, and
   built by a compiled head whether or not it is chosen (`encodeBuildWith`), so the fragment
   admits `min` over variables only.
@@ -219,8 +217,8 @@ The reference interpreter refines the specification up to `Database.SameMeaning`
 monotone, ordering-free programs (`exec_programStep`) and for union-free programs with
 subsumption, disequalities and `min` (`exec_programStep_noUnions`). The latter includes
 the compiler's output (`Congruence.exec_encode_programStep`); mixed union-and-subsume
-programs are not covered, and neither are source programs with a disequality or a `min`,
-which the corpus gates still execute. `execRunRules` matches every rule against the
+programs are not covered, and neither are source programs whose rules test a disequality
+or that take a `min`, which the corpus gates still execute. `execRunRules` matches every rule against the
 pre-state, then applies the firings' writes and subsumptions.
 
 `Congruence.compile` returns the compiled program with one origin per rule, in

@@ -138,20 +138,19 @@ theorem pattern_names {q : Query} (hq : ∀ fk ∈ q.flatMap Pattern.ctors, fk �
   apply hq
   exact List.mem_flatMap.mpr ⟨p, hp, Pattern.ctors_of_mem_exprs he fk hk⟩
 
-/-- The final check tests no disequality. -/
-theorem check_monotone (hP : P.Fragment) : ∀ p ∈ P.check, p.monotoneB = true :=
-  List.all_eq_true.mp hP.checkMonotone
-
-/-- The final check takes no minimum. -/
-theorem check_orderingFree (hP : P.Fragment) : ∀ p ∈ P.check, p.OrderingFree :=
-  hP.checkOrderingFree
-
 /-- Every minimum of a rule is over query variables. -/
 theorem rule_minOverVars (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) :
     (∀ p ∈ r.query, p.MinOverVars) ∧ Actions.MinOverVars r.actions := by
   rcases hP.ordering with hO | ⟨_, hM⟩
-  · exact Rule.minOverVars_of_orderingFree (hO r hr)
-  · exact Rule.minOverVars_of_minOverVarsB (List.all_eq_true.mp hM r hr)
+  · exact Rule.minOverVars_of_orderingFree (hO.1 r hr)
+  · exact Rule.minOverVars_of_minOverVarsB
+      (List.all_eq_true.mp (Bool.and_eq_true_iff.mp hM).1 r hr)
+
+/-- Every minimum of the final check is over query variables. -/
+theorem check_minOverVars (hP : P.Fragment) : ∀ p ∈ P.check, p.MinOverVars := by
+  rcases hP.ordering with hO | ⟨_, hM⟩
+  · exact fun p hp => Pattern.minOverVars_of_orderingFree p (hO.2 p hp)
+  · exact List.all_eq_true.mp (Bool.and_eq_true_iff.mp hM).2
 
 /-- Every rule of a fragment program satisfies the round correspondence's conditions. -/
 theorem ruleOk_of_fragment (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : RuleOk r := by
@@ -171,7 +170,7 @@ theorem ruleOk_of_fragment (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : R
 
 /-- The final check satisfies the query conditions. -/
 theorem queryOk_check (hP : P.Fragment) : QueryOk P.check where
-  minOverVars := fun p hp => Pattern.minOverVars_of_orderingFree p (check_orderingFree hP p hp)
+  minOverVars := check_minOverVars hP
   shape := fun p hp => (hP.queryEncodable.2.1 p hp).2
   names := pattern_names (by
     intro fk hk
