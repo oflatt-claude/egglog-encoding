@@ -1,11 +1,9 @@
 import EgglogSemantics.Proofs.Provenance.Round
 import Mathlib.Data.Set.Card
 
-/-! The simulation between a schedule and its instrumentation, up to the meaning of the
-original state: the instrumented state is related to a partner that has the meaning of the
-original state. An instrumented saturation may run passes after the original has settled,
-since a log row is a change of meaning; those passes write only log rows, which belong to
-a finite set, so they terminate. -/
+/-! Finite execution correspondence for provenance instrumentation, up to the original
+state's meaning. Additional instrumented passes after the original settles terminate and
+write only log rows. -/
 
 namespace Egglog.Provenance
 
@@ -218,8 +216,8 @@ theorem run_fwd (hP : programOk P = true) {R R' : List Rule} (hR : ∀ r ∈ R, 
 
 /-! ### Extra instrumented passes after the original settles -/
 
-/-- After the original has settled, the instrumented saturation terminates: every pass that
-changes the state adds a log row from a finite set. -/
+/-- After the original settles, instrumented saturation terminates at a related state of
+the same original meaning, with new log rows writable over the original terms. -/
 theorem extra_passes (hP : programOk P = true) {S S' : Schedule} (hS : S.rules ⊆ P.rules)
     (ih : Fwd P S S') {e : Database} (he : Inv P e)
     (hstable : ∀ x y, Inv P x → e.SameMeaning x → Reach x S y → e.SameMeaning y)

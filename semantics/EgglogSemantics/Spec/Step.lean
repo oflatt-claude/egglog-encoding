@@ -66,9 +66,8 @@ def Result.succeeded : Result → Bool
   | .ok => true
   | .checkFailed => false
 
-/-- Program evaluation: the schedule, then the final check decides the outcome. A check
-sees subsumed rows, as egglog's `check` does (`check_facts` queries with
-`include_subsumed`), so it runs against the final e-graph with subsumption forgotten.
+/-- Program evaluation: run the schedule, then decide the outcome with the final check.
+The check sees subsumed rows via `Database.forgetSubsumed`, as egglog's `check` does.
 Running `P` from the empty state is `Eval Database.empty P`. -/
 @[blueprint "def:behavior"
   (statement := /--

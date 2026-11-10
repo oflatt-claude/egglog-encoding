@@ -1,7 +1,7 @@
 import EgglogSemantics.Proofs.DiagonalRound
 import EgglogSemantics.Proofs.StatePreservation
 
-/-! Subsumption retains equations, columns, and historical existence. -/
+/-! Subsumption preserves equations and term existence while hiding rows from queries. -/
 
 namespace Egglog
 

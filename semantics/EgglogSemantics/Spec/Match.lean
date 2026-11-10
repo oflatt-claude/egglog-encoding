@@ -63,8 +63,7 @@ representative, one value per class, as egglog binds a variable to an e-class. -
 def Database.reps (db : Database) : Set Term :=
   {t | t ∈ db.terms ∧ ∀ s ∈ db.terms, Cong db s t → ¬ Term.blt s t}
 
-/-- `σ` binds exactly `vars`, each to a representative. `Perm` rather than equality, so
-the order `Expr.freeVars` produces does not matter. -/
+/-- `σ` binds exactly `vars`, each to a representative; binding order is irrelevant. -/
 def ValidEnv (vars : List Var) (db : Database) (σ : Env) : Prop :=
   (Env.dom σ).Perm vars ∧ ∀ b ∈ σ, b.2 ∈ db.reps
 

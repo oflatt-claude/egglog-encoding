@@ -10,11 +10,9 @@ open SourceProof (Claim Proof)
 def sourceSubst (vars : List Var) (σ : Env) : Option Env :=
   vars.mapM fun v => (Env.lookup v σ).map (v, ·)
 
-/-- A maintenance firing's written row, justified from its premises in query order. Path
-compression chains two edges; a UF collision chains the two parents through their key; a
-congruence firing turns the second application into the first by congruence on each child,
-and chains the two roots through them. `m` is the maintenance rule and `r` the row it
-wrote. -/
+/-- Justify row `r` written by maintenance rule `m`, from premise proofs in query order.
+Path compression, parent collision and constructor congruence are supported; view rules
+return `none`. -/
 @[blueprint "def:lift-rebuild"
   (statement := /--
   \begin{mathpar}
@@ -75,12 +73,10 @@ def expect (P : Program) (fact : Term) (k : Claim → Option Proof) : Option Pro
 
 mutual
 
-/-- Lift a proof about the compiled program to a source proof of its fact's claim:
-`π ⇑ π'` with `P ⊢ π' : ⌈fact(π)⌉`. A compiled proof is a rule node
-`rule_{i'}((t = t), σ; π̄)` for the row `t` a firing wrote, or for a subterm of a row a
-source firing wrote, which that firing's facts cover. `origins` has one entry per rule of
-the compiled program, in the order of `Program.rules`; `i'` below is the compiled copy of
-source rule `i`, and `m` a maintenance rule. -/
+/-- Lift a compiled rule proof to a source proof of its fact's claim:
+`π ⇑ π'` with `P ⊢ π' : ⌈fact(π)⌉`. `origins` must have one entry per compiled rule in
+`Program.rules` order. A source firing can justify a written row or its subterms;
+maintenance firings justify union-find rows. Non-rule nodes return `none`. -/
 @[blueprint "def:lift"
   (statement := /--
   \begin{mathpar}

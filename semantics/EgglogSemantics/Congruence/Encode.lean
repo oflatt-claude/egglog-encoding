@@ -5,44 +5,21 @@ import Architect
 /-!
 # Congruence compilation
 
-This pass implements an explicit union-find for the constructor source fragment using
-rules only. Its one auxiliary table is the relation `@UF(key, parent)`, whose rows are
-never nested; there are no proof columns and no proof expressions. Source terms serve as
-their own ids: building `f(ā)` asserts the self-loop `@UF(f(ā), f(ā))`, and the term exists
-in the target as that row's key.
+The paper's congruence pass compiles the constructor source fragment to rules over an
+explicit union-find relation `@UF(key, parent)`. Source terms serve as ids; building a term
+asserts its union-find self-loop. Maintenance rules compress paths, resolve parent
+collisions, and merge congruent applications. Leaders decrease in the term order, and
+subsumed edges remain stored but cannot match. Disequality guards prevent maintenance
+rules from subsuming canonical edges.
 
-The union-find changes only through rules. A maintenance rule matches a stale edge,
-subsumes it, and writes its replacement; its disequality guard makes it fire only where the
-replacement differs from the row, so no rule subsumes a row that it writes, and a self-loop
-is never re-derived from itself. A collision of two parents keeps the smaller id, subsumes
-the other edge, and links the larger id under the smaller. Congruence is one rule per
-constructor: two applications whose children have the same parents link the larger of
-their roots under the smaller. A subsumed row stays in its table, as in egglog, but no
-query matches it again; a stale edge is never needed again, since leaders only move down
-the term order.
+Flattening visits children before parents, left to right. `Resugar.Query` consumes premise
+proofs in this same order. Each compiled run is followed by a complete rebuild; sequences
+and saturations preserve the source schedule's structure.
 
-A query matches the terms themselves and joins the union-find in between. Flattening is
-left-to-right postorder: visit every child before emitting its parent's atoms. An
-application becomes the application over fresh child variables, one edge from each child
-variable to the child's id, and one edge from the application to a fresh root, which is
-its id; a value is its own id. An equality visits its left side, then its right side,
-then equates the resulting ids. Later resugaring traverses the original query in this same
-order; no separate flattening tree is needed.
-
-The paper displays the pass as inference rules; they are the `@[blueprint]` statements of
-the definitions below, so the paper and the compiler change together.
-
-A source run becomes the run of the compiled rules followed by a saturation of the
-maintenance rules, and sequences and saturations compile structurally, so every pass of a
-compiled saturation is one source pass with a complete rebuild after each of its runs, as
-in egglog's instrumented schedules. `compile` also returns one origin per compiled rule, in
-the order of `Program.rules`; `encode` is the program alone. Origins do not affect
-execution; they distinguish source rule firings from path compression, collisions and
-congruence during later resugaring.
-
-The view tables of the previous encoding, one row per application keyed by the parents of
-its children, materialize the joins these queries perform; the paper presents them as an
-optimization of this encoding.
+`compile` returns the program and one origin per rule in `Program.rules` order, for proof
+lifting; `encode` returns the program alone. `Options` selects canonical node views and
+phased rebuilding. The default uses no views and one maintenance ruleset. The definitions'
+`@[blueprint]` attributes display the pass as inference rules in the paper.
 -/
 
 namespace Egglog.Congruence
@@ -202,9 +179,8 @@ def encodeQuery : Query → Nat → Query × Nat := encodeQueryWith {}
 
 mutual
 
-/-- Build children before their parent, and give every value a UF self-loop. A self-loop
-for a value that already has a parent is stale and path compression removes it. The
-indexed view also gets the node's row, keyed by its children as built. -/
+/-- Build children before their parent and give every value a union-find self-loop.
+With indexed views, also write the node's view row, keyed by its children as built. -/
 def encodeBuildWith (o : Options) : Expr → List Action
   | e@(.lit _) | e@(.var _) => [.expr (ufRow e e)]
   | .min a b => encodeBuildWith o a ++ encodeBuildWith o b
@@ -220,10 +196,8 @@ def encodeBuildArgsWith (o : Options) : List Expr → List Action
 
 end
 
-/-- A source union links both ids to the smaller one; for the smaller one that is a
-self-loop. A bare action `e` is the paper's shorthand for `union(e, e)`, whose extra edge
-is the self-loop `exist(e)` already holds. Source subsumes are outside the fragment and
-compile to nothing. -/
+/-- A union links both ids to their minimum; a bare action builds its term and subterms.
+Source subsumes are outside the fragment and compile to nothing. -/
 @[blueprint "def:compile-head"
   (statement := /--
   \[
@@ -247,9 +221,8 @@ def encodeActionWith (o : Options) : Action → List Action
 def encodeActionsWith (o : Options) (as : List Action) : List Action :=
   as.flatMap (encodeActionWith o)
 
-/-- Variable supplies are local to a rule; source names cannot use the `@` namespace.
-Query variables are bound to parents through union-find edges, which are roots once
-rebuilding has completed, so the head needs no leader lookup. -/
+/-- Compile a rule with a local fresh-variable supply. Source names must avoid `@`.
+After rebuilding, query variables are bound to roots through union-find edges. -/
 def encodeRuleWith (o : Options) (r : Rule) : Rule :=
   { query := (encodeQueryWith o r.query 0).1, actions := encodeActionsWith o r.actions }
 
@@ -280,8 +253,8 @@ def fdRule (R : FnName) (keys : List Expr) (v v' : Var) (extra : Expr → Expr �
               .eq (.var v) (.min (.var v) (.var v')), .ne (.var v) (.var v')],
     actions := .subsume R (keys ++ [.var v']) :: extra (.var v) (.var v') }
 
-/-- Two parents of one key: keep the smaller, subsume the other edge, and link the larger
-parent under the smaller. The functional dependency of a term's parent on the term. -/
+/-- Resolve two parents of one key: keep the smaller, subsume the other edge, and link the
+larger parent under the smaller. -/
 @[blueprint "def:fd-rule"
   (statement := /--
   \[
@@ -297,8 +270,8 @@ def ufCollideRule : Rule :=
 def congruenceVars (stem : String) (arity : Nat) : List Expr :=
   (List.range arity).map fun i => .var ("@" ++ stem ++ toString i)
 
-/-- Two applications of `f` whose children have the same parents: link the larger of their
-roots under the smaller. This is where congruence becomes an equation. -/
+/-- Link the larger root under the smaller for two applications of `f` whose children
+have the same parents. -/
 def congruenceRule (f : FnName) (arity : Nat) : Rule :=
   let as := congruenceVars "a" arity
   let bs := congruenceVars "b" arity
@@ -317,18 +290,15 @@ def rebuildRules (f : FnName) (arity : Nat) : List (Rule × RuleOrigin) :=
 
 /-! ### Canonical node views
 
-An optimization of the pass: a row `View_f(a'₁, …, a'ₙ, c')` per application of `f`, holding
-the leaders of its children and of itself, so that a compiled query reads one row per
-application instead of the application and `n + 1` union-find edges, and a congruence is
-two rows at one key. -/
+An optional view row holds the leaders of an application's children and of the application
+itself. Compiled queries match these rows, and congruence detection compares rows at the
+same key. -/
 
 /-- The key variables of a generated view rule. -/
 def rebuildVars (arity : Nat) : List Expr :=
   (List.range arity).map fun i => .var ("@c" ++ toString i)
 
-/-- The naive view: every application's row, from its children's and its own parents; a
-row with a column that has a parent is stale; and the congruence rule, whose query is the
-pattern the view caches, reads two rows at one key and retires the loser. -/
+/-- Derive a naive view row from an application's child parents and its own parent. -/
 @[blueprint "def:view-naive"
   (statement := /--
   \[
@@ -360,8 +330,7 @@ def staleRule (f : FnName) (arity : Nat) (column : Nat) : Rule :=
               .ne key (.var "@x")],
     actions := [subsumeView f cs (.var "@e")] }
 
-/-- The index of the view: a row per column, relating the view row to each value it
-mentions, so that a union-find edge finds every row it moves by lookup. -/
+/-- Index a view row by each of its column values. -/
 @[blueprint "def:view-index"
   (statement := /--
   \[
@@ -377,10 +346,8 @@ def indexRule (f : FnName) (arity : Nat) : Rule :=
   { query := [.expr row],
     actions := cs.map fun c => .expr (.app hasChildName [row, c]) }
 
-/-- The indexed view: the index entry of column `i` of a row, joined with the union-find
-edge of that column, moves the row to the column's parent. One binary join. The naive view
-rule is gone: building `f(ē)` writes the row `View_f(ē, f(ē))` next to the node's self-loop
-(`encodeBuildWith`), and this rule keeps it current. -/
+/-- Move an indexed view row to the parent of column `i`, subsuming the prior row.
+`encodeBuildWith` supplies the initial rows. -/
 @[blueprint "def:view-indexed"
   (statement := /--
   \[
@@ -400,9 +367,8 @@ def rekeyRule (f : FnName) (arity : Nat) (column : Nat) : Rule :=
               .expr (ufRow key (.var "@x")), .ne key (.var "@x")],
     actions := [subsumeView f cs (.var "@e"), .expr moved] }
 
-/-- The congruence rule read over the view: two rows at one key keep the smaller output,
-subsume the other row, and link the larger output under the smaller. The functional
-dependency of the view's output on its key. -/
+/-- Resolve view rows at the same key: keep the smaller output, subsume the other row,
+and link the larger output under the smaller. -/
 @[blueprint "def:fd-instances"
   (statement := /--
   \[
@@ -490,9 +456,8 @@ def rebuildWith (o : Options) (P : Program) : Schedule × List RuleOrigin :=
     | none => (.saturate (.run []), origins)
   else (.saturate (.run (groups.flatten.map Prod.fst)), origins)
 
-/-- Compile a schedule, numbering source rules from `index` in `Program.rules`. Every run
-is followed by a rebuild, so a compiled saturation's body ends at a rebuild fixpoint and
-each of its passes is one source pass. -/
+/-- Compile a schedule, numbering source rules from `index` in `Program.rules` order and
+following every run with a rebuild. -/
 @[blueprint "def:compile-schedule"
   (statement := /--
   \begin{mathpar}

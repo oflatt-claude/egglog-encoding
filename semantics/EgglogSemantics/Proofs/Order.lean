@@ -11,8 +11,7 @@ lists lexicographically. The public order compares node counts first, then uses 
 strict total structural order. The list comparison is only total at equal lengths. -/
 namespace Lit
 
-/-- Asymmetry, totality and transitivity of the base-value order, using the integer and
-string laws under `decide`, with integers below strings. -/
+/-- The literal order is asymmetric; integers precede strings. -/
 theorem blt_asymm {l m : Lit} (h : Lit.blt l m = true) : Lit.blt m l = false := by
   cases l <;> cases m <;>
     simp_all only [Lit.blt, decide_eq_true_eq, decide_eq_false_iff_not, Bool.false_eq_true]

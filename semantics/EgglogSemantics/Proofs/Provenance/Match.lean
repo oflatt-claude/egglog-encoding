@@ -3,11 +3,8 @@ import EgglogSemantics.Proofs.Match
 import EgglogSemantics.Proofs.MatchEval
 import EgglogSemantics.Proofs.Source.Ctors
 
-/-! Matching does not see the log. An instrumented state holds the original's terms, the
-original's subsumed rows, and log rows besides; a query whose names are data names and
-whose every variable is an argument of an application pattern matches under exactly the
-substitutions it matched in the original, because every binding sits inside a held data
-row, which is never a log row. -/
+/-! Query matching is unchanged by the firing log when query names avoid the log prefix
+and every variable is an argument of an application pattern. -/
 
 namespace Egglog.Provenance
 

@@ -38,7 +38,7 @@ def var (v : Var) : String :=
   else if letters.length = 1 && digits.isEmpty then String.ofList letters
   else "\\mathit{" ++ String.ofList cs ++ "}"
 
-/-- Expressions compared by spelling; `Expr` carries no `BEq`. -/
+/-- Compare expressions by their printed spelling. -/
 def same (a b : Expr) : Bool := a.toEgg == b.toEgg
 def has (l : List Expr) (e : Expr) : Bool := l.any (same e)
 def index? (l : List Expr) (e : Expr) : Option Nat := l.findIdx? (same e)
@@ -202,8 +202,7 @@ partial def schedule (P : Program) (origins : List RuleOrigin) (depth : Nat) :
     let (b, rest') := schedule P rest depth S₂
     (a ++ b, rest')
 
-/-- Lines as an `eggprogram`, in `\small`. The last line loses its line break: a trailing
-`\\` would end the alignment with an empty row and leave a gap below it. -/
+/-- Render lines as an `eggprogram` in `\small`, omitting the final line break. -/
 def eggprogram (body : String) : String :=
   let body := if body.endsWith "&&\\\\*\n" then body.dropRight 4 ++ "\n"
     else if body.endsWith "&&\\\\[.3em]\n" then body.dropRight 9 ++ "\n"
@@ -347,8 +346,8 @@ def relationProof : Proof → Bool
   | .rule c _ _ _ => c.lhs == c.rhs && !arithmetic c.lhs.toExpr
   | _ => false
 
-/-- Names for what recurs: terms (an abbreviation list), substitutions (with a rule and
-substitution that uses each) and rule nodes, the latter two keyed by their rendered text. -/
+/-- Names for repeated terms, substitutions and rule nodes. Substitutions and rule nodes
+share a name when their rendered text agrees. -/
 structure Names where
   elision : Elision
   terms : List Expr

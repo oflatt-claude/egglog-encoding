@@ -1,9 +1,8 @@
 import EgglogSemantics.Proofs.Congruence.Simulate
 import EgglogSemantics.Proofs.Divergence
 
-/-! Divergence corresponds: a source schedule has a saturation that never settles exactly
-when its compilation does. The infinite traces are transported pass by pass through the
-simulation, and the compiled passes after a source fixpoint terminate. -/
+/-! Divergence correspondence for the congruence pass: a source schedule has a
+nonterminating execution exactly when its compilation does. -/
 
 namespace Egglog.Congruence
 

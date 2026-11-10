@@ -1,11 +1,9 @@
 import EgglogSemantics.Proofs.Congruence.Source
 import EgglogSemantics.Proofs.Congruence.Fixpoint
 
-/-! The simulation between a source schedule and its compilation, up to source meaning:
-the compiled state is related to a partner state that has the meaning of the source state
-and is reached from the previous partner by rounds of the program. A compiled saturation
-may run passes after the source has settled; they terminate because the partner's rows stay
-inside a finite universe. -/
+/-! Finite execution correspondence for the congruence pass, up to source meaning.
+The simulation relates a compiled state to a source state of the same meaning as the
+source execution's result. Additional compiled passes after a source fixpoint terminate. -/
 
 namespace Egglog.Congruence
 

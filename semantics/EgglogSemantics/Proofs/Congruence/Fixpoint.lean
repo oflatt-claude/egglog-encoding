@@ -4,9 +4,8 @@ import EgglogSemantics.Proofs.FiniteSaturation
 import EgglogSemantics.Proofs.DiagonalRound
 import Mathlib.Data.Set.Card
 
-/-! The rebuild saturation: it terminates, because rows and marks only grow inside the
-finite square of the keys, and its fixpoint is canonical, because any maintenance firing
-would mark a live row or add a row. -/
+/-! Termination of rebuild saturation and canonicality of its result: every key has one
+live edge to a root, and congruent applications share a root. -/
 
 namespace Egglog.Congruence
 

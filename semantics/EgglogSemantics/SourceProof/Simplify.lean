@@ -1,7 +1,7 @@
 import EgglogSemantics.SourceProof.Checker
 
-/-! Removing the detours a mechanical lifting leaves in a proof, for presentation. Every
-rewrite preserves the claim; a user checks the result again. -/
+/-! Simplify proof trees for presentation while preserving their claims.
+Callers must check the simplified proof again. -/
 
 namespace Egglog.SourceProof
 

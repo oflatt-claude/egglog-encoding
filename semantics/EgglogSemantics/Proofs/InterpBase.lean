@@ -90,8 +90,8 @@ theorem finite_toDatabase (d : FDatabase) : d.toDatabase.eqs.Finite := by
   · exact Or.inl ⟨a, ha, Prod.ext rfl hab⟩
   · exact Or.inr hp
 
-/-- **`Closed` is exactly what makes the restriction invisible.** Every lemma below
-that pushes `toDatabase` through a writer is this fact plus set algebra. -/
+/-- For a closed finite store, denotation contains exactly the listed equations and
+reflexive equations of held terms. -/
 theorem mem_toDatabase_eqs_of_closed {d : FDatabase} (he : d.Closed)
     {p : Term × Term} :
     p ∈ d.toDatabase.eqs ↔ (p.1 = p.2 ∧ p.1 ∈ d.terms) ∨ p ∈ d.eqs := by
@@ -330,9 +330,8 @@ restricts to one for each pattern. -/
 theorem Query.freeVars_subset {q : Query} {σ : Env} {p : Pattern} (hp : p ∈ q) :
     p.freeVars σ ⊆ Query.freeVars q σ := fun _ hv => Query.mem_freeVars.mpr ⟨p, hp, hv⟩
 
-/-- Restricting a query substitution to one pattern gives a substitution with exactly that
-pattern's free variables as its domain, and it agrees with the original there. These are
-the two facts `patternHolds_iff` and `ValidSubst.of_agree` need. -/
+/-- Restricting a query substitution to one pattern binds exactly that pattern's free
+variables and agrees with the original on them. -/
 theorem Env.dom_canon_of_subset {vars vars' : List Var} {σ : Env} (hsub : vars ⊆ vars')
     (hdom : Env.dom σ = vars') : Env.dom (Env.canon vars σ) = vars :=
   Env.dom_canon fun v hv =>

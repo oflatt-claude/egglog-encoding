@@ -3,10 +3,10 @@ import EgglogSemantics.Provenance.Checker
 /-!
 # Provenance instrumentation
 
-Every rule gets one more action: a row that records the firing, under the rule's index,
-with the values of the rule's query variables. No rule reads these rows, so the
-instrumented program builds the same data as the original, round for round, subsumes the
-same rows, and settles when it does. Proofs are read off the log afterwards (`Log`).
+Add a firing-log action to each rule, recording its index and query-variable bindings.
+For programs satisfying `Instrumentable`, instrumentation preserves data writes and
+subsumptions in each round, outcomes, and divergence. Saturation may take additional passes
+to finish the log. `Provenance.Log` reconstructs proofs from the recorded firings.
 -/
 
 namespace Egglog.Provenance
@@ -24,15 +24,13 @@ def rowHeads (P : Program) : List FnName :=
   (P.rules.flatMap fun r => r.actions.filterMap fun a => match a with
     | .expr (.app f _) | .subsume f _ => some f | _ => none).dedup
 
-/-- No union, so that the checker is sound for the program, and no name that could be
-mistaken for the log. This covers the congruence compiler's output. -/
+/-- The program is union-free and its names avoid the log prefix. -/
 def programOk (P : Program) : Bool :=
   unionFree P && P.names.all fun f => !firePrefix.isPrefixOf f
 
-/-- The programs the instrumentation preserves (`ExtlogTheorems.provenance_pass_correct`): `programOk`,
-and every variable of a rule query or of the check is an argument of an application
-pattern, so that no query can bind a variable to a log row. The congruence compiler's
-output satisfies this (`Provenance.encode_instrumentable`). -/
+/-- Preconditions of `ExtlogTheorems.provenance_pass_correct`: `programOk` holds and every
+variable of a rule query or final check is an argument of an application pattern.
+The congruence compiler's output satisfies these (`Provenance.encode_instrumentable`). -/
 structure Instrumentable (P : Program) : Prop where
   ok : programOk P = true
   keyedRules : ∀ r ∈ P.rules, Query.VarsKeyed r.query

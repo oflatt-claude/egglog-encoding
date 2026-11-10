@@ -4,9 +4,8 @@ import EgglogSemantics.Proofs.Source.FreshBindings
 import EgglogSemantics.Proofs.MatchValues
 import EgglogSemantics.Proofs.Diagonal
 
-/-! The view-free query flattening: its equations, and the variables of the atoms it emits:
-the source variables of the expression together with exactly the fresh variables of the
-counter interval it consumed. -/
+/-! Equations and variable bounds for query flattening without views. Variables in emitted
+atoms and ids come from the source expression or the consumed fresh-variable interval. -/
 
 namespace Egglog.Congruence
 

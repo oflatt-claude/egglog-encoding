@@ -18,10 +18,9 @@ def freshName (P : Program) (base : String) : FnName :=
   ((List.range (P.names.length + 1)).map fun n => if n = 0 then base else base ++ toString n)
     |>.find? (fun s => !P.names.contains s) |>.getD base
 
-/-- Prove the final check as egglog's `prove` does: a rule with the check as its query and
-a fresh nullary goal as its head runs after the schedule, the goal's row gets its proof like
-any other row, and the proofs of the check's conjuncts are the premises of that rule node,
-each a proof about the original program. -/
+/-- Run the instrumented compilation and return source proofs of the final check's
+conjuncts in query order, using a fresh goal rule after the schedule. Return `none` if
+execution, reconstruction, lifting, or source checking fails. -/
 def prove (exec : Program → Option FDatabase) (P : Program) : Option (List Proof) := do
   let goal : Term := .app (freshName P "prove") []
   let rule : Rule := ⟨P.check, [.expr goal.toExpr]⟩

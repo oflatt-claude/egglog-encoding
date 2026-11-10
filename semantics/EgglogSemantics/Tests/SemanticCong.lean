@@ -10,7 +10,7 @@ private def b : Term := .app "b" []
 private def f (t : Term) : Term := .app "f" [t]
 private def d : Database := (Database.empty.addEq a b).addTerm (f a)
 
-/-- Adding a smaller spelling invalidates the old representative binding. -/
+/-- Adding a smaller spelling invalidates the prior representative binding. -/
 theorem representative_binding_not_monotone :
     let before := Database.empty.addTerm b
     let after := before.addEq a b
@@ -173,7 +173,7 @@ private def replaceRows : Program :=
         .expr (.app "R" [.min (.var "x") (.app "a" [])])]⟩])],
     [.expr (.app "R" [.app "a" []]) ]⟩
 
-/-- Saturation replaces live rows while retaining the subsumed historical row. -/
+/-- Saturation replaces live rows while retaining the subsumed rows. -/
 theorem subsume_min_disequality_saturation :
     ∃ out, Reach Database.empty replaceRows.schedule out ∧
       QueryHolds out.forgetSubsumed replaceRows.check ∧

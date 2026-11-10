@@ -2,9 +2,8 @@ import EgglogSemantics.Proofs.Provenance.Simulate
 import EgglogSemantics.Proofs.Congruence.Diverge
 import EgglogSemantics.Proofs.Divergence
 
-/-! Divergence corresponds: a schedule has a saturation that never settles exactly when
-its instrumentation does. An infinite trace is transported pass by pass through the
-simulation, and the instrumented passes after the original settles terminate. -/
+/-! Divergence correspondence for provenance instrumentation: a schedule has a
+nonterminating execution exactly when its instrumentation does. -/
 
 namespace Egglog.Provenance
 

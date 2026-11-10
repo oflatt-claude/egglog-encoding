@@ -2,22 +2,11 @@ import Mathlib.Data.Finset.Prod
 import EgglogSemantics.Spec.Congruence
 
 /-!
-# A decidable congruence closure
+# Decidable congruence closure
 
-`Cong` is a predicate, so nothing in the semantics computes it. This computes it for a
-finite, subterm-closed term set, which is what an executable interpreter needs
-and what lets a ported test case be discharged by `decide` rather than
-by a hand-built derivation.
-
-Deliberately the *obvious* algorithm rather than the efficient one: iterate a
-one-step-derivable relation to a fixpoint over the finite candidate universe
-`terms ×ˢ terms`. Union-find with upward merging is what egglog does and what the
-proof-encoding theorems are eventually *about*; using it here would put the thing
-under study inside the thing doing the studying.
-
-Termination is by well-founded recursion on how much of the candidate universe is
-still missing. Stopping only at a fixpoint is what makes `Cong.le` applicable in the
-completeness direction of the closure's correctness.
+Compute `Cong` on a finite, subterm-closed set of terms by closing a relation over
+`terms ×ˢ terms`. The result supports the reference interpreter and executable tests of
+the specification.
 -/
 
 namespace Egglog

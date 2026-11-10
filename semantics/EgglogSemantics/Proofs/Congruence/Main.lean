@@ -3,8 +3,8 @@ import EgglogSemantics.Proofs.Congruence.Check
 import EgglogSemantics.Proofs.Result
 import EgglogSemantics.Source.WellFormed
 
-/-! The congruence pass correctness theorem, assembled: from the empty states, which are
-related, the simulation gives equal outcomes and equal divergence. -/
+/-! Congruence pass correctness from the empty state: preservation of outcomes and
+divergence, exposed to the paper as `ExtlogTheorems.congruence_pass_correct`. -/
 
 namespace Egglog.Congruence
 

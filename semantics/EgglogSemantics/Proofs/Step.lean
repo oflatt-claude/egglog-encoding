@@ -54,7 +54,7 @@ theorem Reach.subsumed_eq {S : Schedule} {db d : Database}
   | fixpoint _ _ ih => exact ih hdf
   | again _ _ _ ih₁ ih₂ => exact (ih₂ hdf).trans (ih₁ hdf)
 
-/-- A schedule has at most one finite result, even with nested saturation and deletion. -/
+/-- A schedule has at most one finite result, including nested saturation and subsumption. -/
 theorem Reach.det {S : Schedule} {db d₁ d₂ : Database}
     (h₁ : Reach db S d₁) (h₂ : Reach db S d₂) : d₁ = d₂ := by
   induction h₁ generalizing d₂ with

@@ -4,12 +4,11 @@ import EgglogSemantics.Spec.Match
 /-!
 # A finite reference interpreter
 
-`FDatabase` is `Database` with lists: the held terms, closed under subterms and indexed by
-head, and the asserted equations. `exec` runs a program's schedule from the empty state.
-The matcher is proved equal to its obvious definition at every optimization: one congruence
-closure per round, pruning as soon as a pattern is decided, and candidates read off the
-index of applications. Rounds apply every firing's deletions before every firing's writes,
-as `RunRules` does.
+`FDatabase` stores held terms, asserted equations and subsumed rows. `exec` runs a program's
+schedule from the empty state; `FDatabase.holds` decides its final check. Matching binds
+variables to class representatives and reads live rows. Each round matches against the
+pre-state, then adds every successful firing's writes and subsumptions, as `RunRules` does.
+Saturations use a finite pass budget and return `none` on exhaustion.
 -/
 
 namespace Egglog
@@ -425,12 +424,10 @@ def Expr.ctorAtom : Expr → Option (FnName × List Expr)
   | .app f args => some (f, args)
   | _ => none
 
-/-! #### One closure per query
+/-! #### Matching under a supplied closure
 
-The checks below take the closure `cl` of the store as a parameter, so that a query computes
-it once. A pattern operand may denote a term the program never built; where an instance
-adds terms the store lacks, the closure of the store extended with that instance is computed
-for it alone (`closureWith`). -/
+The tests below take the store's congruence closure `cl`. Pattern operands may denote
+unstored terms; `closureWith` extends the store with those instances for comparison. -/
 
 /-- `(d.addTerms ts).closureF`, given `d`'s own closure `cl` to reuse where `ts` adds
 nothing. `closureWith_eq` is the equation; nothing else should call this with a `cl` that is
@@ -439,11 +436,8 @@ def FDatabase.closureWith (cl : Finset (Term × Term)) (d : FDatabase) (ts : Lis
     Finset (Term × Term) :=
   if d.holdsAll ts then cl else (d.addTerms ts).closureF
 
-/-- `Database.live`, computed under `cl`: the instance is congruent — in the store extended
-with it — to a held term, and no subsumed row has its head and congruent children. An
-application over held children is congruent to a held term exactly when a held application
-of its constructor has congruent children, which the index answers without a closure of the
-extended store. -/
+/-- `Database.live`, computed under `cl`: the instance is congruent to a held term in the
+store extended with it, and no subsumed row has its head and congruent children. -/
 def FDatabase.liveWith (cl : Finset (Term × Term)) (d : FDatabase) (t : Term) : Bool :=
   match t with
   | .app f ts =>
@@ -504,13 +498,10 @@ def matchQuery (d : FDatabase) (q : Query) : List Env :=
   (assignments d.reps (Query.freeVars q [])).filter fun σ =>
     q.all fun p => patternHolds d p (Env.canon (p.freeVars []) σ)
 
-/-! ### The closure is computed once per query
+/-! ### Matching with a shared closure
 
-`closureWith` reads `(d.addTerms ts).closureF`, so the closure is nominally per instance.
-It is nominal: `addTerms` only ever *adds* to `terms` and never touches `eqs`, and
-`closureF` reads nothing else, so an instance the store already holds gets `d`'s own closure
-back, which `matchQueryWith` computes **once per query**. `csimp` is what redirects the
-executable; `matchQuery`'s definition is untouched. -/
+`matchQueryWith` uses the store's closure for held instances and extends it for unstored
+ones. Its result agrees with `matchQuery`. -/
 
 /-- `addTerm` only grows `terms`. -/
 theorem FDatabase.mem_terms_addTerm {d : FDatabase} {t s : Term} (h : s ∈ d.terms) :
@@ -697,15 +688,10 @@ theorem matchQueryWith_eq_pruned : @matchQueryWith = @matchQueryPruned := by
 
 /-! ### Joining over the index
 
-Pruning cannot stop the enumeration from *proposing* a binding no row supports. `matchJoin`
-reverses that at every level: enumerating `v` under the prefix `pre`, each application atom
-is looked up in the index first — the rows of its head that `pre` has not already ruled out
-— and the candidates for `v` are cut down to the terms one of *those* rows admits in the
-column `v` sits in. Everything else is `matchPrune`, so `matchJoin_eq` is an equality on
-the nose. The narrowing is confined to where it provably agrees with the pattern test:
-every application operand determined, every determined operand's value held, and every
-candidate held. Nested application reads supply their own plans while their enclosing
-application is not yet determined. -/
+`matchJoin` narrows variable candidates using application rows compatible with the bound
+prefix. A join requires determined operands, held operand values and held candidates.
+Nested application reads can constrain variables before the enclosing application is
+determined. `matchJoin_eq` establishes agreement with `matchPrune`. -/
 /-- What a join reads off one operand: a literal's own term, or a variable's binding.
 `none` at an operand the prefix has yet to determine, and at `min`. An application
 can be read once its variables are bound; `joinPlan` also checks that its value is held. -/
@@ -776,8 +762,7 @@ def joinAtomPlan (cl : Finset (Term × Term)) (d : FDatabase) (pre : Env) (v : V
 
 mutual
 
-/-- Every application read is necessary for an expression to match. Plan those reads
-independently, so an undetermined nested value does not prevent its children driving. -/
+/-- The application reads required by a matching expression, including nested reads. -/
 def joinExprPlans (cl : Finset (Term × Term)) (d : FDatabase) (pre : Env) (v : Var)
     (vars : List Var) : Expr → List JoinAtom
   | .app f as =>
@@ -1298,9 +1283,7 @@ theorem matchJoin_eq (cl : Finset (Term × Term)) (d : FDatabase) (q : Query)
       · rfl
     · rfl
 
-/-- `matchQueryWith`, joined. The candidates are the representatives, and whether they are
-all held is computed **once** here rather than at every node, which is the reason
-`matchJoin` takes it as a parameter. -/
+/-- Match a query using application joins, with class representatives as candidates. -/
 def matchQueryJoin (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) : List Env :=
   matchJoin cl d q (d.repsWith cl) (d.holdsAll (d.repsWith cl)) [] (Query.freeVars q [])
 
@@ -1329,9 +1312,7 @@ theorem matchQuery_eq_matchQueryFast : @matchQuery = @matchQueryFast := by
   funext d q
   exact (matchQueryFast_eq d q).symm
 
-/-- **What points compiled code at the join.** `csimp` rewrites call sites compiled after
-the lemma, not the bodies compiled before it: `matchQueryFast`'s body still enumerates, so
-`matchQuery` is sent to the join directly rather than through it. -/
+/-- Query matching agrees with the join implementation; `csimp` selects it for execution. -/
 @[csimp] theorem matchQuery_eq_join : @matchQuery = @matchQueryJoinAt := by
   funext d q
   exact (matchQueryJoin_eq_matchQuery d q).symm
@@ -1352,12 +1333,9 @@ def execActions (σ : Env) (d : FDatabase) : List Action → Option FDatabase
 
 /-! #### Rounds
 
-`RunRules` adds every firing's writes and subsumed rows, all read off the pre-state. Actions
-read no state, so applying the firings in sequence is their union, and a head stuck at any
-action contributes nothing. One congruence closure, computed once per round, serves every
-rule's matching. -/
-/-- One firing, applied on top of `acc`. Nothing if the head is stuck, which for a
-well-scoped rule it is not. -/
+Match every rule against the pre-state, then add the firings' writes and subsumptions.
+A head with any stuck action contributes nothing. -/
+/-- Apply one firing to `acc`; leave `acc` unchanged if any head action is stuck. -/
 def fireInto (r : Rule) (acc : FDatabase) (σ : Env) : FDatabase :=
   match execActions σ acc r.actions with
   | some d' => d'
@@ -1408,16 +1386,17 @@ theorem FDatabase.runSaturateFast_eq (rs : List Rule) (n : Nat) (d : FDatabase) 
 
 mutual
 
-/-- `Reach`, computed, with `fuel` passes allowed per saturation. -/
+/-- Execute a schedule, allowing at most `fuel` state-changing passes per saturation
+followed by a final stability check. Return `none` if any saturation exhausts its budget. -/
 def execSchedule (fuel : Nat) (d : FDatabase) : Schedule → Option FDatabase
   | .run rs => some (execRunRules rs d)
   | .seq S₁ S₂ => (execSchedule fuel d S₁).bind fun e => execSchedule fuel e S₂
   | .saturate S => execSaturate fuel fuel d S
 termination_by S => (sizeOf S, 0)
 
-/-- Passes of `S` until one leaves the state unchanged, bounded by fuel that **fails**
-rather than returning a prefix: a saturation that really does diverge makes the run `none`,
-which the difftest reports as a mismatch, rather than presenting a half-run state. -/
+/-- Execute passes of `S` until one leaves the stored data unchanged. The pass counter
+allows that many changing passes followed by one stability check; exhaustion returns
+`none`. Nested saturations each receive the budget `fuel`. -/
 def execSaturate (fuel : Nat) : Nat → FDatabase → Schedule → Option FDatabase
   | 0, d, S => (execSchedule fuel d S).bind fun e => if d.sameData e then some e else none
   | n + 1, d, S => (execSchedule fuel d S).bind fun e =>
@@ -1426,9 +1405,8 @@ termination_by n _ S => (sizeOf S, n + 1)
 
 end
 
-/-- Passes a saturation allows before declaring it divergent. This bounds no structural
-quantity: rounds add terms rather than shrink a class, so a terminating saturation can
-need arbitrarily many. -/
+/-- Default budget of state-changing passes per saturation, followed by a stability check.
+Exhaustion does not distinguish divergence from a terminating run that needs more passes. -/
 def runFuel : Nat := 64
 
 /-- The state with subsumption forgotten: what a check sees. -/

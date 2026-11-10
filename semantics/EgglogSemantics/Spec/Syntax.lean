@@ -55,8 +55,7 @@ inductive Expr where
   (statement := /-- \syntaxline{Patterns}{p ::= e=e\mid e\ne e} -/)
   (latexEnv := "paperfragment")]
 inductive Pattern where
-  /-- The paper writes this pattern as a bare `e`, shorthand for `e = e`, which it matches
-  exactly when. It stays a constructor because the compiler flattens it to one view atom. -/
+  /-- A bare pattern `e`, equivalent to `e = e` in the paper. -/
   | expr : Expr → Pattern
   | eq : Expr → Expr → Pattern
   /-- Both sides exist and are not congruent. Generated maintenance rules use it to fire
@@ -78,8 +77,7 @@ a child's class never decides which row is subsumed. -/
   -/)
   (latexEnv := "paperfragment")]
 inductive Action where
-  /-- The paper writes this action as a bare `e`, shorthand for `union(e,e)`, which adds
-  the same fact. It stays a constructor because the compiled target must be union-free. -/
+  /-- A bare action `e`, asserting the same fact as `union(e, e)`. -/
   | expr : Expr → Action
   | union : Expr → Expr → Action
   /-- Assert the row `f(ē)` and mark it subsumed: it stays, with its columns, and no query
@@ -148,12 +146,11 @@ one schedule after another. Initial facts are a run of an empty-query rule. -/
   -/)
   (latexEnv := "paperfragment")]
 inductive Schedule where
-  /-- One round of the rules: egglog's `(run <ruleset>)` over the rules the ruleset holds
-  (`egglog/src/ast/parse.rs:834-864`). The semantics reads the list as a set, which is how
-  the paper writes it; the order only numbers the rules for certificates. -/
+  /-- One round of the rules, corresponding to egglog's `(run <ruleset>)`.
+  Rule order affects certificate indices, but not the round's meaning. -/
   | run : List Rule → Schedule
-  /-- The schedule until a pass leaves congruence unchanged: egglog's `(saturate <schedule>)`
-  (`egglog/src/ast/parse.rs:1073-1079`). -/
+  /-- Repeat the schedule until a pass changes neither congruence nor live terms:
+  egglog's `(saturate <schedule>)`. -/
   | saturate : Schedule → Schedule
   /-- One schedule, then another: egglog's `(seq <schedule> <schedule>)`. -/
   | seq : Schedule → Schedule → Schedule
@@ -195,8 +192,7 @@ def Program.runs (P : Program) : List (List Rule) := P.schedule.runs
 
 /-! ### The terminating fragment -/
 
-/-- `S` contains no saturation. Rules that keep adding terms have no fixpoint, so
-`Schedule.saturate` is the one construct that may fail to reach a state at all. -/
+/-- `S` contains no saturation. -/
 def Schedule.NoSaturate : Schedule → Prop
   | .run _ => True
   | .saturate _ => False

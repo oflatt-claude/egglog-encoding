@@ -1,9 +1,9 @@
 import EgglogSemantics.Proofs.Provenance.Diverge
 import EgglogSemantics.Proofs.Result
 
-/-! The provenance pass correctness theorem, assembled: from the empty states, which are
-related, the simulation gives equal outcomes, equal divergence, and the original's final
-state under the instrumented one, up to meaning. -/
+/-! Provenance pass correctness from the empty state: preservation of outcomes and
+divergence, and recovery of the original final meaning by erasing the log. The paper's
+statement is `ExtlogTheorems.provenance_pass_correct`. -/
 
 namespace Egglog.Provenance
 

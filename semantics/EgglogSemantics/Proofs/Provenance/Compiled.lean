@@ -8,11 +8,9 @@ import EgglogSemantics.Proofs.Congruence.Rules
 import EgglogSemantics.Proofs.Congruence.Firing
 import EgglogSemantics.Proofs.Congruence.Simulate
 
-/-! The congruence compiler's output satisfies the instrumentation premise: it is
-union-free; its names avoid the log prefix, since source names avoid `@` and every
-generated name starts with `@` and a letter other than `f`; and every variable of a
-compiled query is an argument of an application pattern, since a source variable is read
-through a union-find edge and a fresh variable is a column of the atom that introduces it. -/
+/-! The congruence compiler's output satisfies `Instrumentable`: it is union-free, its
+names avoid the log prefix, and every query or check variable is an argument of an
+application pattern. This supplies the premise for `ExtlogTheorems.passes_compose`. -/
 
 namespace Egglog.Provenance
 

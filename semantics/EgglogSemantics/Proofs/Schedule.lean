@@ -181,7 +181,7 @@ theorem FDatabase.sameData_eq {d e : FDatabase} (h : d.sameData e = true) : d = 
   cases e
   simp_all
 
-/-- The retained round-level runner computes saturation of a single run. -/
+/-- The round-level runner computes saturation of a single run. -/
 theorem execSaturate_run (fuel n : Nat) (d : FDatabase) (rs : List Rule) :
     execSaturate fuel n d (.run rs) = d.runSaturateF rs n := by
   induction n generalizing d with

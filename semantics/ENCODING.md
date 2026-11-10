@@ -1,6 +1,6 @@
 # Encoding passes
 
-## Constructor-and-subsume encoding (October 2026)
+## Language and state
 
 The modelled language is untyped and has no declarations: applying any name to any
 arguments builds a term, and a relation is a name whose applications are never nested
@@ -32,8 +32,8 @@ pattern `e ≠ e`. Source programs use neither (`Program.Fragment.monotone`).
 - Subsumption is modulo congruent children: the live terms are
   `live(E, X) = {t | t ~ t} \ {f(t̄) | f(s̄) ∈ X, s̄ ~ t̄}` (`Database.live`). This is
   egglog's behaviour, where a subsumed row stays subsumed when canonicalization merges it
-  with another row (`combine_subsumed` takes the maximum).
-- A query looks rows up and builds nothing (`Lookup`, the paper's `G,σ ⊢ e ⇝ t`): a
+  with another row.
+- A query looks rows up and builds nothing (`Expr.Matches`, the paper's `G,σ ⊨ e`): a
   variable denotes its binding, an application denotes its instance when that instance is
   live, and `min` picks the smaller operand. Every application in a pattern must therefore
   be live, as egglog joins over the non-subsumed rows of every table a pattern names.
@@ -104,23 +104,18 @@ there is no leader query. An equality or disequality compares the ids of its two
 
 `Congruence.Options` turns the optimizations on: `views := .naive` derives a canonical
 node view `@fView(leaders…, leader)` from the terms and the union-find each rebuild round
-and subsumes stale rows; `views := .indexed` writes a node's row with the node, derives the index
-`@HasChild(view row, column value)` from it, and moves a row to a column's parent in one
-binary join of the index entry with the column's union-find edge; either way compiled queries read one view row per application and
-the congruence rule, whose query is the pattern the view caches, reads two rows at one key. `phased := true` saturates the union-find rules before
-the term rules inside each rebuild. `difftest congruence 64 --views=indexed --phased`
+and subsumes stale rows. `views := .indexed` writes a node's row with the node and indexes
+its column values with `@HasChild(view row, column value)`. Maintenance joins this index
+with union-find edges to update a row when a column gains a parent. With either view mode,
+compiled queries read one view row per application, and congruence detection reads two rows
+at one key. `phased := true` saturates the union-find rules before the term rules inside
+each rebuild. `difftest congruence 64 --views=indexed --phased`
 and `DIFFTEST_OPTIONS="--views=indexed --phased" semantics/compiled-difftest.sh` check
-that the optimized compilations agree with the source and with egglog; the proof pass works
-on the base compilation.
+that the optimized compilations agree with the source and with egglog.
 
-The previous encoding kept one more table per constructor, `@fView(children…, id)`: the
-application with the parents of its children as key and its own parent as output, which
-is exactly the join a compiled query performs for it, materialized. Rules re-keyed a view
-when a child gained a parent, moved its output when the application did, and detected a
-congruence as two rows at one key; queries then joined views on ids alone and never read
-the union-find. The paper presents the views as that optimization, the hashcons of an
-e-graph written as rules; the compiler, the readers, the provenance and the proofs here
-are about the view-free encoding.
+The views materialize the joins of compiled queries. The paper presents them as an
+optimization; the compiler correctness and proof-lifting theorems concern the compilation
+without views.
 
 ### Fixpoints, informally
 
@@ -139,13 +134,14 @@ The provenance pass (`Provenance/Encode.lean`) adds one action to every rule: a 
 `@fire:<i>(x₁, …, xₙ)` that records a firing of rule `i`, the rule's position in
 `Program.rules`, under the values of its query variables. No rule reads these rows, so the
 instrumented program builds exactly the data of the original, round for round, and
-subsumes the same rows. A saturation of the instrumented program may run one or two more
-passes than the original's, because a new log row is a change of the state, but those
+subsumes the same rows. A saturation of the instrumented program may run additional
+passes after the original settles, because a new log row is a change of the state, but those
 passes write only log rows, which belong to a finite set, so they terminate. This is the
 theorem `ExtlogTheorems.provenance_pass_correct` (`ExtlogTheorems.lean`, proved under
 `Proofs/Provenance/`): for a union-free program whose names avoid the log prefix and
-whose every query variable is an argument of an application pattern (`Instrumentable`,
-which the congruence compiler's output satisfies, `Provenance.encode_instrumentable`),
+whose query and check variables are arguments of application patterns
+(`Provenance.Instrumentable`, satisfied by the congruence compiler's output according to
+`Provenance.encode_instrumentable`),
 the instrumented program has the same outcomes and the same divergence, and erasing the
 log from its final state (`Database.eraseLog`) gives the original's final state up to
 meaning. The keyed-variable premise is what keeps a query from binding a variable to a
@@ -159,99 +155,43 @@ subterm of one, checked by the same checker as a source certificate (`Provenance
 `SourceProof.checkIn` on a union-free program, returning the term). A logged firing is
 justified once every equality premise has a proof, a row premise by the proof of its
 instance and an equality by the proof of the common value, and every disequality holds; a
-rule node carries one premise proof per equality pattern. `reconstruct`
-justifies firings one at a time until none is left that can be, so a row gets a proof
-exactly when the checker has a derivation for it whose rule nodes are logged firings.
+rule node carries one premise proof per equality pattern. `Provenance.reconstruct`
+justifies the first available pending firing at each step, stopping when none can be
+justified or its fuel is exhausted. `Provenance.proofs` supplies one fuel unit per logged
+firing and returns `none` if any data row lacks a checked proof.
 Proof lifting (`Resugar/Lift.lean`) turns each such proof into a source proof that
 `SourceProof.check` and the Rust checker accept.
 
-The previous design, a proof column on every row with rules firing once per proof,
-does not work with row replacement: a row re-derived with a new proof is a new row for one
-round, and in that round it breeds further variants before a deduplication rule can retire
-it, so instrumented saturations of two-premise rules never settled (the instrumented
-`commutativity` case grew from 36 to 2936 rows in four rounds). The log keeps proof
-identity out of the data entirely.
+The log keeps proof identity out of the data. The alternative, a proof column on every
+row with rules firing once per proof, does not work with row replacement: a row re-derived
+with a new proof is a new row for one round, and in that round it breeds further variants
+faster than a deduplication rule retires them, so instrumented saturations of two-premise
+rules need not settle.
 
-### Status
+## Correctness and execution
 
-- Executable: `difftest congruence 64` passes all 101 corpus cases; `difftest provenance
-  64` and `difftest resugar 64` pass all 101 in about three seconds each; the 14
-  hand-written programs under `tests/` have `.congruence.egg`, `.provenance.egg` and
-  `.proofs.txt` snapshots (`difftest egg 64`). `semantics/compiled-difftest.sh` runs the
-  compiled programs in Rust egglog, with generated `@` names spelled `at_`, and compares
-  a census of canonical e-nodes per constructor (an application joined with the live
-  edges of its children, counted by the tuple of parents), which is independent of
-  representative choice: 104 of 104 agree. `semantics/difftest.sh` (source
-  programs, Lean against egglog) passes 101 of 101, and the Rust checker judges the 120
-  exported source certificates like the Lean checker (`make -C semantics lean-certificate-test`).
-- Interpreter: `execRunRules` matches every rule against the pre-state, then applies
-  every firing's writes and subsumptions, in sequence, which is their union. The
-  relational runtime (`Congruence/Relational.lean`, structural identity only) agrees with
-  the general interpreter on every case.
-- Proofs: the specification-level proof modules and the certificate soundness proofs are
-  ported to the declaration-free specification and then to subsumption
-  (`PROOF-PORT-A.md` … `PROOF-PORT-G.md` record every statement change; `Proofs/MatchEval.lean`
-  bridges query lookup and evaluation, `Proofs/Subsume.lean` and
-  `Proofs/InterpSubsume.lean` replace the deletion theory). `SourceProof.check_infers` and
-  `Resugar.sourceProofs_infers` give checked and lifted certificates their meaning in the
-  reached, saturated source state. The reference interpreter refines the specification
-  up to `SameMeaning` for subsume-free programs (`exec_programStep`) and for union-free
-  programs with subsumption, disequalities and `min` (`exec_programStep_noUnions`,
-  `Congruence.exec_encode_programStep`), which is what the compiler emits; mixed
-  union-and-subsume programs are not covered. Compiler correctness against the source,
-  stated in `ExtlogTheorems.lean`, is proved for this encoding
-  (`ExtlogTheorems.congruence_pass_correct`, developed under `Proofs/Congruence/`;
-  `PROOF-PORT-S.md` records the plan) and is also checked executably by the congruence gate. The proofs of
-  the previous, merge-function encoding were deleted on 2026-10-30 (`PROOF-PORT-*.md`
-  record the ports that preceded them). Provenance pass correctness, stated in
-  `ExtlogTheorems.lean`, is proved for every union-free program with keyed
-  queries whose names avoid the log prefix, in particular for the compiler's output
-  (`ExtlogTheorems.provenance_pass_correct`, `ExtlogTheorems.passes_compose`, developed under
-  `Proofs/Provenance/`; `PROOF-PORT-T.md` records the plan), and is also checked
-  executably by the provenance gate.
+The paper's theorems are stated in [ExtlogTheorems.lean](ExtlogTheorems.lean).
+`ExtlogTheorems.congruence_pass_correct` preserves outcomes and divergence for well-formed
+source programs in the fragment. `ExtlogTheorems.passes_compose` gives the same guarantee
+for the composition with provenance instrumentation. Their proofs are under
+`Proofs/Congruence/` and `Proofs/Provenance/`.
 
+The reference interpreter refines the specification up to `Database.SameMeaning` for
+subsume-free programs (`exec_programStep`) and for union-free programs with subsumption,
+disequalities and `min` (`exec_programStep_noUnions`). The latter includes the compiler's
+output (`Congruence.exec_encode_programStep`); mixed union-and-subsume programs are not
+covered. `execRunRules` matches every rule against the pre-state, then applies the
+firings' writes and subsumptions.
 
-## Current implementation
+`Congruence.compile` returns the compiled program with one origin per rule, in
+`Program.rules` order. Origins identify a source rule by index, path compression, parent
+collision, or a constructor's congruence rule. Proof lifting uses these tags; they do not
+affect execution.
 
-The Lean refactor separates congruence compilation, provenance instrumentation, and proof
-lifting. The congruence pass is implemented in
-[Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean), provenance in
-[Provenance/Encode.lean](EgglogSemantics/Provenance/Encode.lean), and lifting in
-[Resugar/Lift.lean](EgglogSemantics/Resugar/Lift.lean).
-
-## Congruence compilation
-
-`Egglog.Congruence.encode : Program → Program` compiles constructor-source programs into
-one explicit table:
-
-| Table | Atom | Meaning |
-| --- | --- | --- |
-| `@UF` | `(@UF t parent)` | An explicit parent edge |
-
-Structural constructor terms serve as ids and exist in the target as the keys of their
-self-loops. Building `f(cs…)` builds its children and writes `(@UF (f cs…) (f cs…))`; it
-needs no table lookup, temporary variable, proof term, or separate construction-history
-relation.
-
-`min` is the only computation in the fragment: the smaller of two terms in the model's
-structural order, egglog's `ordering-min`. A source union writes an edge from each of the
-two ids to the smaller one; the edge from the smaller id to itself is not a union-find
-edge. A parent collision and a congruence keep the smaller root and write the same kind of
-edge.
-
-Maintenance rules compress paths, resolve parent collisions, and detect congruences
-between applications whose children have the same parents. Rebuilding runs after each
-source run.
-
-`Congruence.compile` returns the program with rule origins. Source rules are tagged with
-their original rule index; generated rules identify path compression, parent collision,
-or the constructor whose congruence rule fired. These tags are for later resugaring and do
-not affect execution.
-
-The output has no built-in `union` in rule heads. It also needs no equality axioms from
-the target runtime. `Relational.exec` uses structural identity and stored-value existence
-for matching, and omits implicit congruence rebuilding. Source equality is represented by
-ordinary union-find entries; target `(= x y)` is just an identity test with existence.
+The output has no `union` actions. `Relational.exec` executes it with structural equality
+and stored-value existence, without implicit congruence rebuilding. The congruence gate
+compares this interpreter with the general interpreter on the corpus; this executable
+comparison is distinct from the mathematical compiler correctness theorem.
 
 ## Query traversal
 
@@ -273,7 +213,7 @@ For example, `(= (F (G x)) (H x))` becomes:
 (= @v3 @v5)
 ```
 
-Resugaring will receive the original query and repeat this traversal while consuming
+Resugaring receives the original query and repeats this traversal while consuming
 premise proofs in order. No separate tree describing flattening is stored.
 
 ## Proof lifting
@@ -290,22 +230,21 @@ and recovers its premises by walking the original query in the compiler's order
 its matched atom with each child edge chained into the child's proof and pushed in by
 congruence, made reflexive for a bare pattern (the paper's `e = e`), and an equation's the
 two sides' root edges chained through the equality. Reconstruction reads the log in the
-order it was written, so a term's existence is always credited to the source firing that
-built it, whose facts cover every subterm; no proof is ever made by `fiat`.
+order it was written, so a term's existence is justified by a source firing whose facts
+cover every subterm.
 
 Each node is validated by `SourceProof.checkNode` as it is built, and the result is
-checked again by `SourceProof.check`. `lift_sound` therefore inherits the source
-checker's soundness: a lifted claim whose endpoints the source holds is a source
-congruence.
+checked again by `SourceProof.check`. `Resugar.lift_infers` gives a lifted claim a
+source derivation when the source state is reached, well formed, and saturated for every
+run in the program. `ExtlogTheorems.lifted_proofs_sound` states that lifted claims between
+terms of the reached, saturated source e-graph hold there.
 
 `Resugar.prove` is egglog's `prove`: a rule with the final check as its query and a fresh
 nullary goal as its head runs after the schedule, the goal's row is proved like any other,
 and the premises of that rule node are the proofs of the check's conjuncts, about the
 original program. `difftest paper-proof <file.egg>` prints that proof in the paper's
-notation, after `SourceProof.Proof.simplify` removes the reflexive detours of a mechanical
-lifting (a transitivity through a reflexive side, a congruence with a reflexive child, a
-doubled symmetry, the symmetry of a rule node whose firing states the reversed claim; the
-result is checked again).
+notation, after `SourceProof.Proof.simplify` removes redundant reflexivity, transitivity,
+congruence and symmetry steps. The simplified result is checked again.
 
 `Resugar.Export` writes proofs as JSON certificates with the program as `.egg` source,
 listing each tree's nodes in postorder with shared subtrees, and

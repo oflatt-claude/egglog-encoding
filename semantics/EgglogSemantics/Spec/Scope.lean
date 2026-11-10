@@ -63,9 +63,8 @@ def WellScoped (P : Program) : Prop := Program.Scoped P []
 
 /-! ### `union` legality
 
-egglog rejects a `union` on a sort that is not an eq sort statically, where
-`Spec/Eval.lean`'s `evalAction` only gets stuck on it. This is its syntactic half: an
-operand is not a literal *expression*. -/
+These syntactic conditions exclude literal expressions as union operands.
+`evalAction` also rejects operands that evaluate to literals. -/
 
 /-- Neither operand of a `union` is a literal. -/
 def Action.UnionLegal : Action → Prop

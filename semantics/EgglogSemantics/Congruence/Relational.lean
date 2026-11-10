@@ -4,17 +4,14 @@ import EgglogSemantics.Spec.Scope
 /-!
 # Execution without equality reasoning
 
-This target interpreter never computes congruence closure. Its equality relation is the
-diagonal of the stored values: testing a pair requires structural identity and existence.
-Generated union-find and rebuilding rules run as ordinary rules, and a subsumed row is
-exactly the row named.
+This interpreter matches using structural equality and stored-value existence, without
+computing congruence closure. Generated union-find and rebuilding rules execute as ordinary
+rules, and subsumption hides exactly the named row.
 
-The matcher is the general one (`Impl/Interp.lean`) with every congruence test specialized
-to identity, which makes a test constant-time instead of a scan of the closure. The
-congruence gate in `DiffTest.lean` checks executably that this runtime and the general
-interpreter agree on every compiled corpus program. That equivalence of the two executable
-interpreters is not proved in Lean; the compiler proof (`Proofs/Congruence/`) is about the
-mathematical databases, where a compiled state is diagonal (`Congruence.Rel.diag`).
+The congruence gate in `DiffTest.lean` compares this runtime with the general interpreter
+on compiled corpus programs. Their executable equivalence is not proved in Lean; the
+compiler proof under `Proofs/Congruence/` concerns mathematical databases, where compiled
+states are diagonal (`Congruence.Rel.diag`).
 -/
 
 namespace Egglog.Relational
@@ -83,8 +80,8 @@ def joinAtomPlan (d : FDatabase) (pre : Env) (v : Var) (vars : List Var)
 
 mutual
 
-/-- Recursive reads drive the variables of a nested application before its enclosing
-row is ready. Keep the original pattern's environment restriction, as the general join does. -/
+/-- Narrow candidates using nested application reads, restricting the environment to the
+original pattern's variables. -/
 def joinExprPlans (d : FDatabase) (pre : Env) (v : Var) (vars : List Var) :
     Expr → List JoinAtom
   | .app f as =>
@@ -149,7 +146,8 @@ def runRules (rs : List Rule) (d : FDatabase) : FDatabase :=
 
 mutual
 
-/-- `Reach` at identity, with `fuel` passes allowed per saturation. -/
+/-- Execute `Reach` at structural equality, with at most `fuel` changing passes per
+saturation followed by a stability check. Return `none` on budget exhaustion. -/
 def execSchedule (fuel : Nat) (d : FDatabase) : Schedule → Option FDatabase
   | .run rs => some (runRules rs d)
   | .seq S₁ S₂ => (execSchedule fuel d S₁).bind fun e => execSchedule fuel e S₂

@@ -4,10 +4,8 @@ import EgglogSemantics.Impl.Interp
 /-!
 # Reading the congruence target, computed
 
-A source term is read by joining the applications the target holds with the live
-union-find edges of their children, recursively on its own children. Two terms are
-equivalent when each reads to exactly one id and the ids agree. The link to `Repr` belongs
-with the compiler proofs.
+Compute the ids assigned to source terms by live union-find edges, corresponding to `Repr`.
+Two terms are equivalent when each reads to exactly one id and the ids agree.
 -/
 
 namespace Egglog.Congruence
@@ -43,10 +41,8 @@ def reprsListF (d : FDatabase) : List Term → List (List Term)
 
 end
 
-/-- The id of a source term, when the target gives it exactly one. At a rebuild fixpoint
-every key has one live edge and the congruence rule has merged the roots of all
-applications with the same child parents, so every held term has an id; several readings
-mean a rebuild the target did not finish. -/
+/-- The id of a source term, or `none` if there are zero or multiple readings. At a rebuild
+fixpoint every held source term has exactly one id. -/
 def idF (d : FDatabase) (t : Term) : Option Term :=
   match (reprsF d t).dedup with
   | [e] => some e

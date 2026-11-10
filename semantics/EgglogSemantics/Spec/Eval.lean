@@ -36,13 +36,8 @@ def Expr.evalList : List Expr → Env → Option (List Term)
 end
 
 /-- `G ⊕_σ h`: the e-graph after one action under a substitution. Actions read only the
-bindings, never the store, and every action adds, so the actions of a head commute. A
-subsume asserts the row it marks, as egglog inserts a missing row it subsumes.
-
-A `union` on a literal is stuck. egglog rejects it in its type checker — `union` wants an
-eq-sort and `i64` is not one (`TypeError::NonEqsortUnion`) — and this untyped model cannot
-see it until the operands are values. Asserting it instead would cost
-`Database.LitsIsolated`. -/
+bindings and add to the state. A subsume asserts the row it marks. A `union` with a literal
+operand is stuck, matching egglog's restriction of `union` to eq-sorts. -/
 @[blueprint "def:actions"
   (statement := /--
   \[

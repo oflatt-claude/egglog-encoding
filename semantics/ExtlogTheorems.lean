@@ -110,9 +110,9 @@ theorem provenance_pass_correct {P P' : Program} (hI : Provenance.Instrumentable
       d.eraseLog.SameMeaning e) :=
   Provenance.encode_correct hI h
 
-/-- **The passes compose.** The congruence pass's output satisfies the provenance pass's
-premise (`Provenance.encode_instrumentable`), so the fully compiled program has the source
-program's outcome and divergence. -/
+/-- **The passes compose.** For a well-formed source program in the fragment, applying
+congruence compilation and provenance instrumentation preserves outcomes and divergence.
+`Provenance.encode_instrumentable` supplies the provenance pass's precondition. -/
 theorem passes_compose (P : Program) (hW : P.WellFormed) (hF : P.Fragment) {P'' : Program}
     (h : Provenance.encode (Congruence.encode P) = some P'') :
     (∀ o : Result, Eval Database.empty P'' o ↔ Eval Database.empty P o) ∧
@@ -146,8 +146,8 @@ theorem lifted_proofs_checked {P : Program} {terms : List Term}
     ∀ output ∈ outputs, SourceProof.check P output = some output.claim :=
   Resugar.sourceProofs_checked h
 
-/-- **Lifted proofs are sound.** By the two theorems above, a lifted proof's claim between
-terms of the saturated source e-graph holds there. -/
+/-- **Lifted proofs are sound.** A lifted claim between terms of the reached source e-graph
+holds there, provided the e-graph is closed under every run in the program. -/
 theorem lifted_proofs_sound {P : Program} {db : Database} {terms : List Term}
     {outputs : List SourceProof.Proof} (hs : Reach Database.empty P.schedule db)
     (hclosed : ∀ rs ∈ P.runs, RunSaturated rs db)

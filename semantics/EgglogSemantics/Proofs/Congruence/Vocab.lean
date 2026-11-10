@@ -6,10 +6,9 @@ import EgglogSemantics.Proofs.Representatives
 import EgglogSemantics.Proofs.Finite
 import EgglogSemantics.Proofs.Diagonal
 
-/-! The vocabulary of a source program, and the size of the terms its rounds build: every
-reachable term uses the program's names and literals, and from a meaning-stable state the
-rounds build terms of bounded size, since every representative is bounded by the
-representatives of the stable state. -/
+/-! Bounds on source terms for the congruence simulation. Reachable terms use only the
+program's names and literals; rounds that preserve a state's meaning build terms of
+bounded size. -/
 
 namespace Egglog
 

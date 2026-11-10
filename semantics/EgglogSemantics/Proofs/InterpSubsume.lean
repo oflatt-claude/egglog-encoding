@@ -17,8 +17,7 @@ theorem Database.SameMeaning.matches_iff {d e : Database} (h : d.SameMeaning e)
     (p : Pattern) (σ : Env) : Matches d p σ ↔ Matches e p σ :=
   ⟨Matches.sameMeaning h, Matches.sameMeaning h.symm⟩
 
-/-- On diagonal states the binding domains agree too, so no environment transport or
-ordering-freedom premise is needed. -/
+/-- On diagonal states with the same meaning, valid environments coincide. -/
 theorem Database.SameMeaning.queryMatches_iff_of_diag {d e : Database}
     (h : d.SameMeaning e) (hd : d.Diag) (he : e.Diag) (q : Query) (σ : Env) :
     QueryMatches d q σ ↔ QueryMatches e q σ := by
@@ -46,7 +45,8 @@ theorem execRunRules_RunRules_of_eqs_empty {R : List Rule} {d : FDatabase}
     (execRunRules R d).toDatabase.SameMeaning (RunRules R d.toDatabase) :=
   execRunRules_RunRules ⟨by simp [he], hc⟩ hi hj
 
-/-- Union-free round refinement is an instance of the general round theorem. -/
+/-- On a subterm-closed state with valid indices and no asserted unions, an executable
+round refines the specification up to meaning. -/
 theorem execRunRules_RunRules_noUnions {R : List Rule} {d : FDatabase}
     (hc : d.SubtermClosed) (hi : d.IndexOk) (hj : d.IndexCurrent) (hn : d.NoUnions) :
     (execRunRules R d).toDatabase.SameMeaning (RunRules R d.toDatabase) :=
@@ -136,9 +136,8 @@ theorem exec_complete_noUnions {p : Program} {out : Database}
   exact execProgram_complete_noUnions h.closed.subterms h.indexOk h.indexCurrent h.noUnions
     hu hns (by simpa only [FDatabase.toDatabase_empty] using hs)
 
-/-- The constructor-and-subsume compiler always produces a union-free program, so every
-successful reference-interpreter execution refines that compiled program's specification.
-This does not assert equivalence with the source program. -/
+/-- Successful execution of the compiled program refines its specification up to meaning.
+Source-to-target equivalence is stated in `ExtlogTheorems.congruence_pass_correct`. -/
 theorem Congruence.exec_encode_programStep {p : Program} {e : FDatabase}
     (hs : exec (Congruence.encode p) = some e) :
     ∃ out, Reach Database.empty (Congruence.encode p).schedule out ∧

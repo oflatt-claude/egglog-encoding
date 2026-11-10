@@ -95,21 +95,12 @@ private def nestedAtRule (key : Expr) : Rule where
   query := [.expr (.app "Wrapper" [.app "Wrapper" [key]])]
   actions := [.expr (C "Hit")]
 
-/-! #### A source `saturate`
+/-! #### Source saturation
 
-The `sat-*` family. A source `saturate` runs rounds of its rules until nothing changes,
-and a rule of a *later* round has to see the equalities an earlier round asserted. egglog
-instruments the schedule node by node — its `Run` case becomes `(seq <run> <rebuild>)` and its
-`Saturate` case recurses into the loop body (`egglog/src/proofs/proof_encoding.rs:1969`,
-`:1978-1980`) — so `(run-schedule (saturate R))` rebuilds after **every** iteration. `encode`
-now joins the maintenance rules to `R` as well, which is the same fixpoint; before that it
-emitted `[.saturate R, .saturate @rebuild]` and rebuilt once, after `R` had already settled,
-so `sat-hit` lost the source's `(Hit)` outright — target `@HitView` 0 against source `Hit` 1.
-
-`sat-hit` is that program; `sat-hit-late` puts a round of delay before the `union`, so the
-rule that needs it has already sat through rounds it could not fire in. With `genProgram`'s
-`genCollapseRules` tail these are the corpus's only reading of the `saturate` schedule: back
-the repair out and the sweep reports 13 LOST across the 13 cases that run one. -/
+The `sat-*` cases require rebuilding after every run inside a source saturation, so later
+rounds see equalities asserted by earlier ones. `sat-hit` uses a union to enable a rule;
+`sat-hit-late` delays that union by one round. Generated programs also exercise this
+behavior through `genCollapseRules`. -/
 
 /-- Round 1's rule: asserts the `union` a later round's rule needs. -/
 private def unionOnAaRule : Rule where
@@ -442,7 +433,7 @@ private def genProgram (s : Nat) : List Src :=
   let (r₂, s) := genRule g₃ s
   let (rounds, s) := pick 3 s
   -- **Sometimes a source `saturate`**, drawn after everything else so that the rest of a
-  -- seed's program is what it was. `encodeScheduleWith` compiles a `saturate` structurally,
+  -- seed's program is independent of this choice. `encodeScheduleWith` compiles it structurally,
   -- and nothing else in the corpus but the `sat-*` cases reaches it.
   let (wantSat, s) := pick 2 s
   let sat := match wantSat, genCollapseRules g₂ with
@@ -494,20 +485,15 @@ private def upCase : List Src :=
    .global (.expr (.app "Wrapper" [add (C "Two") (C "One")])),
    .global (.union (C "One") (C "Two"))]
 
-/-- `upCase` with unary constructors throughout: the same two-level shape, and the smallest
-program in which the congruence has anywhere to travel. Cheaper only because the enumerator
-is exponential in a rule's variable count and a unary congruence rule has three fewer. -/
+/-- `upCase` with unary constructors: congruence must propagate through two levels. -/
 private def upThinCase : List Src :=
   [.global (.expr (.app "H" [.app "F" [C "A"]])),
    .global (.expr (.app "H" [.app "F" [C "B"]])),
    .global (.union (C "A") (C "B"))]
 
-/-! **The literal probes are model-only.** Every case in the corpus proper uses nullary
-constructors, because egglog's `i64` is a distinct primitive sort and `(Add 1 2)` would not
-typecheck there, while `Term.lit` shares a sort with applications here. These two are the
-only way to ask what `Repr`'s literal clause does when a literal is a *source* term — a
-literal child, which is the only place a source literal can be — so they live among the
-probes, which `writeCase` never sees. -/
+/-! Literal probes run only in Lean. egglog's `i64` is a separate primitive sort, whereas
+`Term.lit` shares the model's term type with applications. These probes exercise `Repr` on
+source literal children and are excluded from the corpus passed to `writeCase`. -/
 
 /-- A literal the encoding also mints (`unitE` is `0`) is absent from this source. -/
 private def litCase : List Src := [.global (.expr (add (.lit (.int 1)) (.lit (.int 2))))]
@@ -515,22 +501,13 @@ private def litCase : List Src := [.global (.expr (add (.lit (.int 1)) (.lit (.i
 /-- The same, with `0` among the source's own literals. -/
 private def litZeroCase : List Src := [.global (.expr (add (.lit (.int 0)) (.lit (.int 1))))]
 
-/-! ### The union-find probes
+/-! ### Union-find probes
 
-`Reader.lean`'s `sameClassF` is the **flat** relation: each term reads, through the live
-edges of its children, to exactly one root (`idF`), and the two roots are the same. A rebuild the
-target did not finish leaves a key with two live edges or two applications with one child
-tuple and two roots, and then a term has no id at all.
-
-These are the programs written to stress that: a three-link chain built in each direction,
-endpoints at different term depths, a congruence that has to climb three levels, a
-representative that `ordering-min` puts *below* its class, unions a rule makes across
-rounds, and a `union` between two literals.
-
-They are probes rather than corpus cases because the literal family is model-only —
-egglog's `i64` is a distinct sort where `Term.lit` shares one with applications — and
-because the constructor-only ones answer a question the congruence gate asks and
-`semantics/difftest.sh` does not.
+`Congruence.sameClassF` requires each term to read to exactly one root and the roots to
+agree. These probes cover union chains in both directions, differing term depths,
+congruence across several levels, representative ordering, unions across source rounds,
+and rejection of literal unions. Literal probes are Lean-only; the constructor cases
+exercise readings checked by the congruence gate.
 -/
 
 /-- `Wrapper` applied `n` times. -/
@@ -538,10 +515,9 @@ private def wrap : Nat → Expr → Expr
   | 0, e => e
   | n + 1, e => .app "Wrapper" [wrap n e]
 
-/-- A three-link union chain under two wrappers, with **no** `run`: the only rebuild is the
-one `encodeScheduleWith` appends to each action. `Term.blt` orders nullary constructors by name, so
-`A` is the representative and the edges the `union`s write are `D → C`, `C → B`, `B → A`,
-each landing above the standing representative, the order that makes the walk longest. -/
+/-- A three-link union chain under two wrappers. The initial-fact runs each rebuild;
+there is no additional source rule run. `Term.blt` selects `A`, while the unions write
+`D → C`, `C → B`, and `B → A`, requiring path compression. -/
 private def chainCase : List Src :=
   [.global (.expr (.app "Wrapper" [C "A"])),
    .global (.expr (.app "Wrapper" [C "D"])),
@@ -567,10 +543,8 @@ private def depthCase : List Src :=
    .global (.union (C "A") (.app "Wrapper" [C "B"])),
    .global (.union (C "B") (.app "Wrapper" [C "A"]))]
 
-/-- A three-level tower over a `union`ed leaf. Each level's congruence rule fires only once
-the level below has been merged, so the congruence rules write `@UF` edges in later rebuild
-rounds than the `union` did: new edges arriving after the earlier ones were compressed,
-made by the maintenance rules rather than by a source rule. -/
+/-- Congruence propagates through three levels above a unioned leaf, creating union-find
+edges in successive rebuild rounds. -/
 private def towerCase : List Src :=
   [.global (.expr (wrap 3 (C "A"))),
    .global (.expr (wrap 3 (C "B"))),
@@ -599,12 +573,8 @@ private def roundCase : List Src :=
    .global (.expr (.app "Wrapper" [C "One"])),
    .rule commuteRule, .rule liftRule, .run, .run]
 
-/-- `unionCase` with literals in place of the nullary constructors, which would equate two
-literals: the `@UF` edge would be the only record of their equality.
-
-**It is not a program.** `execAction` refuses a `union` with a literal operand, so the
-source run sticks at the third command and `Cong src` never relates a literal to anything
-but itself. This probe is that refusal, run. -/
+/-- A literal-union rejection probe: `unionCase` with literal endpoints. `execAction`
+rejects the union, so source execution is stuck. -/
 private def litUnionCase : List Src :=
   [.global (.expr (add (.lit (.int 1)) (.lit (.int 2)))),
    .global (.expr (add (.lit (.int 2)) (.lit (.int 1)))),

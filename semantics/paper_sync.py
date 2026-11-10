@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-"""Add the Lean-extracted semantics to the paper as a section after disequality.
+"""Generate the paper's semantics section from Lean blueprint statements.
 
-Reads `paper/semantics.tex`, inlines every `\\inputleannode{...}` from the blueprint
-extraction, and writes each named block to `<paper-dir>/generated/<name>.tex`, with
-`generated/macros.tex` holding the macros it uses. A display block is a footnote-size
-inline display, not a float, so the paper's prose flows around it. Every generated file
-says that it is generated and where to edit instead. The section itself,
-`<paper-dir>/semantics.tex`, is written once, as the blocks in order with room for prose
-between them, and then left alone; `main.tex` gets
-`\\input{semantics}` after `\\input{disequality}`, `\\input{generated/macros}` after
-`\\input{macros}`, and the packages the displays need, each inserted once.
+Read `paper/semantics.tex`, inline its `\\inputleannode{...}` references, and replace
+`<paper-dir>/generated/*.tex` with the named blocks, macros and worked examples.
+Display blocks are inline displays, defaulting to footnote size. Create `<paper-dir>/semantics.tex`
+only if absent, preserving existing prose. Add the section, macro includes and required
+packages to `main.tex` once, with the section after disequality.
 
 Usage: paper_sync.py [--paper-dir DIR] [--no-extract] [--build]
 """
@@ -75,8 +71,10 @@ SECTION_HEADER = """%% The semantics section. This file is yours to edit: write 
 
 
 def node_paths() -> dict[str, Path]:
-    """The blueprint's label-to-artifact map: the library index lists one file per module,
-    and each of those names its nodes."""
+    """Map blueprint labels to artifact paths using the library index.
+
+    Skip missing module files; exit if the library index is missing.
+    """
     if not LIBRARY_INDEX.exists():
         sys.exit(f"paper_sync: {LIBRARY_INDEX} missing; run without --no-extract")
     paths: dict[str, Path] = {}
@@ -91,10 +89,11 @@ def node_paths() -> dict[str, Path]:
 
 
 def clean_node(text: str) -> str:
-    """One extracted node, without the blueprint bookkeeping or its proof sketch: the paper
-    displays statements. The label stays so the paper can refer to the node: on its first
-    line, or just inside a theorem-like environment so that a reference gives the theorem's
-    number."""
+    """Remove blueprint metadata and proof sketches, preserving statements and labels.
+
+    Put labels inside theorem or definition environments so references use their numbers;
+    otherwise put labels before the statement.
+    """
     text = re.sub(r"\\begin\{proof\}.*?\\end\{proof\}\n?", "", text, flags=re.S)
     labels = []
     lines = []
@@ -181,7 +180,7 @@ def blocks(source: str, nodes: dict[str, Path]) -> list[tuple[str, bool, str]]:
 
 
 def section_skeleton(entries: list[tuple[str, bool, str]]) -> str:
-    """The section, once: every block inlined in order, with room for prose between them."""
+    """Render section includes in entry order, with space for prose between them."""
     parts = [SECTION_HEADER]
     for name, _, _ in entries:
         parts.append(f"% {name}\n\\input{{{GENERATED_DIR}/{name}}}\n")
@@ -189,7 +188,10 @@ def section_skeleton(entries: list[tuple[str, bool, str]]) -> str:
 
 
 def compiled_example(program: Path, args: list[str]) -> str:
-    """`difftest <args>` over `program`, in the paper's notation."""
+    """Build and run `difftest <args> <program>`, returning its paper-notation output.
+
+    Forward difftest stderr and raise on build or execution failure.
+    """
     semantics = ROOT / "semantics"
     env = dict(os.environ, PATH=f"{LEAN_BIN}{os.pathsep}{os.environ.get('PATH', '')}")
     subprocess.run(["lake", "build", "difftest"], cwd=semantics, env=env, check=True, capture_output=True)

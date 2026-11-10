@@ -1,16 +1,14 @@
 import EgglogSemantics.Provenance.Encode
 
-/-! The firing log and the proofs read off it. A logged firing is justified once every
-premise has a proof; it then proves every row it wrote and every subterm of one, by a rule
-node stating that term's reflexivity. Justifying firings until none is left that can be
-finds a proof for every row that has one. -/
+/-! Reconstruct proofs from a firing log. A firing with justified equality premises and
+satisfied disequalities proves the terms its build actions produce, including subterms.
+`proofs` returns checked proofs for every data row, or fails if any is unavailable. -/
 
 namespace Egglog.Provenance
 
-/-- The firings the held terms record, a rule index and its substitution each, in the order
-they were written: the interpreter keeps its newest term first. Justifying them in this
-order credits every term to the firing that built it, since a maintenance row only mentions
-terms that exist already. -/
+/-- Decode logged rule indices and substitutions in reverse input order, skipping invalid
+indices and argument counts. For the interpreter's newest-first term list, this is the
+order in which firings were recorded. -/
 def firings (P : Program) (terms : List Term) : List (Nat × Env) :=
   terms.reverse.filterMap fun t => match t with
     | .app f args => do
@@ -52,7 +50,8 @@ def justify (P : Program) (facts : Facts) (i : Nat) (σ : Env) : Option Facts :=
       | none => []
     | _ => []
 
-/-- Justify the pending firings one at a time until none can be. -/
+/-- Justify the first available pending firing at each step and append its facts.
+Stop when fuel is exhausted or no pending firing can be justified. -/
 def reconstruct (P : Program) : Nat → Facts → List (Nat × Env) → Facts
   | 0, facts, _ => facts
   | n + 1, facts, pending =>
@@ -75,9 +74,9 @@ def isLog : Term → Bool
 /-- The held terms without the log. -/
 def eraseLog (terms : List Term) : List Term := terms.filter fun t => !isLog t
 
-/-- The e-graph without the log: the equations whose row is not a log row, and the same
-subsumed rows. `ExtlogTheorems.provenance_pass_correct` states that this is the e-graph the original
-program reaches. -/
+/-- Remove equations whose left endpoint is a log row, retaining subsumed rows.
+For an instrumented execution satisfying `ExtlogTheorems.provenance_pass_correct`, the
+result has the original program's final meaning. -/
 def _root_.Egglog.Database.eraseLog (d : Database) : Database :=
   ⟨{q ∈ d.eqs | isLog q.1 = false}, d.subsumed⟩
 
@@ -88,9 +87,9 @@ def rowProofs (P : Program) (terms : List Term) : List (Term × Option Proof) :=
   (dataRows P terms).map fun t =>
     (t, (facts.lookup t).bind fun pf => if check P pf == some t then some pf else none)
 
-/-- A checked proof of every row, read off the log `L` of the instrumented run: `L ⊢ π : c`
-holds of the checker's derivations whose every rule node is a logged firing, and
-`reconstruct` finds one per row by justifying firings in order. -/
+/-- A checked proof for every data row, using rule nodes justified by logged firings
+(the paper's `L ⊢ π : c`). Return `none` if `programOk` fails or any row lacks a checked
+proof. -/
 @[blueprint "def:log-proofs"
   (statement := /--
   \begin{mathpar}

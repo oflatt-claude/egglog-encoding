@@ -1,7 +1,7 @@
 # EgglogSemantics
 
-A Lean 4 model of egglog's semantics, of the paper's compiler passes and proof
-production, with the paper's theorems proved. Originally ported from the Redex model in
+A Lean 4 model of egglog's semantics, compiler passes and proof production, with proofs
+of the paper's theorems. The model began as a port of the Redex model in
 [egglog PR #324](https://github.com/egraphs-good/egglog/pull/324).
 The reference interpreter targets the extended egglog implementation in this workspace.
 
@@ -27,13 +27,13 @@ and brief rationale are in [Spec/Step.lean](EgglogSemantics/Spec/Step.lean).
 
 Start with [ExtlogTheorems.lean](ExtlogTheorems.lean). It states every theorem the paper claims,
 in full and in the vocabulary of the specification; the proofs are under
-`EgglogSemantics/Proofs/`.
+`EgglogSemantics/Proofs/`. The theorem names below are in namespace `ExtlogTheorems`.
 
 | Theorem | Statement |
 | --- | --- |
 | `congruence_pass_correct` | A well-formed source program in the fragment and its compilation have the same outcome and the same divergence (paper `thm:congruence`). |
-| `provenance_pass_correct` | Instrumenting a union-free program with keyed queries changes neither outcome nor divergence, and erasing the log from its final e-graph gives the original's (paper `thm:provenance`). |
-| `passes_compose` | The fully compiled program has the source program's outcome and divergence. |
+| `provenance_pass_correct` | For a union-free program satisfying `Provenance.Instrumentable`, instrumentation preserves outcome and divergence; erasing the final log preserves the original e-graph's meaning (paper `thm:provenance`). |
+| `passes_compose` | For a well-formed source program in the fragment, applying both passes preserves outcome and divergence. |
 | `checker_sound` | A claim the proof checker accepts, between terms of the saturated final e-graph, holds there. |
 | `log_proofs_checked` | Every proof read off the firing log is accepted by the checker. |
 | `lifted_proofs_checked`, `lifted_proofs_sound` | Lifted proofs are accepted by the source checker, and their claims hold in the saturated source e-graph. |
@@ -48,7 +48,7 @@ Specification and proofs are separate: nothing outside `Proofs/`, `Tests/` and
 | Section 4, semantics | `EgglogSemantics/Spec/`: `Syntax` (programs, schedules, rules), `Term`, `Database` (an e-graph as equations and subsumed rows), `Congruence` (`Cong` and `terms`), `Match` (queries, representatives), `Eval` (expressions, actions), `Step` (rounds, schedules, outcomes: `Reach`, `Eval`), `Divergence`, `Behavior`, `Order` (the term order behind representatives) |
 | Section 5, congruence pass | `Congruence/Encode.lean` (the pass `encode`, the maintenance rules, the view and phasing options), `Source/Domain.lean` and `Source/WellFormed.lean` (the fragment and well-formedness), `Congruence/Read.lean` (reading a compiled e-graph back) |
 | Section 6, proofs | `SourceProof/Format.lean` and `Checker.lean` (proof terms and the checker), `Provenance/Encode.lean` (instrumentation) and `Log.lean` (proofs read off the log), `Resugar/Claim.lean`, `Query.lean`, `Lift.lean` (lifting), `Resugar/Execute.lean` (`prove`) |
-| The proofs | `Proofs/Congruence/` (the simulation for Section 5; plan in [PROOF-PORT-S.md](PROOF-PORT-S.md)), `Proofs/Provenance/` ([PROOF-PORT-T.md](PROOF-PORT-T.md)), `Proofs/SourceProof/` and `Proofs/Resugar/` (checker and lifting soundness); the remaining modules are lemmas about the specification and the reference interpreter |
+| The proofs | `Proofs/Congruence/` (the simulation for Section 5), `Proofs/Provenance/` (instrumentation correctness), `Proofs/SourceProof/` and `Proofs/Resugar/` (checker and lifting soundness); the remaining modules are lemmas about the specification and the reference interpreter |
 | Executable | `Impl/` (finite reference interpreter), `Congruence/Relational.lean` (execution without equality reasoning), `Tests/`, `DiffTest.lean` (comparisons with egglog and the corpus gates), `tests/` (`.egg` programs with snapshots of their encodings and lifted proofs) |
 
 To check the theorems from this directory: `lake build` (the `assert_no_sorry` lines in

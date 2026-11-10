@@ -77,15 +77,12 @@ to stay clear of: a function name and a variable. -/
 def Program.names (P : Program) : List String :=
   P.ctors.map Prod.fst ++ P.vars
 
-/-! ### What the query flattening drops
+/-! ### Queries accepted by flattening
 
-`encodeQueryExprWith` flattens an *application* and returns a leaf unchanged, so `encodePatternWith`
-emits **no atom** for a source pattern whose expression is a bare literal or a bare variable.
-Both are conditions on the source program's **text**, decidable, and both are folded into
-`Program.Fragment` below. -/
-/-- **The pattern has a witness position.** `Matches` asks for a term the source *holds*
-congruent to the instance, and a bare literal has none: the source may never have built it,
-and `encodePatternWith` emits no atom that would say it did. -/
+`Program.Fragment` requires every query to be `Query.Encodable`. Bare expression patterns
+must be applications, and each comparison must have at least one nonliteral side. -/
+/-- A bare pattern is not a literal; an equality or disequality has at least one
+nonliteral side. -/
 def Pattern.Grounded : Pattern → Prop
   | .expr e => ∀ l, e ≠ .lit l
   | .eq e₁ e₂ => (∀ l, e₁ ≠ .lit l) ∨ (∀ l, e₂ ≠ .lit l)
@@ -180,9 +177,8 @@ def Schedule.unionAppsB (S : Schedule) : Bool := S.rules.all Rule.unionAppsB
 
 /-! ### Monotone source programs
 
-Disequality guards and subsumption are what the compiled rebuilding uses to replace rows.
-Source programs only add facts that queries can see, so both are excluded from the
-fragment; their semantics is nonetheless the general one. -/
+The source fragment excludes disequality and subsumption. Compiled maintenance rules use
+both to replace rows. -/
 
 /-- No disequality guard. -/
 def Pattern.monotoneB : Pattern → Bool
@@ -201,7 +197,7 @@ def Rule.monotoneB (r : Rule) : Bool :=
 /-- The schedule tests no disequality and subsumes no row. -/
 def Schedule.monotoneB (S : Schedule) : Bool := S.rules.all Rule.monotoneB
 
-/-- No rule and not the final check tests a disequality, and no rule subsumes a row. -/
+/-- No rule or final check tests a disequality, and no rule subsumes a row. -/
 def Program.monotoneB (P : Program) : Bool :=
   P.schedule.monotoneB && P.check.all Pattern.monotoneB
 

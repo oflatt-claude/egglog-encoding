@@ -3,12 +3,10 @@ import EgglogSemantics.Resugar.Builder
 /-!
 # Source premises from compiled premises
 
-A source rule's compiled query is its flattening (`Congruence.encodeQueryExpr`). Given the
-lifted proofs of the compiled premises, in that order, this rebuilds one source proof per
-source pattern by walking the pattern in the same order. A lifted compiled premise states
-`b = x` for an edge `UF(b, x)`, and `t = t` for a matched application or for the value a
-comparison compares, so nothing is evaluated: an application's rebuilt proof states
-`y = instance` for its root `y`, and a comparison's the equation of its two sides.
+Reconstruct source premise proofs from lifted compiled premises, supplied in the order of
+`Congruence.encodeQueryExpr`. An edge premise states `b = x`; an application premise states
+`t = t`. An application's reconstructed proof states `root = instance`, and a comparison's
+proof states the equation between its two instances.
 -/
 
 namespace Egglog.Resugar
@@ -21,13 +19,10 @@ def replaceChildren (P : Program) (children : List Proof) (parent : Proof) : Opt
 
 mutual
 
-/-- The children's proofs, then the application's own atom, one edge per child and the edge
-to its root. Every child's proof runs from the matched child `b_i`: an application child's
-proof, which ends at its root `x_i`, is extended along the edge `b_i = x_i` (Edge), and a
-value child is proved by that edge itself, as a value side of a comparison is proved by the
-comparison's own premise (Value). A reflexive proof is not chained in, which keeps lifted
-proofs small; the claim is the same. A bare pattern `e` is the comparison `e = e` with one
-shared derivation, whose proof is `trans(sym(π), π)`. -/
+/-- Consume an application's premise proofs in compiler order: its children's proofs,
+its application atom, one edge per child, then its root edge. Return a proof of
+`root = instance` and the unused premises, or `none` for a non-application or invalid
+premises. A bare pattern `e` uses this derivation to prove the instance's reflexivity. -/
 @[blueprint "def:lift-query"
   (statement := /--
   \begin{mathpar}

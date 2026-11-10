@@ -2,13 +2,13 @@ import EgglogSemantics.Spec.Step
 import Architect
 
 /-!
-# Source proofs
+# Proof terms
 
-A source proof is a derivation of an equation between terms from the rules of the original
-program: a rule node is a firing with one subproof per premise and names the fact it takes
-from the head; symmetry, transitivity and congruence follow the congruence rules of the
-semantics, and their claims follow from their subproofs'. The paper's syntax is the
-`@[blueprint]` statement of `Proof`.
+Proofs derive equations from a program's rules. A rule node names a head fact and carries
+one subproof per equality pattern; disequalities are checked on its substitution.
+Symmetry, transitivity and congruence derive claims from their subproofs. Source and
+compiled programs use this format. The paper's proof syntax is displayed by the
+`@[blueprint]` attribute of `Proof`.
 -/
 
 namespace Egglog.SourceProof

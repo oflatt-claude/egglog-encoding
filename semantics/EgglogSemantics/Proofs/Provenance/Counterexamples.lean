@@ -10,7 +10,7 @@ private def replacement : Program :=
   ⟨Schedule.seqAll [.run [⟨[], [.expr row.toExpr]⟩],
     .run [⟨[], [.subsume "T" [.lit (.int 2)]]⟩]], []⟩
 
--- A certificate records a historical firing, even if its row has since been subsumed.
+-- A certificate remains valid after its row is subsumed.
 #guard check replacement (.rule ⟨row, row⟩ 0 [] []) == some row
 #guard (Relational.execSchedule runFuel FDatabase.empty replacement.schedule).any
   fun d => d.terms.contains row && d.subsumed.contains row

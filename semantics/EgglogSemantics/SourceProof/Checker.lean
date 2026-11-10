@@ -25,10 +25,9 @@ def premisesMatch (σ : Env) : Query → List Claim → Bool
     (a.eval σ).isSome && (b.eval σ).isSome && a.eval σ != b.eval σ && premisesMatch σ ps cs
   | _, _ => false
 
-/-- The facts a firing of `r` under `σ` with the premise claims `premises` may state: `σ`
-binds exactly the query's variables, the premise claims match the equality patterns in
-order while every disequality holds, and the facts are those of the head. Every bound value is a subterm of a premise instance, so
-no further support is needed. -/
+/-- The facts justified by firing `r` under `σ`. The substitution must bind exactly the
+query's variables, with every value a subterm of a premise instance. Premise claims must
+match equality patterns in order, and every disequality must hold. -/
 @[blueprint "def:proof-facts"
   (statement := /--
   \[

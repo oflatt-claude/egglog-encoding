@@ -65,8 +65,7 @@ def Rule.toEgg (r : Rule) : String :=
   "(rule (" ++ String.intercalate " " (r.query.map Pattern.toEgg) ++ ") ("
     ++ String.intercalate " " (r.actions.map Action.toEgg) ++ "))"
 
-/-- The ruleset the rules of the `i`th run join: egglog fires rules by ruleset, so every
-run gets one of its own, numbered by position. -/
+/-- The ruleset for run `i`, numbered by position. -/
 def runRuleset (i : Nat) : String := "r" ++ toString i
 
 /-- A schedule as the body of `run-schedule`, registering each run's rules in a ruleset of
