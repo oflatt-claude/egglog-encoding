@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn composition_preserves_scoped_alpha_and_edge_coordinates() {
+    let mut program = ProofContext::default();
+    program.add_constructor("Start", vec![]);
+    program.add_constructor("Done", vec![]);
+    program.add_constructor("V", vec![ColumnKind::Var]);
+    program.add_constructor(
+        "Let",
+        vec![ColumnKind::Child, ColumnKind::Binder, ColumnKind::Child],
+    );
+    let mut dag = TermDag::default();
+    program
+        .add_union(&mut dag, "(Start)", "(Let (V $10) $10 (V $10))")
+        .unwrap();
+    program
+        .add_union(&mut dag, "(Let (V $0) $1 (V $1))", "(Done)")
+        .unwrap();
+    program
+        .add_union(&mut dag, "(Let (V $2) $1 (V $1))", "(Done)")
+        .unwrap();
+    let names = EncodingNames::default();
+    let egg = ProofStore::new(TermDag::default(), HashMap::default(), HashSet::default());
+    let mut lifter = SlotLifter::new(&program, dag, &names, &egg);
+    let [first, second, wrong] = program.unions.as_slice() else {
+        unreachable!()
+    };
+    let left = lifter.out.fiat(first.lhs, first.rhs);
+    let left = lifter
+        .out
+        .reframe(left, Renaming::new([(0, 10), (10, 0)]).unwrap());
+    let right = lifter.out.fiat(second.lhs, second.rhs);
+    let wrong = lifter.out.fiat(wrong.lhs, wrong.rhs);
+    assert!(lifter.trans(left, wrong).is_err());
+    let proof = lifter.trans(left, right).unwrap();
+    let (mut store, proof) = lifter.out.finish(proof);
+    super::super::checker::check_proof_in_program(&mut store, &program, proof).unwrap();
+    assert_eq!(
+        store.proposition(proof),
+        &Proposition::new(first.lhs, second.rhs)
+    );
+}
+
+#[test]
 fn reflexivity_rejects_incompatible_shapes_before_alpha_conversion() {
     let mut program = ProofContext::default();
     program.add_constructor("Z", vec![]);
