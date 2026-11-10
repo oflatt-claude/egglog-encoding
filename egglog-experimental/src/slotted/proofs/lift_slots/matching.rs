@@ -183,8 +183,8 @@ impl SlotLifter<'_> {
         {
             let g = self.slot_map(g)?;
             if !is_identity(&g) {
-                let group = self.reading_group_proof(cls, &g, ctx.prems)?;
-                let symmetry = self.symmetry(cls, &g, group)?;
+                let reading = self.reading_proof(cls, &g, ctx.prems)?;
+                let symmetry = self.symmetry(cls, &g, reading)?;
                 let completion = Renaming::completing(g.iter().map(|(k, v)| (*k, *v)))
                     .ok_or("reading is not injective")?;
                 let renamed = self.rename_both(expanded.proof, &completion);
@@ -613,19 +613,13 @@ impl SlotLifter<'_> {
         Ok(())
     }
 
-    /// The group row a `Reading` row for `(child, g)` among the premises derives
-    /// from.
-    fn reading_group_proof(
-        &self,
-        child: TermId,
-        g: &SlotMap,
-        prems: &[ProofId],
-    ) -> LiftResult<ProofId> {
-        let reading = prems
+    /// The selected reading, including any congruences that re-keyed its class.
+    fn reading_proof(&self, child: TermId, g: &SlotMap, prems: &[ProofId]) -> LiftResult<ProofId> {
+        prems
             .iter()
             .copied()
             .find(|q| {
-                let t = self.egg.get(*q).lhs();
+                let t = self.egg.get(*q).rhs();
                 self.app(t).is_some_and(|(h, a)| {
                     h.starts_with("Reading_")
                         && a.len() >= 3
@@ -639,8 +633,7 @@ impl SlotLifter<'_> {
                     self.egg_string(child),
                     slot_map_string(g)
                 )
-            })?;
-        self.group_row_behind(reading)
+            })
     }
 
     /// Do a row's class columns agree with the substitution where the pattern
