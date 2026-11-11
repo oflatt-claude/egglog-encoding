@@ -14,6 +14,8 @@ plain `Eval` of the compiled program.
 | The parser for the slotted `.egg` subset, one slotted program per check, and its corpus report (`difftest slotted-parse`, `make -C semantics lean-slotted-parse`) | `Slotted/Tests/Parse.lean`, `DiffTest.lean` |
 | The specification evaluated over a finite slot universe and a finite term universe, with soundness of what it finds | `Slotted/Tests/Bounded.lean` |
 | The paper's distribution example and the `tests/slotted/paper` phenomena as `#guard`s, and the conservative-extension test against the plain interpreter | `Slotted/Tests/Examples.lean` |
+| The slotted closure contains the plain one under the empty signature | `Slotted/Proofs/Conservative.lean` |
+| The bounded evaluator against the Rust reference on the `paper/` corpus files (`make -C semantics lean-slotted-difftest`) | `slotted-difftest.sh`, `difftest slotted-bounded` |
 
 ## Layering
 
@@ -105,13 +107,15 @@ binders and two fresh ones for their α-variants.
 
 For a program without slots, under the empty binder signature and the empty slot universe,
 the slotted evaluator and the plain interpreter agree on four small programs (a union, a
-failing check, a saturation, a disequality guard) in `Examples.lean`. The theorem that
-`SEval Binders.none` and `Eval` coincide on slot-free programs is stated in prose only: on a
+failing check, a saturation, a disequality guard) in `Examples.lean`. Of the theorem that
+`SEval Binders.none` and `Eval` coincide on slot-free programs, the half that the slotted
+closure contains the plain one is proved (`Slotted/Proofs/Conservative.lean`:
+`scong_of_cong`, `mem_live'_of_mem_live`). The other half is stated in prose only: on a
 slot-free store `Renames` is the identity and the `rename` rule adds nothing beyond the
 reflexivity of slot terms, which no slot-free query can see, so `SCong` is `Cong` there,
-`reps'` is `reps`, `live'` is `live`, and the match judgements coincide; the Lean proof is
-left to phase 2, which needs the lemma `SCong Binders.none db a b ↔ Cong db a b` for
-slot-free `db` in its own simulation.
+`reps'` is `reps`, `live'` is `live`, and the match judgements coincide; its Lean proof is
+left to phase 2, which needs `SCong Binders.none db a b ↔ Cong db a b` for slot-free `db` in
+its own simulation.
 
 ## Parser subset
 
