@@ -11,13 +11,16 @@ application is subsumed exactly when the source considers it so. -/
 
 namespace Egglog.Congruence
 
+variable {sub : Bool}
+
 /-- `d` is the compiled image of `src`: a diagonal union-find whose rows, read as
 equations, generate exactly the source congruence; the keys are the source terms, every
-application among them has its node row, and the markers are exactly the rows the source
-subsumed; edges go down the term order; a subsumed row is a stale union-find row with a
+application among them has its node row when subsumption is enabled, and the markers
+are exactly the rows the source subsumed; in plain mode the source has no subsumed rows;
+edges go down the term order; a subsumed row is a stale union-find row with a
 strictly smaller replacement, or a source application whose children are congruent to a
 marked spelling's; and the live rows alone already generate every row. -/
-structure Rel (src d : Database) : Prop where
+structure Rel (sub : Bool) (src d : Database) : Prop where
   diag : d.Diag
   shape : Shape d
   finite : d.eqs.Finite
@@ -28,7 +31,8 @@ structure Rel (src d : Database) : Prop where
   down : ∀ k p, Row d k p → p = k ∨ Term.blt p k = true
   selfLoop : ∀ k p, Row d k p → Row d k k ∧ Row d p p
   keys : Keys d = src.terms
-  nodes : ∀ f as, Term.app f as ∈ Keys d → Node d f as
+  nodes : ∀ f as, Term.app f as ∈ Keys d → sub = true → Node d f as
+  plain : sub = false → src.subsumed = ∅
   marker : ∀ f as, Marker d f as ↔ Term.app f as ∈ src.subsumed
   cong : ∀ a b, Cong src a b ↔ Cong (view d) a b
   liveCong : ∀ k p, Row d k p → Cong (liveView d) k p
@@ -52,7 +56,7 @@ instance bltIsStrictOrder : IsStrictOrder Term (fun s t => Term.blt s t = true) 
 
 namespace Rel
 
-variable {src d : Database} (h : Rel src d)
+variable {src d : Database} (h : Rel sub src d)
 include h
 
 theorem parent_mem_keys {k p : Term} (hr : Row d k p) : p ∈ Keys d :=
@@ -117,8 +121,8 @@ theorem keys_subterm {k s : Term} (hk : k ∈ Keys d) (hs : s ∈ k.subterms) : 
 theorem node_src {f : FnName} {as : List Term} (hn : Node d f as) : Term.app f as ∈ src.terms :=
   h.key_mem_src (h.shape.nodes f as hn)
 
-theorem node_iff {f : FnName} {as : List Term} : Node d f as ↔ Term.app f as ∈ src.terms :=
-  ⟨h.node_src, fun ht => h.nodes f as (h.mem_keys_of_src ht)⟩
+theorem node_iff (hon : sub = true) {f : FnName} {as : List Term} : Node d f as ↔ Term.app f as ∈ src.terms :=
+  ⟨h.node_src, fun ht => h.nodes f as (h.mem_keys_of_src ht) hon⟩
 
 /-- A marked spelling is a subsumed source row and a key. -/
 theorem marker_src {f : FnName} {as : List Term} (hm : Marker d f as) :
@@ -210,6 +214,16 @@ theorem live_of_src_live {f : FnName} {bs : List Term} (hb : Term.app f bs ∈ s
   obtain ⟨-, as, hm, hc⟩ := h.app_mark (h.src_sourceName hb) hs
   exact hl.2 ⟨_, h.marker_src hm, f, bs, as, rfl, rfl, hc.symm⟩
 
+/-- Without source subsumption every stored source application remains live. -/
+theorem plain_live (hoff : sub = false) {f : FnName} {as : List Term}
+    (hk : Term.app f as ∈ Keys d) : Term.app f as ∈ d.live := by
+  rw [h.app_live_iff (h.key_sourceName hk)]
+  refine ⟨h.key_mem_src hk, fun hs => ?_⟩
+  obtain ⟨_, bs, hm, _⟩ := h.app_mark (h.key_sourceName hk) hs
+  have hm' := h.marker_src hm
+  rw [h.plain hoff] at hm'
+  exact hm'
+
 /-- The least parent of a key is live. -/
 theorem least_parent {k : Term} (hk : k ∈ Keys d) :
     ∃ p, Edge d k p ∧ ∀ q, Row d k q → p = q ∨ Term.blt p q = true := by
@@ -262,7 +276,7 @@ theorem forall₂_edge_root {d : Database} {as : List Term}
 
 namespace Rel
 
-variable {src d : Database} (h : Rel src d) (hc : Canon d)
+variable {src d : Database} (h : Rel sub src d) (hc : Canon d)
 include h hc
 
 omit hc in
@@ -496,7 +510,7 @@ theorem keys_empty : Keys Database.empty = ∅ := by
     exact h.elim
 
 /-- The empty states are related. -/
-theorem rel_empty : Rel Database.empty Database.empty where
+theorem rel_empty : Rel sub Database.empty Database.empty where
   diag := fun _ hq => hq.elim
   shape := ⟨fun _ hq => hq.elim, fun _ hk => (keys_empty ▸ hk).elim, fun _ _ hr => hr.elim,
     fun _ _ hn => hn.elim, fun _ _ hm => hm.elim⟩
@@ -506,6 +520,7 @@ theorem rel_empty : Rel Database.empty Database.empty where
   selfLoop := fun _ _ hr => hr.elim
   keys := by rw [keys_empty, Database.empty_terms]
   nodes := fun _ _ hk => (keys_empty ▸ hk).elim
+  plain := fun _ => rfl
   marker := fun _ _ => ⟨fun hm => hm.elim, fun hs => hs.elim⟩
   cong := fun a b => ⟨fun h => (cong_empty_eqs rfl h).elim, fun h => (cong_empty_eqs rfl h).elim⟩
   liveCong := fun _ _ hr => hr.elim

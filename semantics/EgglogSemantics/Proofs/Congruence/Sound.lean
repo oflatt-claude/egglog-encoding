@@ -14,6 +14,8 @@ their source values are not congruent. -/
 
 namespace Egglog.Congruence
 
+variable {sub : Bool}
+
 /-- A database whose live rows and live applications are sound for the source. -/
 structure Reads (src D : Database) : Prop where
   diag : D.Diag
@@ -36,7 +38,7 @@ theorem lit_mem_terms_of_live {src : Database} (hw : src.WF) {l : Lit}
   rw [this] at hw'
   exact hw'
 
-theorem Rel.reads {src d : Database} (h : Rel src d) (hc : Canon d) (hw : src.WF) :
+theorem Rel.reads {src d : Database} (h : Rel sub src d) (hc : Canon d) (hw : src.WF) :
     Reads src d where
   diag := h.diag
   edge := fun _ _ he => ⟨h.edge_cong he, h.key_mem_src (h.key_of_edge he),

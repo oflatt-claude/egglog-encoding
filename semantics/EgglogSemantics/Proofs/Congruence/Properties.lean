@@ -23,9 +23,11 @@ theorem encodeBuildWith_unionFree (o : Options) :
       actions_unionFree_append (encodeBuildWith_unionFree o a) (encodeBuildWith_unionFree o b)
   | .app _ es =>
       actions_unionFree_append
-        (actions_unionFree_append (encodeBuildArgsWith_unionFree o es)
+        (actions_unionFree_append
+          (actions_unionFree_append (encodeBuildArgsWith_unionFree o es)
+            (by split <;> first | exact ⟨trivial, trivial⟩ | trivial))
           (by split <;> first | exact ⟨trivial, trivial⟩ | trivial))
-        ⟨trivial, trivial, trivial⟩
+        ⟨trivial, trivial⟩
 
 theorem encodeBuildArgsWith_unionFree (o : Options) :
     ∀ es : List Expr, Actions.UnionFree (encodeBuildArgsWith o es)
@@ -45,8 +47,9 @@ theorem encodeActionWith_unionFree (o : Options) (a : Action) :
       (actions_unionFree_append (encodeBuildWith_unionFree o a) (encodeBuildWith_unionFree o b))
       ⟨trivial, trivial, trivial⟩
   | subsume f es =>
-    exact actions_unionFree_append (encodeBuildWith_unionFree o (.app f es))
-      ⟨trivial, trivial, trivial⟩
+    exact actions_unionFree_append
+      (actions_unionFree_append (encodeBuildWith_unionFree o (.app f es)) ⟨trivial, trivial⟩)
+      (by split <;> first | exact ⟨trivial, trivial⟩ | trivial)
 
 theorem encodeActionsWith_unionFree (o : Options) (as : List Action) :
     Actions.UnionFree (encodeActionsWith o as) := by
@@ -58,18 +61,11 @@ theorem encodeRuleWith_unionFree (o : Options) (r : Rule) : (encodeRuleWith o r)
   encodeActionsWith_unionFree o r.actions
 
 /-- Every maintenance rule writes or subsumes rows; none unions. -/
-private theorem rebuildRules_unionFree (f : FnName) (k : Nat) :
-    ∀ ro ∈ rebuildRules f k, ro.1.UnionFree := by
+private theorem rebuildRules_unionFree (sub : Bool) (f : FnName) (k : Nat) :
+    ∀ ro ∈ rebuildRules sub f k, ro.1.UnionFree := by
   intro ro hro
-  unfold rebuildRules at hro
-  rw [List.mem_append, List.mem_singleton] at hro
-  rcases hro with hro | rfl
-  · split at hro
-    · simp at hro
-    · rw [List.mem_singleton] at hro
-      subst hro
-      exact ⟨trivial, trivial⟩
-  · exact ⟨trivial, trivial⟩
+  cases sub <;> by_cases hk : k = 0 <;> simp [rebuildRules, hk] at hro <;>
+    rcases hro with rfl | rfl <;> exact ⟨trivial, trivial⟩
 
 private theorem exprs_unionFree (f : Expr → Action) (hf : ∀ e, (f e).UnionFree) :
     ∀ es : List Expr, Actions.UnionFree (es.map f)
@@ -98,7 +94,7 @@ private theorem mergeRules_unionFree (o : Options) (f : FnName) (k : Nat) :
   intro ro hro
   unfold mergeRules at hro
   split at hro
-  · exact rebuildRules_unionFree f k ro hro
+  · exact rebuildRules_unionFree o.subsumption f k ro hro
   · rw [List.mem_singleton] at hro
     subst hro
     exact ⟨trivial, trivial, trivial⟩

@@ -14,6 +14,8 @@ application pattern. This supplies the premise for `ExtlogTheorems.passes_compos
 
 namespace Egglog.Provenance
 
+variable {sub : Bool}
+
 open Congruence
 
 /-! ### Names outside the log namespace -/
@@ -234,12 +236,12 @@ theorem query_ctors (q : Query) (n : Nat) :
       exact List.mem_flatMap.mpr ⟨p'', List.mem_cons_of_mem _ hp'', h⟩
 
 theorem build_min (a b : Expr) :
-    encodeBuildWith {} (.min a b) = encodeBuildWith {} a ++ encodeBuildWith {} b := rfl
+    encodeBuildWith { subsumption := sub } (.min a b) = encodeBuildWith { subsumption := sub } a ++ encodeBuildWith { subsumption := sub } b := rfl
 
 mutual
 
 /-- A compiled build uses source constructors and generated names outside the log namespace. -/
-theorem build_ctors : ∀ (e : Expr), ∀ a ∈ encodeBuildWith {} e, ∀ fk ∈ a.ctors,
+theorem build_ctors : ∀ (e : Expr), ∀ a ∈ encodeBuildWith { subsumption := sub } e, ∀ fk ∈ a.ctors,
     fk ∈ e.ctors ∨ DataName fk.1
   | .lit l, a, ha, fk, hfk => by
       rw [build_lit, List.mem_singleton] at ha
@@ -266,7 +268,9 @@ theorem build_ctors : ∀ (e : Expr), ∀ a ∈ encodeBuildWith {} e, ∀ fk ∈
           rw [Expr.ctors]; exact List.mem_append_right _ h
   | .app f args, c, hc, fk, hfk => by
       rw [build_app, List.mem_append] at hc
-      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+      have hc : c ∈ encodeBuildArgsWith { subsumption := sub } args ∨
+          c = .expr (nodeRow f args) ∨ c = .expr (ufRow (.app f args) (.app f args)) := by
+        cases sub <;> simp_all <;> tauto
       rcases hc with hc | rfl | rfl
       · exact (buildArgs_ctors args c hc fk hfk).imp_left fun h => by
           rw [Expr.ctors]; exact List.mem_cons_of_mem _ h
@@ -283,7 +287,7 @@ theorem build_ctors : ∀ (e : Expr), ∀ a ∈ encodeBuildWith {} e, ∀ fk ∈
         · exact Or.inl hfk
         · exact Or.inl hfk
 
-theorem buildArgs_ctors : ∀ (es : List Expr), ∀ a ∈ encodeBuildArgsWith {} es, ∀ fk ∈ a.ctors,
+theorem buildArgs_ctors : ∀ (es : List Expr), ∀ a ∈ encodeBuildArgsWith { subsumption := sub } es, ∀ fk ∈ a.ctors,
     fk ∈ Expr.ctorsList es ∨ DataName fk.1
   | [], a, ha, _, _ => by rw [buildArgs_nil] at ha; simp at ha
   | e :: es, a, ha, fk, hfk => by
@@ -296,7 +300,7 @@ theorem buildArgs_ctors : ∀ (es : List Expr), ∀ a ∈ encodeBuildArgsWith {}
 
 end
 
-theorem action_ctors (a : Action) : ∀ b ∈ encodeActionWith {} a, ∀ fk ∈ b.ctors,
+theorem action_ctors (a : Action) : ∀ b ∈ encodeActionWith { subsumption := sub } a, ∀ fk ∈ b.ctors,
     fk ∈ a.ctors ∨ DataName fk.1 := by
   cases a with
   | expr e => exact build_ctors e
@@ -319,7 +323,9 @@ theorem action_ctors (a : Action) : ∀ b ∈ encodeActionWith {} a, ∀ fk ∈ 
       · exact Or.inl hfk
   | subsume f es =>
     intro c hc fk hfk
-    simp only [encodeActionWith, List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hc
+    have hc : c ∈ encodeBuildWith { subsumption := sub } (.app f es) ∨
+        c = .subsume f es ∨ c = .expr (subRow f es) := by
+      cases sub <;> simp_all [encodeActionWith] <;> tauto
     rcases hc with hc | rfl | rfl
     · exact build_ctors (.app f es) c hc fk hfk
     · exact Or.inl hfk
@@ -329,7 +335,7 @@ theorem action_ctors (a : Action) : ∀ b ∈ encodeActionWith {} a, ∀ fk ∈ 
       · exact Or.inl (List.mem_cons_of_mem _ hfk)
 
 theorem rule_ctors (r : Rule) :
-    ∀ fk ∈ (encodeRuleWith {} r).ctors, fk ∈ r.ctors ∨ DataName fk.1 := by
+    ∀ fk ∈ (encodeRuleWith { subsumption := sub } r).ctors, fk ∈ r.ctors ∨ DataName fk.1 := by
   intro fk hfk
   rw [Rule.ctors, List.mem_append] at hfk
   rcases hfk with hfk | hfk
@@ -358,9 +364,9 @@ theorem edgeAtoms_ctors {n : Nat} {p : Pattern} (hp : p ∈ edgeAtoms n) :
   · simp [Pattern.ctors, ← hwb, ← hwr, ctors_ufRow_vars]
 
 /-- Maintenance mentions source constructors and names outside the log namespace. -/
-theorem maintenance_ctors {P : Program} {r : Rule} (hr : r ∈ maintenance P) :
+theorem maintenance_ctors {P : Program} {r : Rule} (hr : r ∈ maintenance sub P) :
     ∀ fk ∈ r.ctors, fk ∈ P.ctors ∨ DataName fk.1 := by
-  rcases mem_maintenance.mp hr with rfl | rfl | ⟨fk', hfk', _, rfl⟩ | ⟨fk', hfk', rfl⟩
+  rcases mem_maintenance.mp hr with rfl | rfl | ⟨fk', hfk', _, rfl⟩ | ⟨fk', hfk', _, rfl⟩
   · intro fk hfk
     have : fk = (ufName, 2) := by revert fk; decide
     subst fk
@@ -369,22 +375,70 @@ theorem maintenance_ctors {P : Program} {r : Rule} (hr : r ∈ maintenance P) :
     have : fk = (ufName, 2) := by revert fk; decide
     subst fk
     exact Or.inr dataName_ufName
-  · intro fk hfk
-    simp only [Rule.ctors, congruence_query, congruence_actions, List.flatMap_append,
-      List.flatMap_cons, List.flatMap_nil, List.append_nil, Pattern.ctors,
-      Action.ctors, nodeAtom, Expr.ctors, ctorsList_append, ctorsList_congruenceVars,
-      Expr.ctorsList, List.nil_append, ufRow, List.mem_append, List.mem_cons,
-      List.not_mem_nil, or_false] at hfk
-    simp only [or_assoc] at hfk
-    rcases hfk with rfl | rfl | hfk | rfl | rfl | rfl
-    · exact Or.inr (dataName_nodeName _)
-    · exact Or.inr (dataName_nodeName _)
-    · obtain ⟨p, hp, hfk⟩ := List.mem_flatMap.mp hfk
-      obtain rfl := edgeAtoms_ctors hp fk hfk
-      exact Or.inr dataName_ufName
-    · exact Or.inr dataName_ufName
-    · exact Or.inr dataName_ufName
-    · exact Or.inr dataName_ufName
+  · cases sub with
+    | false =>
+        intro fk hfk
+        rw [Rule.ctors, List.mem_append] at hfk
+        rcases hfk with hfk | hfk
+        · obtain ⟨p, hp, hfk⟩ := List.mem_flatMap.mp hfk
+          rw [congruence_query_plain] at hp
+          simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false,
+            List.mem_flatMap] at hp
+          rcases hp with ((rfl | rfl) | ⟨abr, habr, hp⟩) | rfl | rfl | rfl | rfl
+          · rw [Pattern.ctors, Expr.ctors, ctorsList_congruenceVars, congruenceVars_length,
+              List.mem_singleton] at hfk
+            exact Or.inl (hfk ▸ hfk')
+          · rw [Pattern.ctors, Expr.ctors, ctorsList_congruenceVars, congruenceVars_length,
+              List.mem_singleton] at hfk
+            exact Or.inl (hfk ▸ hfk')
+          · obtain ⟨hab, hr'⟩ := List.of_mem_zip habr
+            obtain ⟨ha, hb⟩ := List.of_mem_zip hab
+            rw [congruenceVars_eq_map] at ha hb hr'
+            obtain ⟨wa, _, hwa⟩ := List.mem_map.mp ha
+            obtain ⟨wb, _, hwb⟩ := List.mem_map.mp hb
+            obtain ⟨wr, _, hwr⟩ := List.mem_map.mp hr'
+            rcases hp with rfl | rfl
+            · rw [Pattern.ctors, ← hwa, ← hwr, ctors_ufRow_vars, List.mem_singleton] at hfk
+              exact Or.inr (by subst fk; exact dataName_ufName)
+            · rw [Pattern.ctors, ← hwb, ← hwr, ctors_ufRow_vars, List.mem_singleton] at hfk
+              exact Or.inr (by subst fk; exact dataName_ufName)
+          · rw [Pattern.ctors, mem_ufRow_ctors] at hfk
+            rcases hfk with rfl | hfk | hfk
+            · exact Or.inr dataName_ufName
+            · rw [Expr.ctors, ctorsList_congruenceVars, congruenceVars_length,
+                List.mem_singleton] at hfk
+              exact Or.inl (hfk ▸ hfk')
+            · simp [Expr.ctors] at hfk
+          · rw [Pattern.ctors, mem_ufRow_ctors] at hfk
+            rcases hfk with rfl | hfk | hfk
+            · exact Or.inr dataName_ufName
+            · rw [Expr.ctors, ctorsList_congruenceVars, congruenceVars_length,
+                List.mem_singleton] at hfk
+              exact Or.inl (hfk ▸ hfk')
+            · simp [Expr.ctors] at hfk
+          · simp [Pattern.ctors, Expr.ctors] at hfk
+          · simp [Pattern.ctors, Expr.ctors] at hfk
+        · rw [congruence_actions] at hfk
+          simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil, Action.ctors,
+            ctors_ufRow_vars, List.mem_singleton] at hfk
+          exact Or.inr (by subst fk; exact dataName_ufName)
+    | true =>
+        intro fk hfk
+        simp only [Rule.ctors, congruence_query_node, congruence_actions, List.flatMap_append,
+          List.flatMap_cons, List.flatMap_nil, List.append_nil, Pattern.ctors,
+          Action.ctors, nodeAtom, Expr.ctors, ctorsList_append, ctorsList_congruenceVars,
+          Expr.ctorsList, List.nil_append, ufRow, List.mem_append, List.mem_cons,
+          List.not_mem_nil, or_false] at hfk
+        simp only [or_assoc] at hfk
+        rcases hfk with rfl | rfl | hfk | rfl | rfl | rfl
+        · exact Or.inr (dataName_nodeName _)
+        · exact Or.inr (dataName_nodeName _)
+        · obtain ⟨p, hp, hfk⟩ := List.mem_flatMap.mp hfk
+          obtain rfl := edgeAtoms_ctors hp fk hfk
+          exact Or.inr dataName_ufName
+        · exact Or.inr dataName_ufName
+        · exact Or.inr dataName_ufName
+        · exact Or.inr dataName_ufName
   · intro fk hfk
     simp only [Rule.ctors, subsume_query, subsume_actions, List.flatMap_append,
       List.flatMap_cons, List.flatMap_nil, List.append_nil, Pattern.ctors,
@@ -407,7 +461,7 @@ theorem mem_ufRow_vars {a b : Expr} {v : Var} :
 
 /-- A variable of a compiled source rule is one of the rule's or a fresh variable. -/
 theorem rule_vars (r : Rule) (hsc : ∀ p ∈ r.query, p.Scoped) :
-    ∀ v ∈ (encodeRuleWith {} r).vars, v ∈ r.vars ∨ ∃ k, v = freshVar k := by
+    ∀ v ∈ (encodeRuleWith { subsumption := sub } r).vars, v ∈ r.vars ∨ ∃ k, v = freshVar k := by
   intro v hv
   rw [Rule.vars, List.mem_union_iff] at hv
   rcases hv with hv | hv
@@ -420,15 +474,15 @@ theorem rule_vars (r : Rule) (hsc : ∀ p ∈ r.query, p.Scoped) :
       ⟨a, ha, action_vars a b hb v hv⟩)))
 
 /-- The variables of a maintenance rule are generated, outside the log namespace. -/
-theorem maintenance_vars {P : Program} {r : Rule} (hr : r ∈ maintenance P) :
+theorem maintenance_vars {P : Program} {r : Rule} (hr : r ∈ maintenance sub P) :
     ∀ v ∈ r.vars, DataName v := by
-  rcases mem_maintenance.mp hr with rfl | rfl | ⟨fk, _, _, rfl⟩ | ⟨fk, _, rfl⟩
+  rcases mem_maintenance.mp hr with rfl | rfl | ⟨fk, _, _, rfl⟩ | ⟨fk, _, _, rfl⟩
   · decide
   · decide
   · intro v hv
     rw [Rule.vars, List.mem_union_iff] at hv
     rcases hv with hv | hv
-    · rcases mem_congruence_vars.mp hv with hv | hv | hv | rfl | rfl | rfl | rfl
+    · rcases congruence_vars_subset hv with hv | hv | hv | rfl | rfl | rfl | rfl
       · obtain ⟨i, _, rfl⟩ := mem_congNames.mp hv
         exact dataName_congName (c := 'a') (by decide) (by decide) i
       · obtain ⟨i, _, rfl⟩ := mem_congNames.mp hv
@@ -576,28 +630,53 @@ theorem keyed_encodeQuery {q : Query} (hsc : ∀ p ∈ q, p.Scoped) (ho : ∀ p 
   · exact query_fresh_argVar q n hv
 
 /-- Every variable of the congruence rule is an argument of an application pattern. -/
-theorem congruence_keyed (f : FnName) (n : Nat) : Query.VarsKeyed (congruenceRule f n).query := by
+theorem congruence_keyed_node (f : FnName) (n : Nat) : Query.VarsKeyed (congruenceRule true f n).query := by
   intro v hv
-  rcases mem_congruence_vars.mp hv with hv | hv | hv | rfl | rfl | rfl | rfl
+  rcases mem_congruence_vars_node.mp hv with hv | hv | hv | rfl | rfl | rfl | rfl
   · refine ⟨.expr (nodeAtom f (congruenceVars "a" n) (.var "@k")),
-      by rw [congruence_query]; simp, ?_⟩
+      by rw [congruence_query_node]; simp, ?_⟩
     simp only [Pattern.ArgVar, nodeAtom, Expr.ArgVar]
     exact Or.inl (List.mem_append_left _ (by rw [congruenceVars_eq_map]; exact List.mem_map_of_mem hv))
   · refine ⟨.expr (nodeAtom f (congruenceVars "b" n) (.var "@l")),
-      by rw [congruence_query]; simp, ?_⟩
+      by rw [congruence_query_node]; simp, ?_⟩
     simp only [Pattern.ArgVar, nodeAtom, Expr.ArgVar]
     exact Or.inl (List.mem_append_left _ (by rw [congruenceVars_eq_map]; exact List.mem_map_of_mem hv))
   · obtain ⟨i, hi, rfl⟩ := mem_congNames.mp hv
     refine ⟨_, (congruence_edge_atoms_mem (f := f) hi).1, ?_⟩
     simp [Pattern.ArgVar, Expr.ArgVar, ufRow]
-  · refine ⟨.expr (ufRow (.var "@k") (.var "@y")), by rw [congruence_query]; simp, ?_⟩
+  · refine ⟨.expr (ufRow (.var "@k") (.var "@y")), by rw [congruence_query_node]; simp, ?_⟩
     simp [Pattern.ArgVar, Expr.ArgVar, ufRow]
-  · refine ⟨.expr (ufRow (.var "@l") (.var "@z")), by rw [congruence_query]; simp, ?_⟩
+  · refine ⟨.expr (ufRow (.var "@l") (.var "@z")), by rw [congruence_query_node]; simp, ?_⟩
     simp [Pattern.ArgVar, Expr.ArgVar, ufRow]
-  · refine ⟨.expr (ufRow (.var "@k") (.var "@y")), by rw [congruence_query]; simp, ?_⟩
+  · refine ⟨.expr (ufRow (.var "@k") (.var "@y")), by rw [congruence_query_node]; simp, ?_⟩
     simp [Pattern.ArgVar, Expr.ArgVar, ufRow]
-  · refine ⟨.expr (ufRow (.var "@l") (.var "@z")), by rw [congruence_query]; simp, ?_⟩
+  · refine ⟨.expr (ufRow (.var "@l") (.var "@z")), by rw [congruence_query_node]; simp, ?_⟩
     simp [Pattern.ArgVar, Expr.ArgVar, ufRow]
+
+theorem congruence_keyed_plain (f : FnName) (n : Nat) : Query.VarsKeyed (congruenceRule false f n).query := by
+  intro v hv
+  rcases mem_congruence_vars_plain.mp hv with hv | hv | hv | rfl | rfl
+  · refine ⟨.expr (.app f (congruenceVars "a" n)), by rw [congruence_query_plain]; simp, ?_⟩
+    simp only [Pattern.ArgVar, Expr.ArgVar]
+    exact Or.inl (by rw [congruenceVars_eq_map]; exact List.mem_map_of_mem hv)
+  · refine ⟨.expr (.app f (congruenceVars "b" n)), by rw [congruence_query_plain]; simp, ?_⟩
+    simp only [Pattern.ArgVar, Expr.ArgVar]
+    exact Or.inl (by rw [congruenceVars_eq_map]; exact List.mem_map_of_mem hv)
+  · obtain ⟨i, hi, rfl⟩ := mem_congNames.mp hv
+    refine ⟨_, (congruence_edge_atoms_mem (f := f) hi).1, ?_⟩
+    simp [Pattern.ArgVar, Expr.ArgVar, ufRow]
+  · refine ⟨.expr (ufRow (.app f (congruenceVars "a" n)) (.var "@y")),
+      by rw [congruence_query_plain]; simp, ?_⟩
+    simp [Pattern.ArgVar, Expr.ArgVar, ufRow]
+  · refine ⟨.expr (ufRow (.app f (congruenceVars "b" n)) (.var "@z")),
+      by rw [congruence_query_plain]; simp, ?_⟩
+    simp [Pattern.ArgVar, Expr.ArgVar, ufRow]
+
+theorem congruence_keyed (f : FnName) (n : Nat) :
+    Query.VarsKeyed (congruenceRule sub f n).query := by
+  cases sub
+  · exact congruence_keyed_plain f n
+  · exact congruence_keyed_node f n
 
 /-- Every subsumption-query variable is an argument of an atom. -/
 theorem subsume_keyed (f : FnName) (n : Nat) : Query.VarsKeyed (subsumeRule f n).query := by
@@ -617,7 +696,7 @@ theorem subsume_keyed (f : FnName) (n : Nat) : Query.VarsKeyed (subsumeRule f n)
 
 /-- A rule of the compiled program compiles a source rule or maintains the union-find. -/
 theorem mem_rules_encS {P : Program} : ∀ {S : Schedule} {r' : Rule}, r' ∈ (encS P S).rules →
-    (∃ r ∈ S.rules, r' = encodeRuleWith {} r) ∨ r' ∈ maintenance P
+    (∃ r ∈ S.rules, r' = encodeRuleWith { subsumption := !P.schedule.subsumeFreeB } r) ∨ r' ∈ maintenance (!P.schedule.subsumeFreeB) P
   | .run rs, r', h => by
       simp only [encS, Schedule.rules, List.mem_append] at h
       rcases h with h | h
@@ -636,7 +715,7 @@ theorem mem_rules_encS {P : Program} : ∀ {S : Schedule} {r' : Rule}, r' ∈ (e
         · exact Or.inr h
 
 theorem compiled_rules {P : Program} {r' : Rule} (hr : r' ∈ (Congruence.encode P).rules) :
-    (∃ r ∈ P.rules, r' = encodeRuleWith {} r) ∨ r' ∈ maintenance P := by
+    (∃ r ∈ P.rules, r' = encodeRuleWith { subsumption := !P.schedule.subsumeFreeB } r) ∨ r' ∈ maintenance (!P.schedule.subsumeFreeB) P := by
   rw [Program.rules, encode_schedule] at hr
   exact mem_rules_encS hr
 
@@ -689,7 +768,7 @@ theorem compiled_keyed (hP : P.Fragment) :
   rcases compiled_rules hr' with ⟨r, hr, rfl⟩ | hr'
   · exact keyed_encodeQuery (fun p hp => ((hP.queryEncodable.1 r hr).1 p hp).2)
       (rule_minOverVars hP hr).1 (hP.queryEncodable.1 r hr).2 0
-  · rcases mem_maintenance.mp hr' with rfl | rfl | ⟨fk, _, _, rfl⟩ | ⟨fk, _, rfl⟩
+  · rcases mem_maintenance.mp hr' with rfl | rfl | ⟨fk, _, _, rfl⟩ | ⟨fk, _, _, rfl⟩
     · decide
     · decide
     · exact congruence_keyed fk.1 fk.2

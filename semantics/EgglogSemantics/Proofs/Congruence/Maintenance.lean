@@ -8,6 +8,8 @@ live rows still generate every row. -/
 
 namespace Egglog.Congruence
 
+variable {sub : Bool}
+
 /-- A union-find row one maintenance firing asserts: an existing row, or the replacement a
 rule writes for the live edges it matched. -/
 inductive MaintRow (d : Database) : Term → Term → Prop
@@ -16,14 +18,13 @@ inductive MaintRow (d : Database) : Term → Term → Prop
   | collide {a b c : Term} : Edge d a b → Edge d a c → b = Term.least b c → b ≠ c →
       MaintRow d c b
   | congr {f : FnName} {as bs rs : List Term} {y z : Term} :
-      Node d f as → Node d f bs →
       List.Forall₂ (Edge d) as rs → List.Forall₂ (Edge d) bs rs →
       Edge d (.app f as) y → Edge d (.app f bs) z → y = Term.least y z → y ≠ z → MaintRow d z y
 
 variable {P : Program} {src d : Database}
 
 /-- Children with the same live parents are congruent in the source. -/
-theorem congList_of_edges (h : Rel src d) {as bs rs : List Term}
+theorem congList_of_edges (h : Rel sub src d) {as bs rs : List Term}
     (hra : List.Forall₂ (Edge d) as rs) (hrb : List.Forall₂ (Edge d) bs rs) :
     CongList src as bs := by
   induction hra generalizing bs with
@@ -33,17 +34,17 @@ theorem congList_of_edges (h : Rel src d) {as bs rs : List Term}
     | cons hb hrb => exact .cons ((h.edge_cong ha).trans (h.edge_cong hb).symm) (ih hrb)
 
 /-- The application a subsumption firing marks is a key of a source name. -/
-theorem subsume_key (h : Rel src d) {f : FnName} {as bs : List Term} (hm : Marker d f as)
+theorem subsume_key (h : Rel sub src d) {f : FnName} {as bs : List Term} (hm : Marker d f as)
     (hl : Term.app f bs ∈ d.live) : Term.app f bs ∈ Keys d :=
   h.mem_keys_of_src (h.app_mem_src_of_mem_terms (h.key_sourceName (h.marker_key hm))
     ((Congruence.app_live_iff h.diag).mp hl).1)
 
-theorem mem_runWrites_maint (h : Rel src d) {q : Term × Term}
-    (hq : q ∈ RunWrites (maintenance P) d) :
+theorem mem_runWrites_maint (h : Rel sub src d) {q : Term × Term}
+    (hq : q ∈ RunWrites (maintenance sub P) d) :
     (∃ k p, q = (ufRowT k p, ufRowT k p) ∧ MaintRow d k p) ∨
       ∃ f bs, q = (Term.app f bs, Term.app f bs) ∧ Term.app f bs ∈ Keys d := by
   obtain ⟨W, ⟨r, hr, σ, hσ, hW⟩, hqW⟩ := Set.mem_sUnion.mp hq
-  rcases mem_maintenance.mp hr with rfl | rfl | ⟨fk, _, _, rfl⟩ | ⟨fk, _, rfl⟩
+  rcases mem_maintenance.mp hr with rfl | rfl | ⟨fk, _, _, rfl⟩ | ⟨fk, _, _, rfl⟩
   · obtain ⟨a, b, c, ha, hb, hc, hab, hbc, hnc⟩ := compress_inv hσ
     rw [compress_writes ha hb hc] at hW
     obtain rfl := Option.some.inj hW
@@ -60,13 +61,13 @@ theorem mem_runWrites_maint (h : Rel src d) {q : Term × Term}
     · exact Or.inl ⟨a, c, rfl, .old (h.row_of_edge hac)⟩
     · exact Or.inl ⟨c, b, rfl, .collide hab hac hmin
         (ne_of_not_cong (Keys.subset_terms d (h.parent_of_edge hab)) hnc)⟩
-  · obtain ⟨as, bs, rs, y, z, _, _, _, _, _, hy, hz, hna, hnb, hra, hrb, hey, hez, hmin, hnc⟩ :=
+  · obtain ⟨as, bs, rs, y, z, _, _, _, hy, hz, hra, hrb, hey, hez, hmin, hnc⟩ :=
       congruence_inv h.diag h.shape hσ
     rw [congruence_writes hy hz] at hW
     obtain rfl := Option.some.inj hW
     simp only [Set.mem_union, Set.mem_singleton_iff, Set.mem_empty_iff_false, or_false] at hqW
     subst hqW
-    exact Or.inl ⟨z, y, rfl, .congr hna hnb hra hrb hey hez hmin
+    exact Or.inl ⟨z, y, rfl, .congr hra hrb hey hez hmin
       (ne_of_not_cong (Keys.subset_terms d (h.parent_of_edge hey)) hnc)⟩
   · obtain ⟨as, bs, rs, _, hbs, _, hm, hl, _, _⟩ := subsume_inv h.diag h.shape hσ
     rw [subsume_writes hbs] at hW
@@ -75,17 +76,17 @@ theorem mem_runWrites_maint (h : Rel src d) {q : Term × Term}
     subst hqW
     exact Or.inr ⟨fk.1, bs, rfl, subsume_key h hm hl⟩
 
-theorem mem_runMarks_maint (h : Rel src d) {t : Term} (ht : t ∈ RunMarks (maintenance P) d) :
+theorem mem_runMarks_maint (h : Rel sub src d) {t : Term} (ht : t ∈ RunMarks (maintenance sub P) d) :
     (∃ k p q, t = ufRowT k p ∧ Edge d k p ∧ Term.blt q p = true ∧
-      Row (RunRules (maintenance P) d) k q ∧ Row (RunRules (maintenance P) d) p q) ∨
+      Row (RunRules (maintenance sub P) d) k q ∧ Row (RunRules (maintenance sub P) d) p q) ∨
     ∃ f bs as, t = Term.app f bs ∧ Term.app f bs ∈ Keys d ∧ Marker d f as ∧
       CongList src as bs := by
-  have heqs : (RunRules (maintenance P) d).eqs = d.eqs ∪ RunWrites (maintenance P) d := by
+  have heqs : (RunRules (maintenance sub P) d).eqs = d.eqs ∪ RunWrites (maintenance sub P) d := by
     rw [RunRules.eq_pair]
   obtain ⟨X, ⟨r, hr, σ, hσ, hX⟩, htX⟩ := Set.mem_sUnion.mp ht
-  have hwrite : ∀ W, Action.writes σ r.actions = some W → W ⊆ RunWrites (maintenance P) d :=
+  have hwrite : ∀ W, Action.writes σ r.actions = some W → W ⊆ RunWrites (maintenance sub P) d :=
     fun W hW q hq => Set.mem_sUnion.mpr ⟨W, ⟨r, hr, σ, hσ, hW⟩, hq⟩
-  rcases mem_maintenance.mp hr with rfl | rfl | ⟨fk, _, _, rfl⟩ | ⟨fk, _, rfl⟩
+  rcases mem_maintenance.mp hr with rfl | rfl | ⟨fk, _, _, rfl⟩ | ⟨fk, _, _, rfl⟩
   · obtain ⟨a, b, c, ha, hb, hc, hab, hbc, hnc⟩ := compress_inv hσ
     rw [compress_marks ha hb (by rw [hc]; rfl)] at hX
     obtain rfl := Option.some.inj hX
@@ -96,7 +97,7 @@ theorem mem_runMarks_maint (h : Rel src d) {t : Term} (ht : t ∈ RunMarks (main
     · rcases h.edge_down hbc with heq | hlt
       · exact (hne heq.symm).elim
       · exact hlt
-    · change (ufRowT a c, ufRowT a c) ∈ (RunRules (maintenance P) d).eqs
+    · change (ufRowT a c, ufRowT a c) ∈ (RunRules (maintenance sub P) d).eqs
       rw [heqs]
       exact Or.inr (hwrite _ (compress_writes ha hb hc) (by simp))
     · exact (h.row_of_edge hbc).mono (heqs ▸ Set.subset_union_left)
@@ -112,10 +113,10 @@ theorem mem_runMarks_maint (h : Rel src d) {t : Term} (ht : t ∈ RunMarks (main
       rw [if_neg hlt] at hmin
       exact hne hmin
     · exact (h.row_of_edge hab).mono (heqs ▸ Set.subset_union_left)
-    · change (ufRowT c b, ufRowT c b) ∈ (RunRules (maintenance P) d).eqs
+    · change (ufRowT c b, ufRowT c b) ∈ (RunRules (maintenance sub P) d).eqs
       rw [heqs]
       exact Or.inr (hwrite _ (collide_writes ha hb hc) (by simp))
-  · obtain ⟨as, bs, rs, y, z, _, _, _, _, _, hy, hz, -⟩ := congruence_inv h.diag h.shape hσ
+  · obtain ⟨as, bs, rs, y, z, _, _, _, hy, hz, -⟩ := congruence_inv h.diag h.shape hσ
     rw [congruence_marks hy hz] at hX
     obtain rfl := Option.some.inj hX
     simp at htX
@@ -128,7 +129,7 @@ theorem mem_runMarks_maint (h : Rel src d) {t : Term} (ht : t ∈ RunMarks (main
 
 namespace MaintRow
 
-variable (h : Rel src d)
+variable (h : Rel sub src d)
 include h
 
 theorem key_mem {k p : Term} (hm : MaintRow d k p) : k ∈ Keys d := by
@@ -136,14 +137,14 @@ theorem key_mem {k p : Term} (hm : MaintRow d k p) : k ∈ Keys d := by
   | old hr => exact hr.mem_keys
   | compress hab _ _ => exact h.key_of_edge hab
   | collide _ hac _ _ => exact h.parent_of_edge hac
-  | congr _ _ _ _ _ hez _ _ => exact h.parent_of_edge hez
+  | congr _ _ _ hez _ _ => exact h.parent_of_edge hez
 
 theorem parent_mem {k p : Term} (hm : MaintRow d k p) : p ∈ Keys d := by
   cases hm with
   | old hr => exact h.parent_mem_keys hr
   | compress _ hbc _ => exact h.parent_of_edge hbc
   | collide hab _ _ _ => exact h.parent_of_edge hab
-  | congr _ _ _ _ hey _ _ _ => exact h.parent_of_edge hey
+  | congr _ _ hey _ _ _ => exact h.parent_of_edge hey
 
 theorem down {k p : Term} (hm : MaintRow d k p) : p = k ∨ Term.blt p k = true := by
   cases hm with
@@ -162,7 +163,7 @@ theorem down {k p : Term} (hm : MaintRow d k p) : p = k ∨ Term.blt p k = true 
     by_contra hlt
     rw [if_neg hlt] at hmin
     exact hne hmin
-  | congr _ _ _ _ _ _ hmin hne =>
+  | congr _ _ _ _ hmin hne =>
     right
     rw [Term.least_eq_ite] at hmin
     by_contra hlt
@@ -177,7 +178,7 @@ theorem cong_view {k p : Term} (hm : MaintRow d k p) : Cong (view d) k p := by
     exact (h.row_of_edge hab).cong_view.trans (h.row_of_edge hbc).cong_view
   | collide hab hac _ _ =>
     exact (h.row_of_edge hac).cong_view.symm.trans (h.row_of_edge hab).cong_view
-  | @congr f as bs rs _ _ _ _ hra hrb hey hez _ _ =>
+  | @congr f as bs rs _ _ hra hrb hey hez _ _ =>
     have hself : Cong (view d) (.app f as) (.app f as) :=
       (h.selfLoop _ _ (h.row_of_edge hey)).1.cong_view
     have hargs : CongList (view d) as bs := by
@@ -196,10 +197,10 @@ theorem cong_view {k p : Term} (hm : MaintRow d k p) : Cong (view d) k p := by
 end MaintRow
 
 /-- One maintenance round preserves the simulation relation. -/
-theorem maint_round (h : Rel src d) : Rel src (RunRules (maintenance P) d) := by
-  set d' := RunRules (maintenance P) d with hd'
-  have heqs : d'.eqs = d.eqs ∪ RunWrites (maintenance P) d := by rw [hd', RunRules.eq_pair]
-  have hsub : d'.subsumed = d.subsumed ∪ RunMarks (maintenance P) d := by
+theorem maint_round (h : Rel sub src d) : Rel sub src (RunRules (maintenance sub P) d) := by
+  set d' := RunRules (maintenance sub P) d with hd'
+  have heqs : d'.eqs = d.eqs ∪ RunWrites (maintenance sub P) d := by rw [hd', RunRules.eq_pair]
+  have hsub : d'.subsumed = d.subsumed ∪ RunMarks (maintenance sub P) d := by
     rw [hd', RunRules.eq_pair]
   have hmono : d.eqs ⊆ d'.eqs := heqs ▸ Set.subset_union_left
   have hkeys_mono : Keys d ⊆ Keys d' := Keys.mono hmono
@@ -207,7 +208,7 @@ theorem maint_round (h : Rel src d) : Rel src (RunRules (maintenance P) d) := by
   have hnew : ∀ q ∈ d'.eqs, q ∈ d.eqs ∨ (∃ k p, q = (ufRowT k p, ufRowT k p) ∧ MaintRow d k p) ∨
       ∃ f bs, q = (Term.app f bs, Term.app f bs) ∧ Term.app f bs ∈ Keys d := by
     intro q hq
-    have hq' : q ∈ d.eqs ∪ RunWrites (maintenance P) d := heqs ▸ hq
+    have hq' : q ∈ d.eqs ∪ RunWrites (maintenance sub P) d := heqs ▸ hq
     rcases hq' with hq' | hq'
     · exact Or.inl hq'
     · exact Or.inr (mem_runWrites_maint h hq')
@@ -273,7 +274,7 @@ theorem maint_round (h : Rel src d) : Rel src (RunRules (maintenance P) d) := by
     · exact fun hab => Cong.replay (D := view d') (E := view d)
         (fun q hq => (hrow q.1 q.2 hq).cong_view h) hab
   -- No new union-find row is marked but by a firing with a smaller replacement.
-  have huf_marks : ∀ k p, ufRowT k p ∈ RunMarks (maintenance P) d →
+  have huf_marks : ∀ k p, ufRowT k p ∈ RunMarks (maintenance sub P) d →
       ∃ q, Edge d k p ∧ Term.blt q p = true ∧ Row d' k q ∧ Row d' p q := by
     intro k p hs
     rcases mem_runMarks_maint h hs with ⟨k', p', q, heq, he, hlt, hkq, hpq⟩ |
@@ -315,21 +316,22 @@ theorem maint_round (h : Rel src d) : Rel src (RunRules (maintenance P) d) := by
     down := fun k p hr => (hrow k p hr).down h
     selfLoop := hself
     keys := hkeys.trans h.keys
-    nodes := fun f as hk => (h.nodes f as (hkeys ▸ hk)).mono hmono
+    nodes := fun f as hk hon => (h.nodes f as (hkeys ▸ hk) hon).mono hmono
+    plain := h.plain
     marker := fun f as => (hmarker f as).trans (h.marker f as)
     cong := hcong
     liveCong := fun k p hr => hlive p (hkeys ▸ (hself k p hr).2.mem_keys) k hr }
 
 /-- Rows only grow along a maintenance round. -/
-theorem maint_eqs_mono (d : Database) : d.eqs ⊆ (RunRules (maintenance P) d).eqs := by
+theorem maint_eqs_mono (d : Database) : d.eqs ⊆ (RunRules (maintenance sub P) d).eqs := by
   rw [RunRules.eq_pair]; exact Set.subset_union_left
 
 theorem maint_subsumed_mono (d : Database) :
-    d.subsumed ⊆ (RunRules (maintenance P) d).subsumed := by
+    d.subsumed ⊆ (RunRules (maintenance sub P) d).subsumed := by
   rw [RunRules.eq_pair]; exact Set.subset_union_left
 
 /-- The keys are unchanged by a maintenance round. -/
-theorem maint_keys (h : Rel src d) : Keys (RunRules (maintenance P) d) = Keys d :=
+theorem maint_keys (h : Rel sub src d) : Keys (RunRules (maintenance sub P) d) = Keys d :=
   (maint_round (P := P) h).keys.trans h.keys.symm
 
 end Egglog.Congruence

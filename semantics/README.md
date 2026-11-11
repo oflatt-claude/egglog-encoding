@@ -61,8 +61,11 @@ show only `propext`, `Classical.choice` and `Quot.sound`.
 
 The congruence compiler translates source programs into an explicit union-find relation
 maintained by rules that subsume a stale row and write its replacement; the output has no
-merge function. A source subsume builds and marks its row, records its children in
-`@Sub_f`, and maintenance subsumes every spelling with congruent children. Permanent
+merge function. `encode` chooses plain compilation for a source without `subsume`:
+builds write self-loops, congruence reads constructor rows, and maintenance consists of
+Compress, Collide and constructor congruence. A source containing `subsume` automatically
+enables `Options.subsumption`. A source subsume builds and marks its row, records its
+children in `@Sub_f`, and maintenance subsumes every spelling with congruent children. Permanent
 `@Node_f(children, node)` rows keep subsumed applications available for congruence.
 Source rules and the final check may test disequalities, and may take the minimum of query
 variables when the program has no saturation (`Program.Fragment`). It handles query flattening and rebuilding,

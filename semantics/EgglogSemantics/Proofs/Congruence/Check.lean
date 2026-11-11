@@ -7,11 +7,13 @@ same kind of state, so this is the query correspondence. -/
 
 namespace Egglog.Congruence
 
+variable {sub : Bool}
+
 variable {P : Program}
 
 /-- The source check on the partner holds exactly when the compiled check holds on the
 canonical compiled state. -/
-theorem check_corr (hP : P.Fragment) {x d : Database} (hx : SrcInv P x) (h : Rel x d)
+theorem check_corr (hP : P.Fragment) {x d : Database} (hx : SrcInv P x) (h : Rel sub x d)
     (hc : Canon d) :
     QueryHolds x P.check ↔ QueryHolds d (encodeQueryWith {} P.check 0).1 := by
   have hq := queryOk_check hP

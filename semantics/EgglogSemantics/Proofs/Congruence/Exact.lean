@@ -13,8 +13,8 @@ variable {P : Program}
 
 /-- The compiled schedule reaches a canonical state related to the source result itself. -/
 theorem sim_exact_fwd (hP : P.Fragment) : ∀ (S : Schedule), S.NoSaturate → S.rules ⊆ P.rules →
-    ∀ {x d e : Database}, SrcInv P x → Rel x d → Canon d → Reach x S e →
-      ∃ d', Reach d (encS P S) d' ∧ Rel e d' ∧ Canon d'
+    ∀ {x d e : Database}, SrcInv P x → Rel (!P.schedule.subsumeFreeB) x d → Canon d → Reach x S e →
+      ∃ d', Reach d (encS P S) d' ∧ Rel (!P.schedule.subsumeFreeB) e d' ∧ Canon d'
   | .run R, _, hS, x, d, e, hx, hd, hc, hr => by
       cases hr
       exact sim_run hP (fun r hr => hS hr) hx hd hc
@@ -30,8 +30,8 @@ theorem sim_exact_fwd (hP : P.Fragment) : ∀ (S : Schedule), S.NoSaturate → S
 
 /-- Every compiled execution of the schedule follows a source execution exactly. -/
 theorem sim_exact_bwd (hP : P.Fragment) : ∀ (S : Schedule), S.NoSaturate → S.rules ⊆ P.rules →
-    ∀ {x d d' : Database}, SrcInv P x → Rel x d → Canon d → Reach d (encS P S) d' →
-      ∃ e, Reach x S e ∧ Rel e d' ∧ Canon d'
+    ∀ {x d d' : Database}, SrcInv P x → Rel (!P.schedule.subsumeFreeB) x d → Canon d → Reach d (encS P S) d' →
+      ∃ e, Reach x S e ∧ Rel (!P.schedule.subsumeFreeB) e d' ∧ Canon d'
   | .run R, _, hS, x, d, d', hx, hd, hc, hr => by
       obtain ⟨hrel', hc'⟩ := sim_run_bwd hP (fun r hr => hS hr) hx hd hc hr
       exact ⟨RunRules R x, .run, hrel', hc'⟩
@@ -48,7 +48,7 @@ theorem sim_exact_bwd (hP : P.Fragment) : ∀ (S : Schedule), S.NoSaturate → S
 /-- The compilation of a schedule without saturation does not diverge: every rebuild
 saturation terminates. -/
 theorem encS_not_diverges (hP : P.Fragment) : ∀ (S : Schedule), S.NoSaturate →
-    S.rules ⊆ P.rules → ∀ {x d : Database}, SrcInv P x → Rel x d → Canon d →
+    S.rules ⊆ P.rules → ∀ {x d : Database}, SrcInv P x → Rel (!P.schedule.subsumeFreeB) x d → Canon d →
       ¬ Diverges d (encS P S)
   | .run R, _, hS, x, _, hx, hd, hc =>
       run_not_diverges hP (fun r hr => hS hr) ⟨x, hx, Database.SameMeaning.refl x, hd, hc⟩
@@ -70,7 +70,7 @@ theorem encode_correct_noSaturate (hP : P.Fragment) (hn : P.NoSaturate) :
   have hinv : SrcInv P Database.empty := SrcInv.empty P
   have hS : P.schedule.rules ⊆ P.rules := fun _ hr => hr
   -- Related final states agree on the check.
-  have hcheck : ∀ {e d : Database}, SrcInv P e → Rel e d → Canon d →
+  have hcheck : ∀ {e d : Database}, SrcInv P e → Rel (!P.schedule.subsumeFreeB) e d → Canon d →
       (QueryHolds e P.check ↔ QueryHolds d (encode P).check) := by
     intro e d he hd hc
     rw [encode_check]

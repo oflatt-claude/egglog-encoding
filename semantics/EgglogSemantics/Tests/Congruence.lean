@@ -111,18 +111,17 @@ example : encodeQuery orderedQuery 0 =
 -- position among the source rules, here the third rule.
 #guard (compile missingPremise).origins.length == (encode missingPremise).rules.length
 #guard (compile missingPremise).origins.contains (.source 2)
-#guard ((maintenanceRules missingPremise).map Prod.snd).count (.rebuild .compress) == 1
-#guard ((rebuildRules "F" 2).map Prod.snd) == [.rebuild (.congruence "F"), .rebuild (.subsume "F")]
+#guard ((maintenanceRules false missingPremise).map Prod.snd).count (.rebuild .compress) == 1
+#guard ((rebuildRules true "F" 2).map Prod.snd) == [.rebuild (.congruence "F"), .rebuild (.subsume "F")]
 
 -- The optimizations: with a view, an application is one row; the indexed view's rows
 -- are built with the node; the phased rebuild keeps one origin per rule in schedule order.
 #guard (encodeQueryWith { views := .indexed } [.expr (.app "F" [.app "G" [.var "x"]])] 0).1.map
     Pattern.toEgg == ["(@GView x @v0)", "(@FView @v0 @v1)"]
 #guard (encodeBuildWith { views := .indexed } (.app "F" [atom "A"])).map Action.toEgg ==
-  ["(@AView (A))", "(@NodeA (A))", "(@UF (A) (A))", "(@FView (A) (F (A)))",
-   "(@NodeF (A) (F (A)))", "(@UF (F (A)) (F (A)))"]
+  ["(@AView (A))", "(@UF (A) (A))", "(@FView (A) (F (A)))", "(@UF (F (A)) (F (A)))"]
 #guard (encodeBuildWith { views := .naive } (.app "F" [atom "A"])).map Action.toEgg ==
-  ["(@NodeA (A))", "(@UF (A) (A))", "(@NodeF (A) (F (A)))", "(@UF (F (A)) (F (A)))"]
+  ["(@UF (A) (A))", "(@UF (F (A)) (F (A)))"]
 #guard ((rekeyRules { views := .naive } "F" 1).map Prod.snd) ==
   [.rebuild (.view "F"), .rebuild (.stale "F"), .rebuild (.stale "F")]
 #guard ((rekeyRules { views := .indexed } "F" 1).map Prod.snd) ==
@@ -135,7 +134,7 @@ example : encodeQuery orderedQuery 0 =
   ["(@HasChild (@FView @c0 @e) @c0)", "(@HasChild (@FView @c0 @e) @e)"]
 #guard ((mergeRules { views := .naive } "F" 1).map fun rm => rm.1.actions.map Action.toEgg) ==
   [["(subsume (@FView @c0 @z))", "(@UF @z @y)"]]
-#guard [({} : Options), { views := .naive }, { views := .indexed }, { phased := true },
+#guard [({} : Options), { subsumption := true }, { views := .naive }, { views := .indexed }, { phased := true },
     { views := .indexed, phased := true }].all fun o =>
   (compileWith o nestedUnion).origins.length == (encodeWith o nestedUnion).rules.length &&
     (exec (encodeWith o nestedUnion)).any fun d =>
@@ -148,13 +147,26 @@ example : encodeQuery orderedQuery 0 =
   | .saturate (.seq (.saturate (.run _)) (.seq (.saturate (.run _)) (.run _))) => true
   | _ => false
 -- A nullary constructor has no congruence rule, but a subsumption rule.
-#guard ((rebuildRules "A" 0).map Prod.snd) == [.rebuild (.subsume "A")]
+#guard ((rebuildRules true "A" 0).map Prod.snd) == [.rebuild (.subsume "A")]
 -- The congruence rule of a binary constructor: both node rows, the shared parents of
 -- their children, both roots, and the orientation guard.
-#guard (congruenceRule "F" 2).query.map Pattern.toEgg ==
+#guard (congruenceRule true "F" 2).query.map Pattern.toEgg ==
   ["(@NodeF @a0 @a1 @k)", "(@NodeF @b0 @b1 @l)", "(@UF @a0 @r0)", "(@UF @b0 @r0)",
    "(@UF @a1 @r1)", "(@UF @b1 @r1)", "(@UF @k @y)", "(@UF @l @z)", "(= @y (min @y @z))",
    "(!= @y @z)"]
+-- Plain mode reads constructor rows and emits no node or marker maintenance.
+#guard (congruenceRule false "F" 2).query.map Pattern.toEgg ==
+  ["(F @a0 @a1)", "(F @b0 @b1)", "(@UF @a0 @r0)", "(@UF @b0 @r0)",
+   "(@UF @a1 @r1)", "(@UF @b1 @r1)", "(@UF (F @a0 @a1) @y)",
+   "(@UF (F @b0 @b1) @z)", "(= @y (min @y @z))", "(!= @y @z)"]
+#guard ((rebuildRules false "F" 2).map Prod.snd) == [.rebuild (.congruence "F")]
+#guard (rebuildRules false "A" 0).isEmpty
+#guard (encodeBuildWith {} (.app "F" [atom "A"])).map Action.toEgg ==
+  ["(@UF (A) (A))", "(@UF (F (A)) (F (A)))"]
+#guard (encode nestedUnion).ctors.all fun fk =>
+  !"@Node".isPrefixOf fk.1 && !"@Sub".isPrefixOf fk.1
+#guard !(({} : Options).forProgram nestedUnion).subsumption
+
 -- The subsumption rule: a marker, a live application, and the shared parents of their
 -- children; it subsumes the application.
 #guard (subsumeRule "F" 2).query.map Pattern.toEgg ==
@@ -163,9 +175,9 @@ example : encodeQuery orderedQuery 0 =
 #guard (subsumeRule "F" 2).actions.map Action.toEgg == ["(subsume (F @b0 @b1))"]
 -- A build writes the node row with the self-loop; a subsume builds, subsumes the spelling
 -- it built, and marks it.
-#guard (encodeBuildWith {} (.app "F" [atom "A"])).map Action.toEgg ==
+#guard (encodeBuildWith { subsumption := true } (.app "F" [atom "A"])).map Action.toEgg ==
   ["(@NodeA (A))", "(@UF (A) (A))", "(@NodeF (A) (F (A)))", "(@UF (F (A)) (F (A)))"]
-#guard (encodeActionWith {} (.subsume "F" [.var "x"])).map Action.toEgg ==
+#guard (encodeActionWith { subsumption := true } (.subsume "F" [.var "x"])).map Action.toEgg ==
   ["(@UF x x)", "(@NodeF x (F x))", "(@UF (F x) (F x))", "(subsume (F x))", "(@SubF x)"]
 
 -- Every source schedule compiles to one schedule: each run followed by a rebuild, so a
@@ -188,8 +200,13 @@ private def subsumedUnion : Program :=
   ⟨.seqAll [global (.expr (.app "F" [atom "A"])),
     global (.expr (.app "F" [atom "B"])), global (.subsume "F" [atom "A"]),
     global (.union (atom "A") (atom "B"))], [.expr (.app "F" [atom "B"])]⟩
+#guard (({} : Options).forProgram subsumedUnion).subsumption
+#guard (({ views := .indexed, phased := true } : Options).forProgram subsumedUnion).phased
+#guard (({ views := .indexed } : Options).forProgram subsumedUnion).views == .none
+#guard (encode subsumedUnion).ctors.any fun fk => "@Node".isPrefixOf fk.1
+#guard (encode subsumedUnion).ctors.any fun fk => "@Sub".isPrefixOf fk.1
 #guard decide subsumedUnion.Fragment
-#guard [({} : Options), { views := .naive }, { views := .indexed }, { phased := true },
+#guard [({} : Options), { subsumption := true }, { views := .naive }, { views := .indexed }, { phased := true },
     { views := .indexed, phased := true }].all fun o =>
   (exec (encodeWith o subsumedUnion)).any fun d =>
     sameClassF d (.app "F" [term "A"]) (.app "F" [term "B"]) &&

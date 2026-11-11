@@ -10,12 +10,14 @@ children have the roots of a marked spelling's is subsumed. -/
 
 namespace Egglog.Congruence
 
+variable {sub : Bool}
+
 variable {P : Program} {src d : Database}
 
 /-- A row marked by some firing of the round is not live afterwards. -/
 theorem not_live_of_runMarks {f : FnName} {ts : List Term}
-    (ht : Term.app f ts ∈ RunMarks (maintenance P) d) :
-    Term.app f ts ∉ (RunRules (maintenance P) d).live :=
+    (ht : Term.app f ts ∈ RunMarks (maintenance sub P) d) :
+    Term.app f ts ∉ (RunRules (maintenance sub P) d).live :=
   not_live_of_subsumed (by rw [RunRules.eq_pair]; exact Or.inr ht)
 
 /-- The write set of a firing is among the round's writes. -/
@@ -41,8 +43,8 @@ theorem least_swap {p q : Term} (hl : Term.least p q = q) (hne : p ≠ q) : q = 
 
 /-- A meaning-preserving maintenance round means no maintenance rule fires: the state is
 canonical. -/
-theorem canon_of_fixpoint (h : Rel src d) (hcs : src.CtorsIn P)
-    (hfix : d.SameMeaning (RunRules (maintenance P) d)) : Canon d := by
+theorem canon_of_fixpoint (h : Rel sub src d) (hcs : src.CtorsIn P)
+    (hfix : d.SameMeaning (RunRules (maintenance sub P) d)) : Canon d := by
   have h' := maint_round (P := P) h
   have hterms_eq := hfix.terms_eq_of_diag h.diag h'.diag
   -- Two live edges of one key collide.
@@ -53,7 +55,7 @@ theorem canon_of_fixpoint (h : Rel src d) (hcs : src.CtorsIn P)
       intro p q hp hq hmin hne
       have hfire := collide_fire h.diag hp hq hmin hne (Keys.subset_terms d (h.key_of_edge hp))
         (Keys.subset_terms d (h.parent_of_edge hp)) (Keys.subset_terms d (h.parent_of_edge hq))
-      have hmark : ufRowT k q ∈ RunMarks (maintenance P) d :=
+      have hmark : ufRowT k q ∈ RunMarks (maintenance sub P) d :=
         marks_subset_runMarks (mem_maintenance.mpr (Or.inr (Or.inl rfl))) hfire
           (collide_marks (ufEnv_lookup_a k p q) (ufEnv_lookup_b k p q) (ufEnv_lookup_c k p q))
           (by simp)
@@ -70,7 +72,7 @@ theorem canon_of_fixpoint (h : Rel src d) (hcs : src.CtorsIn P)
     · exfalso
       have hfire := compress_fire h.diag hkp hpm hmp (Keys.subset_terms d (h.key_of_edge hkp))
         (Keys.subset_terms d (h.parent_of_edge hkp)) (Keys.subset_terms d (h.parent_of_edge hpm))
-      have hmark : ufRowT k p ∈ RunMarks (maintenance P) d :=
+      have hmark : ufRowT k p ∈ RunMarks (maintenance sub P) d :=
         marks_subset_runMarks (mem_maintenance.mpr (Or.inl rfl)) hfire
           (compress_marks (ufEnv_lookup_a k p m) (ufEnv_lookup_b k p m)
             (by rw [ufEnv_lookup_c]; rfl)) (by simp)
@@ -89,15 +91,14 @@ theorem canon_of_fixpoint (h : Rel src d) (hcs : src.CtorsIn P)
         subst has hbs
         exact hne (unique _ _ _ hey hez)
       · have hctor : (f, as.length) ∈ P.ctors := hcs f as (h.key_mem_src hka)
-        have hrule : congruenceRule f as.length ∈ maintenance P :=
+        have hrule : congruenceRule sub f as.length ∈ maintenance sub P :=
           mem_maintenance.mpr (Or.inr (Or.inr (Or.inl ⟨(f, as.length), hctor, hn, rfl⟩)))
-        have hfire := congruence_fire h (h.nodes f as hka) (h.nodes f bs hkb) hra hrb hey hez
-          hmin hne
-        have hwrite : (ufRowT z y, ufRowT z y) ∈ RunWrites (maintenance P) d :=
+        obtain ⟨σ, hfire, hy, hz⟩ := congruence_fire h hra hrb hey hez hmin hne
+        have hwrite : (ufRowT z y, ufRowT z y) ∈ RunWrites (maintenance sub P) d :=
           writes_subset_runWrites hrule hfire
-            (congruence_writes (f := f) (n := as.length) congEnv_lookup_y congEnv_lookup_z)
+            (congruence_writes (f := f) (n := as.length) hy hz)
             (by simp)
-        have hmem : ufRowT z y ∈ (RunRules (maintenance P) d).terms := by
+        have hmem : ufRowT z y ∈ (RunRules (maintenance sub P) d).terms := by
           refine ⟨(ufRowT z y, ufRowT z y), ?_, Or.inl (Term.self_mem_subterms _)⟩
           rw [RunRules.eq_pair]
           exact Or.inr hwrite
@@ -122,32 +123,38 @@ theorem canon_of_fixpoint (h : Rel src d) (hcs : src.CtorsIn P)
     have hl : Term.app f bs ∈ d.live :=
       (Congruence.app_live_iff h.diag).mpr ⟨Keys.subset_terms d hkb, hns⟩
     have hctor : (f, as.length) ∈ P.ctors := hcs f as (h.key_mem_src (h.marker_key hm))
-    have hrule : subsumeRule f as.length ∈ maintenance P :=
-      mem_maintenance.mpr (Or.inr (Or.inr (Or.inr ⟨(f, as.length), hctor, rfl⟩)))
+    have hon : sub = true := by
+      cases hs : sub
+      · have hm' := h.marker_src hm
+        rw [h.plain hs] at hm'
+        exact hm'.elim
+      · rfl
+    have hrule : subsumeRule f as.length ∈ maintenance sub P :=
+      mem_maintenance.mpr (Or.inr (Or.inr (Or.inr ⟨(f, as.length), hctor, hon, rfl⟩)))
     have hfire := subsume_fire h hm hl hra hrb
     have hlb : bs.length = as.length := hrb.length_eq.trans hra.length_eq.symm
     have hbs : Expr.evalList (congruenceVars "b" as.length) (subEnv as bs rs as.length) =
         some bs :=
       evalList_congruenceVars hlb fun i hi => subEnv_lookup_b hlb hi
-    have hmark : Term.app f bs ∈ RunMarks (maintenance P) d :=
+    have hmark : Term.app f bs ∈ RunMarks (maintenance sub P) d :=
       marks_subset_runMarks hrule hfire (subsume_marks (f := f) hbs) (by simp)
     exact not_live_of_runMarks hmark ((hfix.live _).mp hl)
 
 /-- At a meaning-preserving round the next round changes nothing at all. -/
-theorem fixpoint_stable (h : Rel src d)
-    (hfix : d.SameMeaning (RunRules (maintenance P) d)) :
-    RunRules (maintenance P) (RunRules (maintenance P) d) = RunRules (maintenance P) d := by
+theorem fixpoint_stable (h : Rel sub src d)
+    (hfix : d.SameMeaning (RunRules (maintenance sub P) d)) :
+    RunRules (maintenance sub P) (RunRules (maintenance sub P) d) = RunRules (maintenance sub P) d := by
   have h' := maint_round (P := P) h
   have hterms := hfix.terms_eq_of_diag h.diag h'.diag
-  have hw := RunWrites.eq_of_sameMeaning_terms hfix hterms (maintenance P)
-  have hm := RunMarks.eq_of_sameMeaning_terms hfix hterms (maintenance P)
+  have hw := RunWrites.eq_of_sameMeaning_terms hfix hterms (maintenance sub P)
+  have hm := RunMarks.eq_of_sameMeaning_terms hfix hterms (maintenance sub P)
   conv_lhs => rw [RunRules.eq_pair]
   rw [← hw, ← hm]
   apply Database.ext
-  · change (RunRules (maintenance P) d).eqs ∪ _ = (RunRules (maintenance P) d).eqs
+  · change (RunRules (maintenance sub P) d).eqs ∪ _ = (RunRules (maintenance sub P) d).eqs
     rw [RunRules.eq_pair]
     exact Set.union_eq_left.mpr Set.subset_union_right
-  · change (RunRules (maintenance P) d).subsumed ∪ _ = (RunRules (maintenance P) d).subsumed
+  · change (RunRules (maintenance sub P) d).subsumed ∪ _ = (RunRules (maintenance sub P) d).subsumed
     rw [RunRules.eq_pair]
     exact Set.union_eq_left.mpr Set.subset_union_right
 
@@ -203,7 +210,7 @@ theorem rowSpace_finite {U : Set Term} (hU : U.Finite) : (rowSpace U).Finite :=
 
 /-- The rows and marks of a related compiled state lie in the universe of its source
 terms. -/
-theorem rows_subset_rowSpace {x e : Database} (hre : Rel x e) {U : Set Term}
+theorem rows_subset_rowSpace {x e : Database} (hre : Rel sub x e) {U : Set Term}
     (hU : ∀ t ∈ x.terms, t ∈ U) : rowsOf e ⊆ rowSpace U ∧ e.subsumed ⊆ rowSpace U := by
   have hkeys : ∀ k ∈ Keys e, k ∈ U := fun k hk => hU k (hre.key_mem_src hk)
   constructor
@@ -276,9 +283,9 @@ theorem rank_lt {V : Set Term} (hV : V.Finite) {d d' : Database} (hd : d.Diag)
     omega
 
 /-- Along maintenance rounds the relation and the keys are kept. -/
-theorem rel_of_rounds (h : Rel src d) {e : Database}
-    (he : Relation.ReflTransGen (fun a b => b = RunRules (maintenance P) a) d e) :
-    Rel src e ∧ Keys e = Keys d := by
+theorem rel_of_rounds (h : Rel sub src d) {e : Database}
+    (he : Relation.ReflTransGen (fun a b => b = RunRules (maintenance sub P) a) d e) :
+    Rel sub src e ∧ Keys e = Keys d := by
   induction he with
   | refl => exact ⟨h, rfl⟩
   | tail _ hbc ih =>
@@ -286,10 +293,10 @@ theorem rel_of_rounds (h : Rel src d) {e : Database}
     exact ⟨maint_round ih.1, (maint_keys ih.1).trans ih.2⟩
 
 /-- The rebuild saturation reaches a state. -/
-theorem rebuild_exists (h : Rel src d) : ∃ e, Reach d (.saturate (.run (maintenance P))) e := by
+theorem rebuild_exists (h : Rel sub src d) : ∃ e, Reach d (.saturate (.run (maintenance sub P))) e := by
   classical
   have hV : (rowSpace src.terms).Finite := rowSpace_finite h.src_terms_finite
-  apply saturateReach_exists_of_measure (maintenance P) d (rank (rowSpace src.terms))
+  apply saturateReach_exists_of_measure (maintenance sub P) d (rank (rowSpace src.terms))
   intro e he hne
   obtain ⟨hre, hkeys⟩ := rel_of_rounds h he
   have hre' := maint_round (P := P) hre
@@ -297,10 +304,10 @@ theorem rebuild_exists (h : Rel src d) : ∃ e, Reach d (.saturate (.run (mainte
   exact rank_lt hV hre.diag hre'.diag hrows hmarks (maint_eqs_mono e) (maint_subsumed_mono e) hne
 
 /-- The result of the rebuild saturation is related, canonical, and has the same keys. -/
-theorem rebuild_rel (h : Rel src d) (hcs : src.CtorsIn P) {e : Database}
-    (hr : Reach d (.saturate (.run (maintenance P))) e) :
-    Rel src e ∧ Canon e ∧ Keys e = Keys d := by
-  generalize hS : Schedule.saturate (.run (maintenance P)) = S at hr
+theorem rebuild_rel (h : Rel sub src d) (hcs : src.CtorsIn P) {e : Database}
+    (hr : Reach d (.saturate (.run (maintenance sub P))) e) :
+    Rel sub src e ∧ Canon e ∧ Keys e = Keys d := by
+  generalize hS : Schedule.saturate (.run (maintenance sub P)) = S at hr
   induction hr with
   | run => cases hS
   | seq => cases hS

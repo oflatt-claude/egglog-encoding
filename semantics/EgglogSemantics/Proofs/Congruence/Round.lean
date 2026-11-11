@@ -8,26 +8,30 @@ stand to its source writes and marks as the relation requires. -/
 
 namespace Egglog.Congruence
 
+variable {sub : Bool}
+
 /-! ### Compiled heads -/
 
-theorem encodeAction_expr (e : Expr) : encodeActionWith {} (.expr e) = encodeBuildWith {} e := rfl
+theorem encodeAction_expr (e : Expr) : encodeActionWith { subsumption := sub } (.expr e) = encodeBuildWith { subsumption := sub } e := rfl
 
-theorem encodeAction_union (a b : Expr) : encodeActionWith {} (.union a b) =
-    encodeBuildWith {} a ++ encodeBuildWith {} b ++
+theorem encodeAction_union (a b : Expr) : encodeActionWith { subsumption := sub } (.union a b) =
+    encodeBuildWith { subsumption := sub } a ++ encodeBuildWith { subsumption := sub } b ++
       [.expr (ufRow a (.min a b)), .expr (ufRow b (.min a b))] := rfl
 
 theorem encodeAction_subsume (f : FnName) (es : List Expr) :
-    encodeActionWith {} (.subsume f es) =
-      encodeBuildWith {} (.app f es) ++ [.subsume f es, .expr (subRow f es)] := rfl
+    encodeActionWith { subsumption := sub } (.subsume f es) =
+      encodeBuildWith { subsumption := sub } (.app f es) ++
+        ([.subsume f es] ++ (if sub then [.expr (subRow f es)] else [])) := by
+  simp [encodeActionWith, List.append_assoc]
 
-theorem encodeActions_nil : encodeActionsWith {} [] = [] := rfl
+theorem encodeActions_nil : encodeActionsWith { subsumption := sub } [] = [] := rfl
 
 theorem encodeActions_cons (a : Action) (as : List Action) :
-    encodeActionsWith {} (a :: as) = encodeActionWith {} a ++ encodeActionsWith {} as := by
+    encodeActionsWith { subsumption := sub } (a :: as) = encodeActionWith { subsumption := sub } a ++ encodeActionsWith { subsumption := sub } as := by
   simp [encodeActionsWith]
 
 /-- Compiled builds only write rows. -/
-theorem encodeBuild_subsumeFree : ∀ e : Expr, Actions.SubsumeFree (encodeBuildWith {} e)
+theorem encodeBuild_subsumeFree : ∀ e : Expr, Actions.SubsumeFree (encodeBuildWith { subsumption := sub } e)
   | .lit _ => by
       rw [build_lit]; intro a ha; simp only [List.mem_singleton] at ha; subst ha; trivial
   | .var _ => by
@@ -43,10 +47,12 @@ theorem encodeBuild_subsumeFree : ∀ e : Expr, Actions.SubsumeFree (encodeBuild
       intro x hx
       rcases List.mem_append.mp hx with hx | hx
       · exact encodeBuildArgs_subsumeFree args x hx
-      · simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+      · have hx : x = .expr (nodeRow f args) ∨
+            x = .expr (ufRow (.app f args) (.app f args)) := by
+          cases sub <;> simp_all
         rcases hx with rfl | rfl <;> trivial
 where
-  encodeBuildArgs_subsumeFree : ∀ es : List Expr, Actions.SubsumeFree (encodeBuildArgsWith {} es)
+  encodeBuildArgs_subsumeFree : ∀ es : List Expr, Actions.SubsumeFree (encodeBuildArgsWith { subsumption := sub } es)
     | [] => by intro a ha; simp [buildArgs_nil] at ha
     | e :: es => by
         rw [buildArgs_cons]
@@ -72,7 +78,7 @@ theorem Action.marks_append (σ : Env) (as bs : List Action) :
 
 /-- The marks of a compiled head are the marks of the source head. -/
 theorem encodeAction_marks {σ : Env} {a : Action} {X Y : Set Term}
-    (hX : Action.marks σ (encodeActionWith {} a) = some X) (hY : a.mark σ = some Y) : X = Y := by
+    (hX : Action.marks σ (encodeActionWith { subsumption := sub } a) = some X) (hY : a.mark σ = some Y) : X = Y := by
   cases a with
   | expr e =>
     rw [encodeAction_expr] at hX
@@ -80,7 +86,7 @@ theorem encodeAction_marks {σ : Env} {a : Action} {X Y : Set Term}
     obtain ⟨_, _, rfl⟩ := Option.map_eq_some_iff.mp hY
     rfl
   | union a b =>
-    have hsf : Actions.SubsumeFree (encodeActionWith {} (.union a b)) := by
+    have hsf : Actions.SubsumeFree (encodeActionWith { subsumption := sub } (.union a b)) := by
       rw [encodeAction_union]
       intro x hx
       simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hx
@@ -99,13 +105,11 @@ theorem encodeAction_marks {σ : Env} {a : Action} {X Y : Set Term}
     rw [Action.marks_eq_empty (encodeBuild_subsumeFree _) hA]
     simp only [Action.mark] at hY
     obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp hY
-    simp only [Action.marks, Action.mark, Action.write, hts, subRow, Expr.eval_app_ctor,
-      Option.map_some, Option.bind_some, Option.some.injEq] at hB
-    rw [← hB]
-    simp
+    cases sub <;> simp_all [Action.marks, Action.mark, Action.write, hts, subRow,
+      Expr.eval_app_ctor]
 
 theorem encodeActions_marks {σ : Env} : ∀ {as : List Action} {X Y : Set Term},
-    Action.marks σ (encodeActionsWith {} as) = some X → Action.marks σ as = some Y → X = Y
+    Action.marks σ (encodeActionsWith { subsumption := sub } as) = some X → Action.marks σ as = some Y → X = Y
   | [], X, Y, hX, hY => by
       rw [encodeActions_nil] at hX
       exact (Option.some.inj hX).symm.trans (Option.some.inj hY)
@@ -162,12 +166,12 @@ theorem mem_ufRow_vars {a b : Expr} {v : Var} :
   simp [ufRow, Expr.varsList]
 
 theorem build_min (a b : Expr) :
-    encodeBuildWith {} (.min a b) = encodeBuildWith {} a ++ encodeBuildWith {} b := rfl
+    encodeBuildWith { subsumption := sub } (.min a b) = encodeBuildWith { subsumption := sub } a ++ encodeBuildWith { subsumption := sub } b := rfl
 
 mutual
 
 /-- A compiled construction mentions only the expression's variables. -/
-theorem build_vars : ∀ (e : Expr), ∀ a ∈ encodeBuildWith {} e, ∀ v ∈ a.vars, v ∈ e.vars
+theorem build_vars : ∀ (e : Expr), ∀ a ∈ encodeBuildWith { subsumption := sub } e, ∀ v ∈ a.vars, v ∈ e.vars
   | .lit l, a, ha, v, hv => by
       rw [build_lit, List.mem_singleton] at ha
       subst ha
@@ -186,7 +190,9 @@ theorem build_vars : ∀ (e : Expr), ∀ a ∈ encodeBuildWith {} e, ∀ v ∈ a
       · exact Or.inr (build_vars b c hc v hv)
   | .app f args, c, hc, v, hv => by
       rw [build_app, List.mem_append] at hc
-      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+      have hc : c ∈ encodeBuildArgsWith { subsumption := sub } args ∨
+          c = .expr (nodeRow f args) ∨ c = .expr (ufRow (.app f args) (.app f args)) := by
+        cases sub <;> simp_all <;> tauto
       rcases hc with hc | rfl | rfl
       · exact buildArgs_vars args c hc v hv
       · obtain ⟨e, he, hv⟩ := Expr.mem_varsList hv
@@ -197,7 +203,7 @@ theorem build_vars : ∀ (e : Expr), ∀ a ∈ encodeBuildWith {} e, ∀ v ∈ a
       · rw [Action.vars, mem_ufRow_vars] at hv
         exact hv.elim id id
 
-theorem buildArgs_vars : ∀ (es : List Expr), ∀ a ∈ encodeBuildArgsWith {} es, ∀ v ∈ a.vars,
+theorem buildArgs_vars : ∀ (es : List Expr), ∀ a ∈ encodeBuildArgsWith { subsumption := sub } es, ∀ v ∈ a.vars,
     v ∈ Expr.varsList es
   | [], a, ha, _, _ => by rw [buildArgs_nil] at ha; simp at ha
   | e :: es, a, ha, v, hv => by
@@ -209,7 +215,7 @@ theorem buildArgs_vars : ∀ (es : List Expr), ∀ a ∈ encodeBuildArgsWith {} 
 
 end
 
-theorem action_vars (a : Action) : ∀ b ∈ encodeActionWith {} a, ∀ v ∈ b.vars, v ∈ a.vars := by
+theorem action_vars (a : Action) : ∀ b ∈ encodeActionWith { subsumption := sub } a, ∀ v ∈ b.vars, v ∈ a.vars := by
   cases a with
   | expr e => exact build_vars e
   | union a b =>
@@ -227,14 +233,16 @@ theorem action_vars (a : Action) : ∀ b ∈ encodeActionWith {} a, ∀ v ∈ b.
   | subsume f es =>
     intro c hc v hv
     rw [encodeAction_subsume, List.mem_append] at hc
-    simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+    have hc : c ∈ encodeBuildWith { subsumption := sub } (.app f es) ∨
+        c = .subsume f es ∨ c = .expr (subRow f es) := by
+      cases sub <;> simp_all <;> tauto
     rcases hc with hc | rfl | rfl
     · exact build_vars _ c hc v hv
     · exact hv
     · simpa [Action.vars, subRow] using hv
 
 theorem actions_vars (as : List Action) :
-    ∀ b ∈ encodeActionsWith {} as, ∀ v ∈ b.vars, ∃ a ∈ as, v ∈ a.vars := by
+    ∀ b ∈ encodeActionsWith { subsumption := sub } as, ∀ v ∈ b.vars, ∃ a ∈ as, v ∈ a.vars := by
   induction as with
   | nil => intro b hb; rw [encodeActions_nil] at hb; simp at hb
   | cons a as ih =>
@@ -247,7 +255,7 @@ theorem actions_vars (as : List Action) :
 
 theorem actions_writes_agreeOn {σ τ : Env} (as : List Action)
     (h : ∀ a ∈ as, ∀ v ∈ a.vars, Env.lookup v σ = Env.lookup v τ) :
-    Action.writes σ (encodeActionsWith {} as) = Action.writes τ (encodeActionsWith {} as) := by
+    Action.writes σ (encodeActionsWith { subsumption := sub } as) = Action.writes τ (encodeActionsWith { subsumption := sub } as) := by
   apply Action.writes_agreeOn
   intro b hb v hv
   obtain ⟨a, ha, hv'⟩ := actions_vars as b hb v hv
@@ -255,7 +263,7 @@ theorem actions_writes_agreeOn {σ τ : Env} (as : List Action)
 
 theorem actions_marks_agreeOn {σ τ : Env} (as : List Action)
     (h : ∀ a ∈ as, ∀ v ∈ a.vars, Env.lookup v σ = Env.lookup v τ) :
-    Action.marks σ (encodeActionsWith {} as) = Action.marks τ (encodeActionsWith {} as) := by
+    Action.marks σ (encodeActionsWith { subsumption := sub } as) = Action.marks τ (encodeActionsWith { subsumption := sub } as) := by
   apply Action.marks_agreeOn
   intro b hb v hv
   obtain ⟨a, ha, hv'⟩ := actions_vars as b hb v hv
@@ -288,11 +296,11 @@ marks `M`: every compiled row is a union-find row between terms congruent and he
 `V` is asserted and the bindings are held, going down the term order, with its endpoints'
 self-loops; or the node row of a term whose self-loop is written; or the marker, or the
 self-pair, of a marked spelling. Every source write is derivable from the rows; every
-subterm of a source write is a self-loop, with its node row for an application, or lies
+subterm of a source write is a self-loop, with its node row when enabled, or lies
 inside a binding; and every mark is an application whose marker, self-loop and source
 self-pair are written. The bindings matter for a `min`: the compiled head writes the
 self-loop of the operand it does not choose, which is a bound representative. -/
-structure HeadWrites (σ : Env) (V V' : Set (Term × Term)) (M : Set Term) : Prop where
+structure HeadWrites (sub : Bool) (σ : Env) (V V' : Set (Term × Term)) (M : Set Term) : Prop where
   shape : ∀ q ∈ V', (∃ k p, q = (ufRowT k p, ufRowT k p)) ∨
     (∃ f as, q = nodeSelf f as ∧ selfRow (.app f as) ∈ V') ∨
     (∃ f as, q = (subRowT f as, subRowT f as) ∧ Term.app f as ∈ M) ∨ (∃ t ∈ M, q = (t, t))
@@ -305,12 +313,12 @@ structure HeadWrites (σ : Env) (V V' : Set (Term × Term)) (M : Set Term) : Pro
   derivable : ∀ q ∈ V, ∀ E : Database,
     (∀ k p, (ufRowT k p, ufRowT k p) ∈ V' → (k, p) ∈ E.eqs) → Cong E q.1 q.2
   covers : ∀ q ∈ V, ∀ u, Term.IsSubterm u q.1 ∨ Term.IsSubterm u q.2 →
-    (selfRow u ∈ V' ∧ ∀ g us, u = .app g us → nodeSelf g us ∈ V') ∨
+    (selfRow u ∈ V' ∧ ∀ g us, u = .app g us → sub = true → nodeSelf g us ∈ V') ∨
       ∃ v w, Env.lookup v σ = some w ∧ Term.IsSubterm u w
   marks : ∀ t ∈ M, ∃ f as, t = .app f as ∧ (subRowT f as, subRowT f as) ∈ V' ∧
     selfRow t ∈ V' ∧ (t, t) ∈ V
 
-theorem HeadWrites.empty (σ : Env) : HeadWrites σ ∅ ∅ ∅ where
+theorem HeadWrites.empty (σ : Env) : HeadWrites sub σ ∅ ∅ ∅ where
   shape := by simp
   down := by simp
   selfLoop := by simp
@@ -321,8 +329,8 @@ theorem HeadWrites.empty (σ : Env) : HeadWrites σ ∅ ∅ ∅ where
   marks := by simp
 
 theorem HeadWrites.union {σ : Env} {V₁ V₁' V₂ V₂' : Set (Term × Term)} {M₁ M₂ : Set Term}
-    (h₁ : HeadWrites σ V₁ V₁' M₁) (h₂ : HeadWrites σ V₂ V₂' M₂) :
-    HeadWrites σ (V₁ ∪ V₂) (V₁' ∪ V₂') (M₁ ∪ M₂) where
+    (h₁ : HeadWrites sub σ V₁ V₁' M₁) (h₂ : HeadWrites sub σ V₂ V₂' M₂) :
+    HeadWrites sub σ (V₁ ∪ V₂) (V₁' ∪ V₂') (M₁ ∪ M₂) where
   shape := fun q hq => hq.elim
     (fun hq => (h₁.shape q hq).imp id (Or.imp
       (fun ⟨f, as, hq, hs⟩ => ⟨f, as, hq, Or.inl hs⟩)
@@ -347,9 +355,9 @@ theorem HeadWrites.union {σ : Env} {V₁ V₁' V₂ V₂' : Set (Term × Term)}
     (fun hq => h₂.derivable q hq E fun k p hkp => hE k p (Or.inr hkp))
   covers := fun q hq u hu => hq.elim
     (fun hq => (h₁.covers q hq u hu).imp_left fun ⟨hs, hn⟩ =>
-      ⟨Or.inl hs, fun g us heq => Or.inl (hn g us heq)⟩)
+      ⟨Or.inl hs, fun g us heq hon => Or.inl (hn g us heq hon)⟩)
     (fun hq => (h₂.covers q hq u hu).imp_left fun ⟨hs, hn⟩ =>
-      ⟨Or.inr hs, fun g us heq => Or.inr (hn g us heq)⟩)
+      ⟨Or.inr hs, fun g us heq hon => Or.inr (hn g us heq hon)⟩)
   marks := fun t ht => ht.elim
     (fun ht => let ⟨f, as, heq, hm, hs, hv⟩ := h₁.marks t ht
       ⟨f, as, heq, Or.inl hm, Or.inl hs, Or.inl hv⟩)
@@ -369,29 +377,29 @@ of bindings, including the value's own, and node rows of applications the build 
 covering every subterm not inside a binding. -/
 theorem build_rows {σ : Env} {e : Expr} (ho : e.MinOverVars)
     (hb : ∀ v ∈ e.vars, (Env.lookup v σ).isSome) {t : Term} (ht : e.eval σ = some t)
-    {V' : Set (Term × Term)} (hV' : Action.writes σ (encodeBuildWith {} e) = some V') :
+    {V' : Set (Term × Term)} (hV' : Action.writes σ (encodeBuildWith { subsumption := sub } e) = some V') :
     (∀ k p, (ufRowT k p, ufRowT k p) ∈ V' →
       k = p ∧ (Term.IsSubterm k t ∨ ∃ v, Env.lookup v σ = some k)) ∧
     (∀ q ∈ V', (∃ u, q = selfRow u) ∨ ∃ g us, q = nodeSelf g us ∧ selfRow (.app g us) ∈ V') ∧
     selfRow t ∈ V' ∧
     ∀ u, Term.IsSubterm u t →
-      (selfRow u ∈ V' ∧ ∀ g us, u = .app g us → nodeSelf g us ∈ V') ∨
+      (selfRow u ∈ V' ∧ ∀ g us, u = .app g us → sub = true → nodeSelf g us ∈ V') ∨
         ∃ v w, Env.lookup v σ = some w ∧ Term.IsSubterm u w := by
   obtain ⟨W, hW, hmem⟩ := build_writes e ho hb
   rw [hW] at hV'
   obtain rfl := Option.some.inj hV'
   refine ⟨fun k p hkp => ?_, fun q hq => ?_, (hmem _).mpr (Or.inl ⟨t, BuildTerm.self ho ht, rfl⟩),
     fun u hu => ?_⟩
-  · rcases (hmem _).mp hkp with ⟨u, hu, heq⟩ | ⟨g, us, _, heq⟩
+  · rcases (hmem _).mp hkp with ⟨u, hu, heq⟩ | ⟨g, us, _, _, heq⟩
     · obtain ⟨rfl, rfl⟩ := ufRowT_inj (Prod.mk.inj heq).1
       exact ⟨rfl, hu.subterm_or_bound ho ht⟩
     · exact (nodeName_ne_ufName g (Term.app.inj (Prod.mk.inj heq).1).1.symm).elim
-  · rcases (hmem q).mp hq with ⟨u, _, rfl⟩ | ⟨g, us, hn, rfl⟩
+  · rcases (hmem q).mp hq with ⟨u, _, rfl⟩ | ⟨g, us, hon, hn, rfl⟩
     · exact Or.inl ⟨u, rfl⟩
     · exact Or.inr ⟨g, us, rfl, (hmem _).mpr (Or.inl ⟨_, hn.buildTerm, rfl⟩)⟩
   · rcases subterm_build e ho ht hu with ⟨hbt, hn⟩ | ⟨v, _, w, hw, huw⟩
     · exact Or.inl ⟨(hmem _).mpr (Or.inl ⟨u, hbt, rfl⟩),
-        fun g us heq => (hmem _).mpr (Or.inr ⟨g, us, hn g us heq, rfl⟩)⟩
+        fun g us heq hon => (hmem _).mpr (Or.inr ⟨g, us, hon, hn g us heq, rfl⟩)⟩
     · exact Or.inr ⟨v, w, hw, huw⟩
 
 theorem mem_terms_of_subterm_eq {D : Database} {t u : Term} {q : Term × Term} (hq : q ∈ D.eqs)
@@ -404,8 +412,8 @@ theorem mem_terms_of_subterm_eq {D : Database} {t u : Term} {q : Term × Term} (
 with no marks. -/
 theorem build_headWrites {σ : Env} {e : Expr} (ho : e.MinOverVars)
     (hb : ∀ v ∈ e.vars, (Env.lookup v σ).isSome) {t : Term} (ht : e.eval σ = some t)
-    {W : Set (Term × Term)} (hW : Action.writes σ (encodeBuildWith {} e) = some W) :
-    HeadWrites σ {(t, t)} W ∅ := by
+    {W : Set (Term × Term)} (hW : Action.writes σ (encodeBuildWith { subsumption := sub } e) = some W) :
+    HeadWrites sub σ {(t, t)} W ∅ := by
   obtain ⟨hpair, hshape, hself, hcov⟩ := build_rows ho hb ht hW
   -- A build term is held once the value is asserted and the bindings are held.
   have hheld : ∀ k, (Term.IsSubterm k t ∨ ∃ v, Env.lookup v σ = some k) → ∀ D : Database,
@@ -435,10 +443,10 @@ theorem build_headWrites {σ : Env} {e : Expr} (ho : e.MinOverVars)
 
 /-- The compiled rows and marks of a source action. -/
 theorem action_headWrites {σ : Env} {a : Action} (ho : a.MinOverVars)
-    (hname : ∀ f es, a = .subsume f es → SourceName f)
+    (hname : ∀ f es, a = .subsume f es → SourceName f ∧ sub = true)
     (hb : ∀ v ∈ a.vars, (Env.lookup v σ).isSome) {V : Set (Term × Term)} {M : Set Term}
     (hV : a.write σ = some V) (hM : a.mark σ = some M) :
-    ∃ V', Action.writes σ (encodeActionWith {} a) = some V' ∧ HeadWrites σ V V' M := by
+    ∃ V', Action.writes σ (encodeActionWith { subsumption := sub } a) = some V' ∧ HeadWrites sub σ V V' M := by
   cases a with
   | expr e =>
     rw [Action.write] at hV
@@ -580,11 +588,11 @@ theorem action_headWrites {σ : Env} {a : Action} (ho : a.MinOverVars)
         subst hq
         rcases hu with hu | hu
         · exact (hcov₁ u hu).imp_left fun ⟨hs, hn⟩ =>
-            ⟨Or.inl (Or.inl hs), fun g us heq => Or.inl (Or.inl (hn g us heq))⟩
+            ⟨Or.inl (Or.inl hs), fun g us heq hon => Or.inl (Or.inl (hn g us heq hon))⟩
         · exact (hcov₂ u hu).imp_left fun ⟨hs, hn⟩ =>
-            ⟨Or.inl (Or.inr hs), fun g us heq => Or.inl (Or.inr (hn g us heq))⟩
+            ⟨Or.inl (Or.inr hs), fun g us heq hon => Or.inl (Or.inr (hn g us heq hon))⟩
   | subsume f es =>
-    have hf : SourceName f := hname f es rfl
+    obtain ⟨hf, rfl⟩ := hname f es rfl
     rw [Action.write] at hV
     rw [Action.mark] at hM
     obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp hV
@@ -596,7 +604,7 @@ theorem action_headWrites {σ : Env} {a : Action} (ho : a.MinOverVars)
     obtain ⟨W, hW, hmem⟩ := build_writes (.app f es) ho hbe
     have hh := build_headWrites ho hbe hev hW
     obtain ⟨hrows, -, hself, hcov⟩ := build_rows ho hbe hev hW
-    have hnode : nodeSelf f ts ∈ W := (hmem _).mpr (Or.inr ⟨f, ts, .self hts, rfl⟩)
+    have hnode : nodeSelf f ts ∈ W := (hmem _).mpr (Or.inr ⟨f, ts, rfl, .self hts, rfl⟩)
     have hmarker : Action.writes σ [.subsume f es, .expr (subRow f es)] =
         some ({(t, t)} ∪ ({(subRowT f ts, subRowT f ts)} ∪ ∅)) := by
       simp [Action.writes, Action.write, hts, subRow, ht]
@@ -606,7 +614,10 @@ theorem action_headWrites {σ : Env} {a : Action} (ho : a.MinOverVars)
       rw [hQ]
       simp only [Set.mem_union, Set.mem_singleton_iff, Set.mem_empty_iff_false, or_false]
     refine ⟨W ∪ Q, ?_, ?_⟩
-    · rw [encodeAction_subsume, Action.writes_append, hW, Option.bind_some, hmarker,
+    · rw [encodeAction_subsume]
+      change Action.writes σ (encodeBuildWith { subsumption := true } (.app f es) ++
+        [.subsume f es, .expr (subRow f es)]) = _
+      rw [Action.writes_append, hW, Option.bind_some, hmarker,
         Option.map_some]
     -- The source row and the marker are no union-find rows.
     have hnotuf : ∀ k p, (ufRowT k p, ufRowT k p) ∈ Q → False := by
@@ -643,18 +654,18 @@ theorem action_headWrites {σ : Env} {a : Action} (ho : a.MinOverVars)
     · rw [Set.mem_singleton_iff] at hq
       subst hq
       exact (hcov u (hu.elim id id)).imp_left fun ⟨hs, hn⟩ =>
-        ⟨Or.inl hs, fun g us heq => Or.inl (hn g us heq)⟩
+        ⟨Or.inl hs, fun g us heq hon => Or.inl (hn g us heq hon)⟩
     · rw [Set.mem_singleton_iff] at hu
       subst hu
       exact ⟨f, ts, rfl, Or.inr ((hQmem _).mpr (Or.inr rfl)), Or.inl hself, rfl⟩
 
 /-- The compiled rows and marks of a head. -/
 theorem actions_headWrites {σ : Env} : ∀ {as : List Action}, Actions.MinOverVars as →
-    (∀ a ∈ as, ∀ f es, a = .subsume f es → SourceName f) →
+    (∀ a ∈ as, ∀ f es, a = .subsume f es → SourceName f ∧ sub = true) →
     (∀ a ∈ as, ∀ v ∈ a.vars, (Env.lookup v σ).isSome) →
     ∀ {V : Set (Term × Term)} {M : Set Term}, Action.writes σ as = some V →
     Action.marks σ as = some M →
-    ∃ V', Action.writes σ (encodeActionsWith {} as) = some V' ∧ HeadWrites σ V V' M
+    ∃ V', Action.writes σ (encodeActionsWith { subsumption := sub } as) = some V' ∧ HeadWrites sub σ V V' M
   | [], _, _, _, V, M, hV, hM => by
       rw [Action.writes] at hV
       rw [Action.marks] at hM
@@ -705,44 +716,45 @@ theorem marks_subset_runMarks' {R : List Rule} {db : Database} {r : Rule} (hr : 
     (hX : Action.marks σ r.actions = some X) : X ⊆ RunMarks R db :=
   fun _ ht => mem_runMarks_iff.mpr ⟨r, hr, σ, X, hσ, hX, ht⟩
 
-/-- The conditions on a source rule the round correspondence uses. -/
-structure RuleOk (r : Rule) : Prop where
+/-- The conditions on a source rule the round correspondence uses. A source subsume
+requires enabled subsumption; this clause rules out source marks in plain mode. -/
+structure RuleOk (sub : Bool) (r : Rule) : Prop where
   query : QueryOk r.query
   keyed : Query.VarsKeyed r.query
   heads : r.HeadScoped
   minOverVars : Actions.MinOverVars r.actions
-  names : ∀ a ∈ r.actions, ∀ f es, a = .subsume f es → SourceName f
+  names : ∀ a ∈ r.actions, ∀ f es, a = .subsume f es → SourceName f ∧ sub = true
 
 theorem encodeRule_query (r : Rule) :
-    (encodeRuleWith {} r).query = (encodeQueryWith {} r.query 0).1 := rfl
+    (encodeRuleWith { subsumption := sub } r).query = (encodeQueryWith {} r.query 0).1 := rfl
 
 theorem encodeRule_actions (r : Rule) :
-    (encodeRuleWith {} r).actions = encodeActionsWith {} r.actions := rfl
+    (encodeRuleWith { subsumption := sub } r).actions = encodeActionsWith { subsumption := sub } r.actions := rfl
 
 /-- A firing of a source rule, with its source writes and marks and its compiled rows. The
 compiled head marks exactly the rows the source head marks. -/
-structure Firing (src d : Database) (R : List Rule) (r : Rule) (σ : Env)
+structure Firing (sub : Bool) (src d : Database) (R : List Rule) (r : Rule) (σ : Env)
     (V V' : Set (Term × Term)) (M : Set Term) : Prop where
   mem : r ∈ R
   qmatch : QueryMatches src r.query σ
   writes : Action.writes σ r.actions = some V
   marks : Action.marks σ r.actions = some M
-  compiled : Action.writes σ (encodeActionsWith {} r.actions) = some V'
-  head : HeadWrites σ V V' M
+  compiled : Action.writes σ (encodeActionsWith { subsumption := sub } r.actions) = some V'
+  head : HeadWrites sub σ V V' M
   src_sub : V ⊆ RunWrites R src
   src_marks : M ⊆ RunMarks R src
-  tgt_sub : V' ⊆ RunWrites (R.map (encodeRuleWith {})) d
-  tgt_marks : M ⊆ RunMarks (R.map (encodeRuleWith {})) d
+  tgt_sub : V' ⊆ RunWrites (R.map (encodeRuleWith { subsumption := sub })) d
+  tgt_marks : M ⊆ RunMarks (R.map (encodeRuleWith { subsumption := sub })) d
 
 variable {src d : Database}
 
 /-- Every source firing at a canonical state has a compiled firing with the same source
 bindings. -/
-theorem firing_data (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
-    (hR : ∀ r ∈ R, RuleOk r)
+theorem firing_data (h : Rel sub src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
+    (hR : ∀ r ∈ R, RuleOk sub r)
     (hfire : ∀ r ∈ R, ∀ σ, QueryMatches src r.query σ → ∃ W, Action.writes σ r.actions = some W)
     {r : Rule} (hr : r ∈ R) {σ : Env} (hσ : QueryMatches src r.query σ) :
-    ∃ V V' M, Firing src d R r σ V V' M := by
+    ∃ V V' M, Firing sub src d R r σ V V' M := by
   have hok := hR r hr
   obtain ⟨V, hV⟩ := hfire r hr σ hσ
   obtain ⟨M, hM⟩ : ∃ M, Action.marks σ r.actions = some M := by
@@ -754,7 +766,7 @@ theorem firing_data (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
     apply Env.lookup_isSome_iff_mem_dom.mpr
     exact hσ.1.1.mem_iff.mpr (Actions.vars_subset_of_scoped hok.heads a ha v hv)
   obtain ⟨V', hV', hhead⟩ := actions_headWrites hok.minOverVars hok.names hbound hV hM
-  obtain ⟨M', hM'⟩ : ∃ M', Action.marks σ (encodeActionsWith {} r.actions) = some M' := by
+  obtain ⟨M', hM'⟩ : ∃ M', Action.marks σ (encodeActionsWith { subsumption := sub } r.actions) = some M' := by
     apply Option.isSome_iff_exists.mp
     rw [Action.marks_isSome, hV']
     rfl
@@ -765,23 +777,23 @@ theorem firing_data (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
     fun a ha v hv => hag v (Actions.vars_subset_of_scoped hok.heads a ha v hv)
   refine ⟨V, V', M, hr, hσ, hV, hM, hV', hhead, writes_subset_runWrites' hr hσ hV,
     marks_subset_runMarks' hr hσ hM, ?_, ?_⟩
-  · have hmem : encodeRuleWith {} r ∈ R.map (encodeRuleWith {}) := List.mem_map_of_mem hr
-    have hW' : Action.writes σ' (encodeRuleWith {} r).actions = some V' := by
+  · have hmem : encodeRuleWith { subsumption := sub } r ∈ R.map (encodeRuleWith { subsumption := sub }) := List.mem_map_of_mem hr
+    have hW' : Action.writes σ' (encodeRuleWith { subsumption := sub } r).actions = some V' := by
       rw [encodeRule_actions, actions_writes_agreeOn r.actions hag']
       exact hV'
     exact writes_subset_runWrites' hmem hσ' hW'
-  · have hmem : encodeRuleWith {} r ∈ R.map (encodeRuleWith {}) := List.mem_map_of_mem hr
-    have hX' : Action.marks σ' (encodeRuleWith {} r).actions = some M := by
+  · have hmem : encodeRuleWith { subsumption := sub } r ∈ R.map (encodeRuleWith { subsumption := sub }) := List.mem_map_of_mem hr
+    have hX' : Action.marks σ' (encodeRuleWith { subsumption := sub } r).actions = some M := by
       rw [encodeRule_actions, actions_marks_agreeOn r.actions hag']
       exact hM'
     exact marks_subset_runMarks' hmem hσ' hX'
 
 /-- Every compiled write comes from a source firing. -/
-theorem firing_of_compiled (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
-    (hR : ∀ r ∈ R, RuleOk r)
+theorem firing_of_compiled (h : Rel sub src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
+    (hR : ∀ r ∈ R, RuleOk sub r)
     (hfire : ∀ r ∈ R, ∀ σ, QueryMatches src r.query σ → ∃ W, Action.writes σ r.actions = some W)
-    {q : Term × Term} (hq : q ∈ RunWrites (R.map (encodeRuleWith {})) d) :
-    ∃ r σ V V' M, Firing src d R r σ V V' M ∧ q ∈ V' := by
+    {q : Term × Term} (hq : q ∈ RunWrites (R.map (encodeRuleWith { subsumption := sub })) d) :
+    ∃ r σ V V' M, Firing sub src d R r σ V V' M ∧ q ∈ V' := by
   obtain ⟨r', hr', σ', W', hσ', hW', hqW⟩ := mem_runWrites_iff.mp hq
   obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hr'
   have hok := hR r hr
@@ -791,7 +803,7 @@ theorem firing_of_compiled (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : Lis
   have hag' : ∀ a ∈ r.actions, ∀ v ∈ a.vars,
       Env.lookup v (restrict (Query.vars r.query) σ') = Env.lookup v σ' :=
     fun a ha v hv => hag v (Actions.vars_subset_of_scoped hok.heads a ha v hv)
-  have hV' : Action.writes σ' (encodeActionsWith {} r.actions) = some V' := by
+  have hV' : Action.writes σ' (encodeActionsWith { subsumption := sub } r.actions) = some V' := by
     rw [← actions_writes_agreeOn r.actions hag']
     exact hf.compiled
   rw [encodeRule_actions, hV'] at hW'
@@ -799,11 +811,11 @@ theorem firing_of_compiled (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : Lis
   exact ⟨r, _, V, V', M, hf, hqW⟩
 
 /-- Every compiled mark comes from a source firing. -/
-theorem firing_of_compiled_mark (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
-    (hR : ∀ r ∈ R, RuleOk r)
+theorem firing_of_compiled_mark (h : Rel sub src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
+    (hR : ∀ r ∈ R, RuleOk sub r)
     (hfire : ∀ r ∈ R, ∀ σ, QueryMatches src r.query σ → ∃ W, Action.writes σ r.actions = some W)
-    {t : Term} (ht : t ∈ RunMarks (R.map (encodeRuleWith {})) d) :
-    ∃ r σ V V' M, Firing src d R r σ V V' M ∧ t ∈ M := by
+    {t : Term} (ht : t ∈ RunMarks (R.map (encodeRuleWith { subsumption := sub })) d) :
+    ∃ r σ V V' M, Firing sub src d R r σ V V' M ∧ t ∈ M := by
   obtain ⟨r', hr', σ', X', hσ', hX', htX⟩ := mem_runMarks_iff.mp ht
   obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hr'
   have hok := hR r hr
@@ -814,7 +826,7 @@ theorem firing_of_compiled_mark (h : Rel src d) (hc : Canon d) (hw : src.WF) {R 
       Env.lookup v (restrict (Query.vars r.query) σ') = Env.lookup v σ' :=
     fun a ha v hv => hag v (Actions.vars_subset_of_scoped hok.heads a ha v hv)
   obtain ⟨M', hM'⟩ : ∃ M', Action.marks (restrict (Query.vars r.query) σ')
-      (encodeActionsWith {} r.actions) = some M' := by
+      (encodeActionsWith { subsumption := sub } r.actions) = some M' := by
     apply Option.isSome_iff_exists.mp
     rw [Action.marks_isSome, hf.compiled]
     rfl
@@ -826,11 +838,11 @@ theorem firing_of_compiled_mark (h : Rel src d) (hc : Canon d) (hw : src.WF) {R 
   exact ⟨r, _, V, V', M, hf, htX⟩
 
 /-- Every source write comes from a firing with compiled rows. -/
-theorem firing_of_source (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
-    (hR : ∀ r ∈ R, RuleOk r)
+theorem firing_of_source (h : Rel sub src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
+    (hR : ∀ r ∈ R, RuleOk sub r)
     (hfire : ∀ r ∈ R, ∀ σ, QueryMatches src r.query σ → ∃ W, Action.writes σ r.actions = some W)
     {q : Term × Term} (hq : q ∈ RunWrites R src) :
-    ∃ r σ V V' M, Firing src d R r σ V V' M ∧ q ∈ V := by
+    ∃ r σ V V' M, Firing sub src d R r σ V V' M ∧ q ∈ V := by
   obtain ⟨r, hr, σ, W, hσ, hW, hqW⟩ := mem_runWrites_iff.mp hq
   obtain ⟨V, V', M, hf⟩ := firing_data h hc hw hR hfire hr hσ
   rw [hf.writes] at hW
@@ -838,11 +850,11 @@ theorem firing_of_source (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List 
   exact ⟨r, σ, V, V', M, hf, hqW⟩
 
 /-- Every source mark comes from a firing with compiled rows. -/
-theorem firing_of_source_mark (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
-    (hR : ∀ r ∈ R, RuleOk r)
+theorem firing_of_source_mark (h : Rel sub src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
+    (hR : ∀ r ∈ R, RuleOk sub r)
     (hfire : ∀ r ∈ R, ∀ σ, QueryMatches src r.query σ → ∃ W, Action.writes σ r.actions = some W)
     {t : Term} (ht : t ∈ RunMarks R src) :
-    ∃ r σ V V' M, Firing src d R r σ V V' M ∧ t ∈ M := by
+    ∃ r σ V V' M, Firing sub src d R r σ V V' M ∧ t ∈ M := by
   obtain ⟨r, hr, σ, X, hσ, hX, htX⟩ := mem_runMarks_iff.mp ht
   obtain ⟨V, V', M, hf⟩ := firing_data h hc hw hR hfire hr hσ
   rw [hf.marks] at hX
@@ -850,49 +862,49 @@ theorem firing_of_source_mark (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : 
   exact ⟨r, σ, V, V', M, hf, htX⟩
 
 /-- A source run and its compiled run preserve the relation. -/
-theorem run_rel (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
-    (hR : ∀ r ∈ R, RuleOk r)
+theorem run_rel (h : Rel sub src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
+    (hR : ∀ r ∈ R, RuleOk sub r)
     (hfire : ∀ r ∈ R, ∀ σ, QueryMatches src r.query σ → ∃ W, Action.writes σ r.actions = some W)
     (havoid : ∀ t ∈ (RunRules R src).terms, t.SourceShaped) :
-    Rel (RunRules R src) (RunRules (R.map (encodeRuleWith {})) d) := by
+    Rel sub (RunRules R src) (RunRules (R.map (encodeRuleWith { subsumption := sub })) d) := by
   set src' := RunRules R src with hsrc'
-  set d' := RunRules (R.map (encodeRuleWith {})) d with hd'
+  set d' := RunRules (R.map (encodeRuleWith { subsumption := sub })) d with hd'
   have hseqs : src'.eqs = src.eqs ∪ RunWrites R src := by rw [hsrc', RunRules.eq_pair]
   have hssub : src'.subsumed = src.subsumed ∪ RunMarks R src := by rw [hsrc', RunRules.eq_pair]
-  have hdeqs : d'.eqs = d.eqs ∪ RunWrites (R.map (encodeRuleWith {})) d := by
+  have hdeqs : d'.eqs = d.eqs ∪ RunWrites (R.map (encodeRuleWith { subsumption := sub })) d := by
     rw [hd', RunRules.eq_pair]
-  have hdsub : d'.subsumed = d.subsumed ∪ RunMarks (R.map (encodeRuleWith {})) d := by
+  have hdsub : d'.subsumed = d.subsumed ∪ RunMarks (R.map (encodeRuleWith { subsumption := sub })) d := by
     rw [hd', RunRules.eq_pair]
   have hdmono : d.eqs ⊆ d'.eqs := hdeqs ▸ Set.subset_union_left
   have hsmono : src.eqs ⊆ src'.eqs := hseqs ▸ Set.subset_union_left
   have hsrcW : RunWrites R src ⊆ src'.eqs := hseqs ▸ Set.subset_union_right
-  have hdW : RunWrites (R.map (encodeRuleWith {})) d ⊆ d'.eqs := hdeqs ▸ Set.subset_union_right
+  have hdW : RunWrites (R.map (encodeRuleWith { subsumption := sub })) d ⊆ d'.eqs := hdeqs ▸ Set.subset_union_right
   have hkeys_mono : Keys d ⊆ Keys d' := Keys.mono hdmono
   -- A new equation of the compiled state comes from a firing.
   have hnew : ∀ q ∈ d'.eqs, q ∈ d.eqs ∨
-      ∃ r σ V V' M, Firing src d R r σ V V' M ∧ q ∈ V' := by
+      ∃ r σ V V' M, Firing sub src d R r σ V V' M ∧ q ∈ V' := by
     intro q hq
-    have : q ∈ d.eqs ∪ RunWrites (R.map (encodeRuleWith {})) d := hdeqs ▸ hq
+    have : q ∈ d.eqs ∪ RunWrites (R.map (encodeRuleWith { subsumption := sub })) d := hdeqs ▸ hq
     rcases this with hq | hq
     · exact Or.inl hq
     · exact Or.inr (firing_of_compiled h hc hw hR hfire hq)
   -- The bindings of a firing are source representatives, held before and after the round.
   have hbind : ∀ {r : Rule} {σ : Env} {V V' : Set (Term × Term)} {M : Set Term},
-      Firing src d R r σ V V' M → ∀ v w, Env.lookup v σ = some w → w ∈ src'.terms :=
+      Firing sub src d R r σ V V' M → ∀ v w, Env.lookup v σ = some w → w ∈ src'.terms :=
     fun hf v w hvw =>
       Database.mem_terms_of_eqs hsmono (hf.qmatch.1.2 (v, w) (Env.mem_of_lookup hvw)).1
   -- A mark of a firing is a source-shaped term the source holds afterwards.
   have hmarkTerm : ∀ {r : Rule} {σ : Env} {V V' : Set (Term × Term)} {M : Set Term},
-      Firing src d R r σ V V' M → ∀ t ∈ M, t ∈ src'.terms ∧ t.SourceShaped := by
+      Firing sub src d R r σ V V' M → ∀ t ∈ M, t ∈ src'.terms ∧ t.SourceShaped := by
     intro r σ V V' M hf t ht
     obtain ⟨f, as, rfl, -, -, hv⟩ := hf.head.marks t ht
     have hmem : Term.app f as ∈ src'.terms := (mem_terms_of_mem_eqs (hsrcW (hf.src_sub hv))).1
     exact ⟨hmem, havoid _ hmem⟩
   -- The kinds of new equations.
   have hrow : ∀ k p, Row d' k p → Row d k p ∨
-      ∃ r σ V V' M, Firing src d R r σ V V' M ∧ (ufRowT k p, ufRowT k p) ∈ V' := fun k p hr => hnew _ hr
+      ∃ r σ V V' M, Firing sub src d R r σ V V' M ∧ (ufRowT k p, ufRowT k p) ∈ V' := fun k p hr => hnew _ hr
   have hnode_new : ∀ f as, Node d' f as → Node d f as ∨
-      ∃ r σ V V' M, Firing src d R r σ V V' M ∧ selfRow (.app f as) ∈ V' := by
+      ∃ r σ V V' M, Firing sub src d R r σ V V' M ∧ selfRow (.app f as) ∈ V' := by
     intro f as hn
     rcases hnew _ hn with hn | ⟨r, σ, V, V', M, hf, hV'⟩
     · exact Or.inl hn
@@ -906,7 +918,7 @@ theorem run_rel (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
       · exact (subName_ne_nodeName g f (Term.app.inj (Prod.mk.inj heq).1).1.symm).elim
       · exact (Term.SourceShaped.ne_nodeRowT (hmarkTerm hf t ht).2 f as (Prod.mk.inj heq).1.symm).elim
   have hmarker_new : ∀ f as, Marker d' f as → Marker d f as ∨
-      ∃ r σ V V' M, Firing src d R r σ V V' M ∧ Term.app f as ∈ M := by
+      ∃ r σ V V' M, Firing sub src d R r σ V V' M ∧ Term.app f as ∈ M := by
     intro f as hm
     rcases hnew _ hm with hm | ⟨r, σ, V, V', M, hf, hV'⟩
     · exact Or.inl hm
@@ -938,8 +950,8 @@ theorem run_rel (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
       exact ⟨hdW (hf.tgt_sub h₁), hdW (hf.tgt_sub h₂)⟩
   -- Every new source term is covered by a compiled self-loop and node row.
   have hcover : ∀ t ∈ src'.terms, t ∈ src.terms ∨
-      ∃ r σ V V' M, Firing src d R r σ V V' M ∧ selfRow t ∈ V' ∧
-        ∀ g us, t = .app g us → nodeSelf g us ∈ V' := by
+      ∃ r σ V V' M, Firing sub src d R r σ V V' M ∧ selfRow t ∈ V' ∧
+        ∀ g us, t = .app g us → sub = true → nodeSelf g us ∈ V' := by
     intro t ht
     obtain ⟨q, hq, hsub⟩ := ht
     have : q ∈ src.eqs ∪ RunWrites R src := hseqs ▸ hq
@@ -958,18 +970,19 @@ theorem run_rel (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
       rcases hcover t ht with ht | ⟨r, σ, V, V', M, hf, hself', -⟩
       · exact hkeys_mono (h.mem_keys_of_src ht)
       · exact ⟨t, hdW (hf.tgt_sub hself')⟩
-  have hnodes : ∀ f as, Node d' f as ↔ Term.app f as ∈ Keys d' := by
+  have hnodes : ∀ f as, (Node d' f as → Term.app f as ∈ Keys d') ∧
+      (Term.app f as ∈ Keys d' → sub = true → Node d' f as) := by
     intro f as
     constructor
     · intro hn
       rcases hnode_new f as hn with hn | ⟨r, σ, V, V', M, hf, hs⟩
       · exact hkeys_mono (h.shape.nodes f as hn)
       · exact ⟨_, hdW (hf.tgt_sub hs)⟩
-    · intro hk
+    · intro hk hon
       rw [hkeys] at hk
       rcases hcover _ hk with ht | ⟨r, σ, V, V', M, hf, -, hn⟩
-      · exact (h.nodes f as (h.mem_keys_of_src ht)).mono hdmono
-      · exact hdW (hf.tgt_sub (hn f as rfl))
+      · exact (h.nodes f as (h.mem_keys_of_src ht) hon).mono hdmono
+      · exact hdW (hf.tgt_sub (hn f as rfl hon))
   have hmarker : ∀ f as, Marker d' f as ↔ Term.app f as ∈ src'.subsumed := by
     intro f as
     rw [hssub]
@@ -993,7 +1006,7 @@ theorem run_rel (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
       exact ⟨_, hdW (hf.tgt_sub hs)⟩
   have hshape : Shape d' := by
     refine ⟨fun q hq => ?_, fun k hk => havoid k (hkeys ▸ hk), fun k p hr => ?_,
-      fun f as hn => (hnodes f as).mp hn, hmarker_key⟩
+      fun f as hn => (hnodes f as).1 hn, hmarker_key⟩
     · rcases hnew q hq with hq | ⟨r, σ, V, V', M, hf, hqV⟩
       · rcases h.shape.eqs q hq with hq | hq | hq | ⟨t, rfl, ht⟩
         · exact Or.inl hq
@@ -1025,7 +1038,7 @@ theorem run_rel (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
       · exact Cong.mono_eqs hsmono ((h.cong q.1 q.2).mpr hr.cong_view)
       · exact hf.head.cong q.1 q.2 hkp src' (hf.src_sub.trans hsrcW) (hbind hf)
   -- A new mark is a source row; no new union-find row is marked.
-  have hnewmark : ∀ t ∈ RunMarks (R.map (encodeRuleWith {})) d,
+  have hnewmark : ∀ t ∈ RunMarks (R.map (encodeRuleWith { subsumption := sub })) d,
       ∃ f as, t = Term.app f as ∧ Term.app f as ∈ Keys d' ∧ Marker d' f as ∧
         CongList src' as as := by
     intro t ht
@@ -1066,7 +1079,19 @@ theorem run_rel (h : Rel src d) (hc : Canon d) (hw : src.WF) {R : List Rule}
       · exact hf.head.down k p hkp
     selfLoop := hself
     keys := hkeys
-    nodes := fun f as hk => (hnodes f as).mpr hk
+    nodes := fun f as hk => (hnodes f as).2 hk
+    plain := by
+      intro hoff
+      rw [hssub, h.plain hoff]
+      have hsf : ∀ r ∈ R, Actions.SubsumeFree r.actions := by
+        intro r hr a ha
+        cases a with
+        | expr e => trivial
+        | union a b => trivial
+        | subsume f es =>
+          have hon := ((hR r hr).names _ ha f es rfl).2
+          simp [hoff] at hon
+      rw [RunMarks.eq_empty hsf, Set.union_empty]
     marker := hmarker
     cong := hcong
     liveCong := by

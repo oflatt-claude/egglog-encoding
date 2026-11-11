@@ -13,9 +13,9 @@ bodies are resolved by the parser, which expands a run of a ruleset into a run o
 registered in it so far; the emitter does the reverse with one ruleset per run. The
 congruence compiler emits no merge function. Its union-find table, `@UF(key, parent)`,
 is a relation, and every change to an edge is a rule that subsumes the stale row and writes
-its replacement. Each constructor also has a permanent node relation and a subsumption
-marker relation. Two language features support this: a `subsume` action and a disequality
-pattern `e ≠ e`. Source rules may subsume rows, and rules and the final check may test
+its replacement. For sources containing `subsume`, each constructor also has a permanent
+node relation and a subsumption marker relation. Two language features support this:
+a `subsume` action and a disequality pattern `e ≠ e`. Source rules may subsume rows, and rules and the final check may test
 disequalities. `Program.Fragment` requires names outside the generated `@` namespace,
 encodable queries, scoped heads, consistent constructor arities and unions that cannot
 receive literals. Minima over query variables are supported when the program has no
@@ -64,8 +64,15 @@ saturation; otherwise rules and the check are ordering-free.
 ### Rules
 
 Source terms are their own ids: the target holds every term the source built, as the key
-of its union-find self-loop, and never equates two distinct terms. With `m = min b c` in
-the model's term order (egglog: `ordering-min`), the generated maintenance rules are
+of its union-find self-loop, and never equates two distinct terms. The default `encode P`
+sets `Options.subsumption` to `!P.schedule.subsumeFreeB`.
+Without source subsumption, builds write only self-loops, `Cong_f` reads `f(ā)` and
+`f(b̄)` directly and joins `@UF(f(ā), y)` and `@UF(f(b̄), z)`, and maintenance contains
+only Compress, Collide and constructor congruence. No node or marker relations are emitted.
+This is the encoding displayed in the paper.
+
+With source subsumption enabled and `m = min b c` in the model's term order
+(egglog: `ordering-min`), the generated maintenance rules are
 
 | Origin | Query | Actions |
 | --- | --- | --- |
@@ -89,7 +96,8 @@ already has a parent produces a collision one level up, so unions still meet at 
 The congruence rule of a constructor matches two of its applications whose children have
 the same parents and links the larger of their roots under the smaller. It fires only
 while the roots differ, and the subsequent collision and compression make the two roots
-one. A nullary constructor has one application and needs only its subsumption rule.
+one. A nullary constructor has one application and needs only its subsumption rule when
+subsumption is enabled; plain mode generates no maintenance rule for it.
 
 A source `run R` compiles to the run of the compiled rules followed by a saturation of the
 maintenance rules; `S; S` and `saturate S` compile structurally, so every pass of a
@@ -120,8 +128,9 @@ writes the self-loops of both operands of a `min`, which are keys already.
 
 ### Views as an optimization
 
-`Congruence.Options` turns the optimizations on: `views := .naive` derives a canonical
-node view `@fView(leaders…, leader)` from the terms and the union-find each rebuild round
+`Congruence.Options` selects the encoding and optimizations: `subsumption := true` can
+explicitly retain permanent nodes even for a subsume-free source; `views := .naive` derives
+a canonical node view `@fView(leaders…, leader)` from the terms and the union-find each rebuild round
 and subsumes stale rows. `views := .indexed` writes a node's row with the node and indexes
 its column values with `@HasChild(view row, column value)`. Maintenance joins this index
 with union-find edges to update a row when a column gains a parent. With either view mode,
@@ -129,7 +138,11 @@ compiled queries read one view row per application, and congruence detection rea
 at one key. `phased := true` saturates the union-find rules before the term rules inside
 each rebuild. `difftest congruence 64 --views=indexed --phased`
 and `DIFFTEST_OPTIONS="--views=indexed --phased" semantics/compiled-difftest.sh` check
-that the optimized compilations agree with the source and with egglog.
+that the optimized compilations agree with the source and with egglog. `--subsumption`
+forces node compilation for subsume-free cases in those same entrypoints; the default
+corpus gates already exercise plain sources and sources that require subsumption. The
+provenance and resugaring gates also rerun subsume-free sources with nodes explicitly
+enabled, checking both encodings even within the checker's subsume-free fragment.
 
 The views materialize the joins of compiled queries for programs without source
 subsumption. `Options.forProgram` selects the explicit node-and-marker encoding when a
@@ -360,10 +373,11 @@ necessity, and rejection of a rule firing whose constructor premise never existe
 
 ### Simulation with subsumption
 
-`Rel src d` records that union-find keys are the stored source terms, every application
-has a permanent node row, and `Marker d f ā` holds exactly for the source's subsumed
-spellings. A compiled mark either retires a stale union-find edge with a smaller
-replacement, or hides a source application whose children are congruent to a marker's.
+`Rel subsumption src d` records that union-find keys are the stored source terms, every
+application has a permanent node row when subsumption is enabled, and `Marker d f ā` holds
+exactly for the source's subsumed spellings. In plain mode the source subsumption set is empty, so marker clauses are
+vacuous and every held source application is live. A compiled mark either retires a stale
+union-find edge with a smaller replacement, or hides a source application whose children are congruent to a marker's.
 At `Canon d`, the converse holds too: every held application with such a marker is
 subsumed. Hence compiled application reads agree with source live rows. The source round
 correspondence transports marks by constructor and congruent children; maintenance keeps

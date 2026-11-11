@@ -5,12 +5,14 @@ import EgglogSemantics.Proofs.Writes
 import EgglogSemantics.Proofs.Diagonal
 
 /-! The writes of a compiled head: a build writes the self-loop of every subexpression's
-value, including both operands of a `min`, and the node row of every application it
-spells; a union adds the two edges to the smaller side. Each compiled row is between
+value, including both operands of a `min`, and, when enabled, the node row of every
+application it spells; a union adds the two edges to the smaller side. Each compiled row is between
 congruent source terms, goes down the term order, comes with the self-loops of its
 endpoints, and every source write is derivable from the compiled rows. -/
 
 namespace Egglog.Congruence
+
+variable {sub : Bool}
 
 /-- A variable of an argument is a variable of the list. -/
 theorem var_mem_varsList_of_mem {v : Var} {e : Expr} : ∀ {es : List Expr}, e ∈ es →
@@ -206,15 +208,16 @@ abbrev selfRow (u : Term) : Term × Term := (ufRowT u u, ufRowT u u)
 /-- The node row of an application, as an equation. -/
 abbrev nodeSelf (f : FnName) (as : List Term) : Term × Term := (nodeRowT f as, nodeRowT f as)
 
-theorem build_lit (l : Lit) : encodeBuildWith {} (.lit l) = [.expr (ufRow (.lit l) (.lit l))] := rfl
-theorem build_var (v : Var) : encodeBuildWith {} (.var v) = [.expr (ufRow (.var v) (.var v))] := rfl
-theorem build_app (f : FnName) (args : List Expr) : encodeBuildWith {} (.app f args) =
-    encodeBuildArgsWith {} args ++
-      [.expr (nodeRow f args), .expr (ufRow (.app f args) (.app f args))] := by
-  simp [encodeBuildWith]
-theorem buildArgs_nil : encodeBuildArgsWith {} [] = [] := rfl
+theorem build_lit (l : Lit) : encodeBuildWith { subsumption := sub } (.lit l) = [.expr (ufRow (.lit l) (.lit l))] := rfl
+theorem build_var (v : Var) : encodeBuildWith { subsumption := sub } (.var v) = [.expr (ufRow (.var v) (.var v))] := rfl
+theorem build_app (f : FnName) (args : List Expr) : encodeBuildWith { subsumption := sub } (.app f args) =
+    encodeBuildArgsWith { subsumption := sub } args ++
+      ((if sub then [.expr (nodeRow f args)] else []) ++
+        [.expr (ufRow (.app f args) (.app f args))]) := by
+  simp [encodeBuildWith, List.append_assoc]
+theorem buildArgs_nil : encodeBuildArgsWith { subsumption := sub } [] = [] := rfl
 theorem buildArgs_cons (e : Expr) (es : List Expr) :
-    encodeBuildArgsWith {} (e :: es) = encodeBuildWith {} e ++ encodeBuildArgsWith {} es := rfl
+    encodeBuildArgsWith { subsumption := sub } (e :: es) = encodeBuildWith { subsumption := sub } e ++ encodeBuildArgsWith { subsumption := sub } es := rfl
 
 theorem write_ufRow {σ : Env} {a b : Expr} {s t : Term} (ha : a.eval σ = some s)
     (hb : b.eval σ = some t) :
@@ -251,19 +254,19 @@ theorem write_nodeRow {σ : Env} {f : FnName} {args : List Expr} {ts : List Term
 
 mutual
 
-/-- A build writes exactly the self-loops of its build terms and the node rows of the
-applications it spells. -/
+/-- A build writes exactly the self-loops of its build terms and, when subsumption is
+enabled, the node rows of the applications it spells. -/
 theorem build_writes {σ : Env} : ∀ (e : Expr), e.MinOverVars →
     (∀ v ∈ e.vars, (Env.lookup v σ).isSome) →
-    ∃ W, Action.writes σ (encodeBuildWith {} e) = some W ∧
+    ∃ W, Action.writes σ (encodeBuildWith { subsumption := sub } e) = some W ∧
       ∀ q, q ∈ W ↔ (∃ u, BuildTerm σ e u ∧ q = selfRow u) ∨
-        ∃ g us, AppBuild σ e g us ∧ q = nodeSelf g us
+        ∃ g us, sub = true ∧ AppBuild σ e g us ∧ q = nodeSelf g us
   | .lit l, _, _ => by
       refine ⟨{selfRow (.lit l)}, writes_ufRow rfl rfl, fun q => ?_⟩
       simp only [Set.mem_singleton_iff]
       constructor
       · rintro rfl; exact Or.inl ⟨_, .lit l, rfl⟩
-      · rintro (⟨u, hu, rfl⟩ | ⟨g, us, hb, rfl⟩)
+      · rintro (⟨u, hu, rfl⟩ | ⟨g, us, hon, hb, rfl⟩)
         · cases hu; rfl
         · cases hb
   | .var v, _, hb => by
@@ -272,7 +275,7 @@ theorem build_writes {σ : Env} : ∀ (e : Expr), e.MinOverVars →
       simp only [Set.mem_singleton_iff]
       constructor
       · rintro rfl; exact Or.inl ⟨t, .var ht, rfl⟩
-      · rintro (⟨u, hu, rfl⟩ | ⟨g, us, hb, rfl⟩)
+      · rintro (⟨u, hu, rfl⟩ | ⟨g, us, hon, hb, rfl⟩)
         · cases hu with
           | var hu => rw [Option.some.inj (hu.symm.trans ht)]
         · cases hb
@@ -285,38 +288,46 @@ theorem build_writes {σ : Env} : ∀ (e : Expr), e.MinOverVars →
         rw [Action.writes_append, hW₁, Option.bind_some, hW₂, Option.map_some]
       · simp only [Set.mem_union, hmem₁, hmem₂]
         constructor
-        · rintro ((⟨u, hu, rfl⟩ | ⟨g, us, hn, rfl⟩) | (⟨u, hu, rfl⟩ | ⟨g, us, hn, rfl⟩))
+        · rintro ((⟨u, hu, rfl⟩ | ⟨g, us, hon, hn, rfl⟩) | (⟨u, hu, rfl⟩ | ⟨g, us, hon, hn, rfl⟩))
           · exact Or.inl ⟨u, .min_left hu, rfl⟩
-          · exact Or.inr ⟨g, us, .min_left hn, rfl⟩
+          · exact Or.inr ⟨g, us, hon, .min_left hn, rfl⟩
           · exact Or.inl ⟨u, .min_right hu, rfl⟩
-          · exact Or.inr ⟨g, us, .min_right hn, rfl⟩
-        · rintro (⟨u, hu, rfl⟩ | ⟨g, us, hn, rfl⟩)
+          · exact Or.inr ⟨g, us, hon, .min_right hn, rfl⟩
+        · rintro (⟨u, hu, rfl⟩ | ⟨g, us, hon, hn, rfl⟩)
           · cases hu with
             | min_left h => exact Or.inl (Or.inl ⟨u, h, rfl⟩)
             | min_right h => exact Or.inr (Or.inl ⟨u, h, rfl⟩)
           · cases hn with
-            | min_left h => exact Or.inl (Or.inr ⟨g, us, h, rfl⟩)
-            | min_right h => exact Or.inr (Or.inr ⟨g, us, h, rfl⟩)
+            | min_left h => exact Or.inl (Or.inr ⟨g, us, hon, h, rfl⟩)
+            | min_right h => exact Or.inr (Or.inr ⟨g, us, hon, h, rfl⟩)
   | .app f args, ho, hb => by
       obtain ⟨W, hW, hmem⟩ := buildArgs_writes args (Expr.minOverVars_app ho) (by simpa using hb)
       obtain ⟨ts, hts⟩ := Expr.evalList_isSome args (fun v hv =>
         Env.lookup_isSome_iff_mem_dom.mp (hb v (by simpa using hv)))
       have hself : Action.writes σ
-          [.expr (nodeRow f args), .expr (ufRow (.app f args) (.app f args))] =
-          some ({nodeSelf f ts} ∪ {selfRow (.app f ts)}) := by
-        rw [Action.writes, write_nodeRow hts, Option.bind_some,
-          writes_ufRow (by rw [Expr.eval_app_ctor, hts]; rfl) (by rw [Expr.eval_app_ctor, hts]; rfl),
-          Option.map_some]
-      refine ⟨W ∪ ({nodeSelf f ts} ∪ {selfRow (.app f ts)}), ?_, fun q => ?_⟩
+          ((if sub then [.expr (nodeRow f args)] else []) ++
+            [.expr (ufRow (.app f args) (.app f args))]) =
+          some ({q | sub = true ∧ q = nodeSelf f ts} ∪ {selfRow (.app f ts)}) := by
+        cases sub
+        · simpa using writes_ufRow
+            (by rw [Expr.eval_app_ctor, hts]; rfl)
+            (by rw [Expr.eval_app_ctor, hts]; rfl)
+        · simp only [Bool.true_eq, ↓reduceIte, List.cons_append, List.nil_append]
+          rw [Action.writes, write_nodeRow hts, Option.bind_some,
+            writes_ufRow (by rw [Expr.eval_app_ctor, hts]; rfl)
+              (by rw [Expr.eval_app_ctor, hts]; rfl), Option.map_some]
+          simp
+      refine ⟨W ∪ ({q | sub = true ∧ q = nodeSelf f ts} ∪ {selfRow (.app f ts)}),
+        ?_, fun q => ?_⟩
       · rw [build_app, Action.writes_append, hW, Option.bind_some, hself, Option.map_some]
-      · simp only [Set.mem_union, Set.mem_singleton_iff, hmem]
+      · simp only [Set.mem_union, Set.mem_singleton_iff, Set.mem_setOf_eq, hmem]
         constructor
-        · rintro ((⟨e, he, u, hu, rfl⟩ | ⟨e, he, g, us, hn, rfl⟩) | rfl | rfl)
+        · rintro ((⟨e, he, u, hu, rfl⟩ | ⟨e, he, g, us, hon, hn, rfl⟩) | ⟨hon, rfl⟩ | rfl)
           · exact Or.inl ⟨u, .app_arg he hu, rfl⟩
-          · exact Or.inr ⟨g, us, .arg he hn, rfl⟩
-          · exact Or.inr ⟨f, ts, .self hts, rfl⟩
+          · exact Or.inr ⟨g, us, hon, .arg he hn, rfl⟩
+          · exact Or.inr ⟨f, ts, hon, .self hts, rfl⟩
           · exact Or.inl ⟨_, .app_self hts, rfl⟩
-        · rintro (⟨u, hu, rfl⟩ | ⟨g, us, hn, rfl⟩)
+        · rintro (⟨u, hu, rfl⟩ | ⟨g, us, hon, hn, rfl⟩)
           · cases hu with
             | app_self hts' =>
               right; right
@@ -325,14 +336,14 @@ theorem build_writes {σ : Env} : ∀ (e : Expr), e.MinOverVars →
           · cases hn with
             | self hts' =>
               right; left
-              rw [Option.some.inj (hts'.symm.trans hts)]
-            | arg he hn => exact Or.inl (Or.inr ⟨_, he, g, us, hn, rfl⟩)
+              exact ⟨hon, by rw [Option.some.inj (hts'.symm.trans hts)]⟩
+            | arg he hn => exact Or.inl (Or.inr ⟨_, he, g, us, hon, hn, rfl⟩)
 
 theorem buildArgs_writes {σ : Env} : ∀ (es : List Expr), Expr.MinOverVarsList es →
     (∀ v ∈ Expr.varsList es, (Env.lookup v σ).isSome) →
-    ∃ W, Action.writes σ (encodeBuildArgsWith {} es) = some W ∧
+    ∃ W, Action.writes σ (encodeBuildArgsWith { subsumption := sub } es) = some W ∧
       ∀ q, q ∈ W ↔ (∃ e ∈ es, ∃ u, BuildTerm σ e u ∧ q = selfRow u) ∨
-        ∃ e ∈ es, ∃ g us, AppBuild σ e g us ∧ q = nodeSelf g us
+        ∃ e ∈ es, ∃ g us, sub = true ∧ AppBuild σ e g us ∧ q = nodeSelf g us
   | [], _, _ => ⟨∅, by rw [buildArgs_nil]; rfl, by simp⟩
   | e :: es, ho, hb => by
       obtain ⟨hoe, hoes⟩ := Expr.minOverVarsList_cons ho
@@ -342,17 +353,17 @@ theorem buildArgs_writes {σ : Env} : ∀ (es : List Expr), Expr.MinOverVarsList
       · rw [buildArgs_cons, Action.writes_append, hW₁, Option.bind_some, hW₂, Option.map_some]
       · simp only [Set.mem_union, hmem₁, hmem₂, List.mem_cons]
         constructor
-        · rintro ((⟨u, hu, rfl⟩ | ⟨g, us, hn, rfl⟩) |
-            (⟨e', he', u, hu, rfl⟩ | ⟨e', he', g, us, hn, rfl⟩))
+        · rintro ((⟨u, hu, rfl⟩ | ⟨g, us, hon, hn, rfl⟩) |
+            (⟨e', he', u, hu, rfl⟩ | ⟨e', he', g, us, hon, hn, rfl⟩))
           · exact Or.inl ⟨e, Or.inl rfl, u, hu, rfl⟩
-          · exact Or.inr ⟨e, Or.inl rfl, g, us, hn, rfl⟩
+          · exact Or.inr ⟨e, Or.inl rfl, g, us, hon, hn, rfl⟩
           · exact Or.inl ⟨e', Or.inr he', u, hu, rfl⟩
-          · exact Or.inr ⟨e', Or.inr he', g, us, hn, rfl⟩
-        · rintro (⟨e', rfl | he', u, hu, rfl⟩ | ⟨e', rfl | he', g, us, hn, rfl⟩)
+          · exact Or.inr ⟨e', Or.inr he', g, us, hon, hn, rfl⟩
+        · rintro (⟨e', rfl | he', u, hu, rfl⟩ | ⟨e', rfl | he', g, us, hon, hn, rfl⟩)
           · exact Or.inl (Or.inl ⟨u, hu, rfl⟩)
           · exact Or.inr (Or.inl ⟨e', he', u, hu, rfl⟩)
-          · exact Or.inl (Or.inr ⟨g, us, hn, rfl⟩)
-          · exact Or.inr (Or.inr ⟨e', he', g, us, hn, rfl⟩)
+          · exact Or.inl (Or.inr ⟨g, us, hon, hn, rfl⟩)
+          · exact Or.inr (Or.inr ⟨e', he', g, us, hon, hn, rfl⟩)
 
 end
 

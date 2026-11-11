@@ -9,6 +9,8 @@ canonical. -/
 
 namespace Egglog.Congruence
 
+variable {sub : Bool}
+
 /-! ### Path compression and collisions -/
 
 /-- The substitution of the two union-find rules. -/
@@ -225,7 +227,7 @@ theorem evalList_append_of {σ : Env} {xs ys : List Expr} {ts us : List Term}
       List.cons_append]
 
 /-- A node atom over a column group matches the node row of the group's values. -/
-theorem node_atom_fire {src d : Database} (h : Rel src d) {σ : Env} {f : FnName}
+theorem node_atom_fire {src d : Database} (h : Rel sub src d) {σ : Env} {f : FnName}
     {stem : String} {n : Nat} {as : List Term} {v : Var}
     (has : Expr.evalList (congruenceVars stem n) σ = some as)
     (hv : Env.lookup v σ = some (Term.app f as)) (hn : Node d f as) :
@@ -366,11 +368,11 @@ theorem congEnv_mem_values {x : Var × Term} (hx : x ∈ congEnv as bs rs k l y 
 end
 
 /-- The variables of the congruence rule's query. -/
-theorem mem_congruence_vars {f : FnName} {n : Nat} {v : Var} :
-    v ∈ Query.vars (congruenceRule f n).query ↔
+theorem mem_congruence_vars_node {f : FnName} {n : Nat} {v : Var} :
+    v ∈ Query.vars (congruenceRule true f n).query ↔
       v ∈ congNames "a" n ∨ v ∈ congNames "b" n ∨ v ∈ congNames "r" n ∨
         v = "@k" ∨ v = "@l" ∨ v = "@y" ∨ v = "@z" := by
-  rw [congruence_query, Query.mem_vars_append, Query.mem_vars_append, mem_vars_edgeAtoms]
+  rw [congruence_query_node, Query.mem_vars_append, Query.mem_vars_append, mem_vars_edgeAtoms]
   simp only [Query.vars_cons, Query.vars_nil, Pattern.vars, nodeAtom, ufRow, Expr.vars_app,
     Expr.mem_varsList_append, mem_varsList_congruenceVars, Expr.varsList_cons, Expr.varsList_nil,
     List.mem_union_iff, Expr.vars_var, List.mem_singleton, List.not_mem_nil, or_false,
@@ -378,12 +380,12 @@ theorem mem_congruence_vars {f : FnName} {n : Nat} {v : Var} :
   tauto
 
 /-- The congruence rule fires on two nodes with the same live child parents. -/
-theorem congruence_fire {src d : Database} (h : Rel src d) {f : FnName} {as bs rs : List Term}
+theorem congruence_fire_node {src d : Database} (h : Rel sub src d) {f : FnName} {as bs rs : List Term}
     {y z : Term} (hna : Node d f as) (hnb : Node d f bs)
     (hra : List.Forall₂ (Edge d) as rs) (hrb : List.Forall₂ (Edge d) bs rs)
     (hey : Edge d (.app f as) y) (hez : Edge d (.app f bs) z) (hmin : y = Term.least y z)
     (hne : y ≠ z) :
-    QueryMatches d (congruenceRule f as.length).query
+    QueryMatches d (congruenceRule true f as.length).query
       (congEnv as bs rs (.app f as) (.app f bs) y z as.length) := by
   set n := as.length with hn
   have hlen_a : as.length = n := rfl
@@ -409,9 +411,9 @@ theorem congruence_fire {src d : Database} (h : Rel src d) {f : FnName} {as bs r
   refine ⟨⟨?_, fun x hx => mem_reps_of_diag h.diag (hterms x hx)⟩, fun p hp => ?_⟩
   · rw [List.perm_ext_iff_of_nodup (congEnv_dom_nodup hlen_a hlen_b hlen_r) (Query.vars_nodup _)]
     intro v
-    rw [congEnv_dom hlen_a hlen_b hlen_r, mem_congruence_vars]
+    rw [congEnv_dom hlen_a hlen_b hlen_r, mem_congruence_vars_node]
     simp
-  · rw [congruence_query] at hp
+  · rw [congruence_query_node] at hp
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hp
     rcases hp with ((rfl | rfl) | hp) | rfl | rfl | rfl | rfl
     · exact node_atom_fire h evalA congEnv_lookup_k hna
@@ -427,6 +429,240 @@ theorem congruence_fire {src d : Database} (h : Rel src d) {f : FnName} {as bs r
         Keys.subset_terms d (h.parent_of_edge hey), hmin⟩
     · exact matches_ne_var_var_iff.mpr ⟨y, z, congEnv_lookup_y, congEnv_lookup_z,
         not_cong_of_ne h.diag hne⟩
+
+def plainCongEnv (as bs rs : List Term) (y z : Term) (n : Nat) : Env :=
+  (congNames "a" n).zip as ++ ((congNames "b" n).zip bs ++
+    ((congNames "r" n).zip rs ++ [("@y", y), ("@z", z)]))
+
+section
+
+variable {as bs rs : List Term} {y z : Term} {n : Nat}
+  (hla : as.length = n) (hlb : bs.length = n) (hlr : rs.length = n)
+include hla hlb hlr
+
+omit hlb hlr in
+theorem plainCongEnv_lookup_a {i : Nat} (hi : i < n) :
+    Env.lookup ("@" ++ "a" ++ toString i) (plainCongEnv as bs rs y z n) =
+      some (as[i]'(by rw [hla]; exact hi)) :=
+  Env.lookup_append_of_some (lookup_zip_congNames hla hi)
+
+omit hla hlr in
+theorem plainCongEnv_lookup_b {i : Nat} (hi : i < n) :
+    Env.lookup ("@" ++ "b" ++ toString i) (plainCongEnv as bs rs y z n) =
+      some (bs[i]'(by rw [hlb]; exact hi)) := by
+  unfold plainCongEnv
+  rw [Env.lookup_append_of_none
+    (lookup_zip_eq_none (not_mem_congNames_of_stem toList_b toList_a (by decide)))]
+  exact Env.lookup_append_of_some (lookup_zip_congNames hlb hi)
+
+omit hla hlb in
+theorem plainCongEnv_lookup_r {i : Nat} (hi : i < n) :
+    Env.lookup ("@" ++ "r" ++ toString i) (plainCongEnv as bs rs y z n) =
+      some (rs[i]'(by rw [hlr]; exact hi)) := by
+  unfold plainCongEnv
+  rw [Env.lookup_append_of_none
+    (lookup_zip_eq_none (not_mem_congNames_of_stem toList_r toList_a (by decide))),
+    Env.lookup_append_of_none
+    (lookup_zip_eq_none (not_mem_congNames_of_stem toList_r toList_b (by decide)))]
+  exact Env.lookup_append_of_some (lookup_zip_congNames hlr hi)
+
+omit hla hlb hlr in
+theorem plainCongEnv_lookup_y : Env.lookup "@y" (plainCongEnv as bs rs y z n) = some y := by
+  unfold plainCongEnv
+  rw [Env.lookup_append_of_none
+    (lookup_zip_eq_none (short_not_mem_congNames toList_y toList_a (by decide))),
+    Env.lookup_append_of_none
+    (lookup_zip_eq_none (short_not_mem_congNames toList_y toList_b (by decide))),
+    Env.lookup_append_of_none
+    (lookup_zip_eq_none (short_not_mem_congNames toList_y toList_r (by decide)))]
+  rfl
+
+omit hla hlb hlr in
+theorem plainCongEnv_lookup_z : Env.lookup "@z" (plainCongEnv as bs rs y z n) = some z := by
+  unfold plainCongEnv
+  rw [Env.lookup_append_of_none
+    (lookup_zip_eq_none (short_not_mem_congNames toList_z toList_a (by decide))),
+    Env.lookup_append_of_none
+    (lookup_zip_eq_none (short_not_mem_congNames toList_z toList_b (by decide))),
+    Env.lookup_append_of_none
+    (lookup_zip_eq_none (short_not_mem_congNames toList_z toList_r (by decide)))]
+  rfl
+
+theorem plainCongEnv_dom : Env.dom (plainCongEnv as bs rs y z n) =
+    congNames "a" n ++ (congNames "b" n ++ (congNames "r" n ++ ["@y", "@z"])) := by
+  unfold plainCongEnv Env.dom
+  rw [List.map_append, List.map_append, List.map_append, List.map_fst_zip, List.map_fst_zip,
+    List.map_fst_zip]
+  · rfl
+  all_goals rw [congNames_length]; omega
+
+theorem plainCongEnv_dom_nodup : (Env.dom (plainCongEnv as bs rs y z n)).Nodup := by
+  rw [plainCongEnv_dom hla hlb hlr]
+  have disj : ∀ {s s' : String} {c c' : Char}, s.toList = [c] → s'.toList = [c'] → c ≠ c' →
+      List.Disjoint (congNames s n) (congNames s' n) := by
+    intro s s' c c' hs hs' hne v hv hv'
+    obtain ⟨i, _, rfl⟩ := mem_congNames.mp hv
+    exact not_mem_congNames_of_stem hs hs' hne hv'
+  have hyz : (["@y", "@z"] : List Var).Nodup := by decide
+  refine List.Nodup.append (congNames_nodup _ _) (List.Nodup.append (congNames_nodup _ _)
+    (List.Nodup.append (congNames_nodup _ _) hyz ?_) ?_) ?_
+  · intro v hv hv'
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hv'
+    rcases hv' with rfl | rfl
+    · exact short_not_mem_congNames toList_y toList_r (by decide) hv
+    · exact short_not_mem_congNames toList_z toList_r (by decide) hv
+  · intro v hv hv'
+    rcases List.mem_append.mp hv' with hv' | hv'
+    · exact disj toList_b toList_r (by decide) hv hv'
+    · simp only [List.mem_cons, List.not_mem_nil, or_false] at hv'
+      rcases hv' with rfl | rfl
+      · exact short_not_mem_congNames toList_y toList_b (by decide) hv
+      · exact short_not_mem_congNames toList_z toList_b (by decide) hv
+  · intro v hv hv'
+    rcases List.mem_append.mp hv' with hv' | hv'
+    · exact disj toList_a toList_b (by decide) hv hv'
+    rcases List.mem_append.mp hv' with hv' | hv'
+    · exact disj toList_a toList_r (by decide) hv hv'
+    · simp only [List.mem_cons, List.not_mem_nil, or_false] at hv'
+      rcases hv' with rfl | rfl
+      · exact short_not_mem_congNames toList_y toList_a (by decide) hv
+      · exact short_not_mem_congNames toList_z toList_a (by decide) hv
+
+omit hla hlb hlr in
+theorem plainCongEnv_mem_values {x : Var × Term} (hx : x ∈ plainCongEnv as bs rs y z n) :
+    x.2 ∈ as ∨ x.2 ∈ bs ∨ x.2 ∈ rs ∨ x.2 = y ∨ x.2 = z := by
+  unfold plainCongEnv at hx
+  simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hx
+  rcases hx with hx | hx | hx | rfl | rfl
+  · exact Or.inl (List.of_mem_zip hx).2
+  · exact Or.inr (Or.inl (List.of_mem_zip hx).2)
+  · exact Or.inr (Or.inr (Or.inl (List.of_mem_zip hx).2))
+  · simp
+  · simp
+
+end
+
+/-- The variables of the congruence rule's query. -/
+theorem mem_congruence_vars_plain {f : FnName} {n : Nat} {v : Var} :
+    v ∈ Query.vars (congruenceRule false f n).query ↔
+      v ∈ congNames "a" n ∨ v ∈ congNames "b" n ∨ v ∈ congNames "r" n ∨
+        v = "@y" ∨ v = "@z" := by
+  change v ∈ Query.vars ([.expr (.app f (congruenceVars "a" n)),
+    .expr (.app f (congruenceVars "b" n))] ++ edgeAtoms n ++ _) ↔ _
+  rw [Query.mem_vars_append, Query.mem_vars_append, mem_vars_edgeAtoms]
+  simp only [Bool.false_eq_true, ↓reduceIte, Query.vars_cons, Query.vars_nil, Pattern.vars, ufRow, Expr.vars_app,
+    mem_varsList_congruenceVars, Expr.varsList_cons, Expr.varsList_nil,
+    List.mem_union_iff, Expr.vars_var, List.mem_singleton, List.not_mem_nil, or_false,
+    Expr.vars_min]
+  tauto
+
+/-- The congruence rule fires on two live applications with the same live child parents. -/
+theorem congruence_fire_plain {src d : Database} (h : Rel sub src d) {f : FnName} {as bs rs : List Term}
+    {y z : Term} (hla : Term.app f as ∈ d.live) (hlb : Term.app f bs ∈ d.live)
+    (hra : List.Forall₂ (Edge d) as rs) (hrb : List.Forall₂ (Edge d) bs rs)
+    (hey : Edge d (.app f as) y) (hez : Edge d (.app f bs) z) (hmin : y = Term.least y z)
+    (hne : y ≠ z) :
+    QueryMatches d (congruenceRule false f as.length).query (plainCongEnv as bs rs y z as.length) := by
+  set n := as.length with hn
+  have hlen_a : as.length = n := rfl
+  have hlen_r : rs.length = n := hra.length_eq.symm
+  have hlen_b : bs.length = n := hrb.length_eq.trans hlen_r
+  have hterms : ∀ x ∈ plainCongEnv as bs rs y z n, x.2 ∈ d.terms := by
+    intro x hx
+    rcases plainCongEnv_mem_values hx with hx | hx | hx | hx | hx
+    · obtain ⟨r, _, he⟩ := hra.flip.exists_left hx
+      exact Keys.subset_terms d (h.key_of_edge he)
+    · obtain ⟨r, _, he⟩ := hrb.flip.exists_left hx
+      exact Keys.subset_terms d (h.key_of_edge he)
+    · obtain ⟨a, _, he⟩ := hra.exists_left hx
+      exact Keys.subset_terms d (h.parent_of_edge he)
+    · rw [hx]; exact Keys.subset_terms d (h.parent_of_edge hey)
+    · rw [hx]; exact Keys.subset_terms d (h.parent_of_edge hez)
+  have hsome : ∀ stem (ts : List Term) (hlen : ts.length = n),
+      (∀ i (hi : i < n), Env.lookup ("@" ++ stem ++ toString i) (plainCongEnv as bs rs y z n) =
+        some (ts[i]'(by rw [hlen]; exact hi))) →
+      Expr.evalList (congruenceVars stem n) (plainCongEnv as bs rs y z n) = some ts := by
+    intro stem ts hlen hlook
+    rw [congruenceVars_eq_map]
+    apply Expr.evalList_map_var _ _ _ (by rw [congNames_length, hlen])
+    intro i hi hi'
+    rw [congNames_length] at hi
+    rw [congNames_getElem stem hi]
+    exact hlook i hi
+  have evalA := hsome "a" as hlen_a fun i hi => plainCongEnv_lookup_a hlen_a hi
+  have evalB := hsome "b" bs hlen_b fun i hi => plainCongEnv_lookup_b hlen_b hi
+  have evalR := hsome "r" rs hlen_r fun i hi => plainCongEnv_lookup_r hlen_r hi
+  have matchesVars : ∀ stem (ts : List Term),
+      Expr.evalList (congruenceVars stem n) (plainCongEnv as bs rs y z n) = some ts →
+      Expr.MatchesList d (plainCongEnv as bs rs y z n) (congruenceVars stem n) := by
+    intro stem ts hts
+    rw [congruenceVars_eq_map]
+    apply matchesList_map_var
+    intro v hv
+    rw [congruenceVars_eq_map] at hts
+    exact Expr.lookup_isSome_of_mem_evalList hts (List.mem_map_of_mem hv)
+  refine ⟨⟨?_, fun x hx => mem_reps_of_diag h.diag (hterms x hx)⟩, fun p hp => ?_⟩
+  · rw [List.perm_ext_iff_of_nodup (plainCongEnv_dom_nodup hlen_a hlen_b hlen_r) (Query.vars_nodup _)]
+    intro v
+    rw [plainCongEnv_dom hlen_a hlen_b hlen_r, mem_congruence_vars_plain]
+    simp
+  · rw [congruence_query_plain] at hp
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false,
+      List.mem_flatMap] at hp
+    rcases hp with ((rfl | rfl) | ⟨abr, habr, hp⟩) | rfl | rfl | rfl | rfl
+    · exact matches_app_iff.mpr ⟨as, matchesVars "a" as evalA, evalA, hla⟩
+    · exact matches_app_iff.mpr ⟨bs, matchesVars "b" bs evalB, evalB, hlb⟩
+    · obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.mp habr
+      simp only [List.length_zip, congruenceVars_length, Nat.min_self] at hi
+      rw [List.getElem_zip, List.getElem_zip, congruenceVars_getElem "a" hi,
+        congruenceVars_getElem "b" hi, congruenceVars_getElem "r" hi] at hp
+      have hedge_a : Edge d (as[i]'(by rw [hlen_a]; exact hi)) (rs[i]'(by rw [hlen_r]; exact hi)) :=
+        (List.forall₂_iff_get.mp hra).2 i _ _
+      have hedge_b : Edge d (bs[i]'(by rw [hlen_b]; exact hi)) (rs[i]'(by rw [hlen_r]; exact hi)) :=
+        (List.forall₂_iff_get.mp hrb).2 i _ _
+      simp only at hp
+      rcases hp with rfl | rfl
+      · exact matches_uf_var_var_iff.mpr ⟨_, _, plainCongEnv_lookup_a hlen_a hi,
+          plainCongEnv_lookup_r hlen_r hi, hedge_a⟩
+      · exact matches_uf_var_var_iff.mpr ⟨_, _, plainCongEnv_lookup_b hlen_b hi,
+          plainCongEnv_lookup_r hlen_r hi, hedge_b⟩
+    · refine matches_uf_iff.mpr ⟨.app f as, y, .app (matchesVars "a" as evalA) evalA hla,
+        .var plainCongEnv_lookup_y, ?_, plainCongEnv_lookup_y, hey⟩
+      rw [Expr.eval_app_ctor, evalA]; rfl
+    · refine matches_uf_iff.mpr ⟨.app f bs, z, .app (matchesVars "b" bs evalB) evalB hlb,
+        .var plainCongEnv_lookup_z, ?_, plainCongEnv_lookup_z, hez⟩
+      rw [Expr.eval_app_ctor, evalB]; rfl
+    · exact (matches_eq_min_iff h.diag).mpr ⟨y, z, plainCongEnv_lookup_y, plainCongEnv_lookup_z,
+        Keys.subset_terms d (h.parent_of_edge hey), hmin⟩
+    · exact matches_ne_var_var_iff.mpr ⟨y, z, plainCongEnv_lookup_y, plainCongEnv_lookup_z,
+        not_cong_of_ne h.diag hne⟩
+
+/-- All congruence-query variables belong to the three column groups or output ids. -/
+theorem congruence_vars_subset {f : FnName} {n : Nat} {v : Var}
+    (hv : v ∈ Query.vars (congruenceRule sub f n).query) :
+    v ∈ congNames "a" n ∨ v ∈ congNames "b" n ∨ v ∈ congNames "r" n ∨
+      v = "@k" ∨ v = "@l" ∨ v = "@y" ∨ v = "@z" := by
+  cases sub with
+  | false => have := mem_congruence_vars_plain.mp hv; tauto
+  | true => exact mem_congruence_vars_node.mp hv
+
+/-- Either representation of nodes supplies a congruence firing. -/
+theorem congruence_fire {src d : Database} (h : Rel sub src d) {f : FnName}
+    {as bs rs : List Term} {y z : Term}
+    (hra : List.Forall₂ (Edge d) as rs) (hrb : List.Forall₂ (Edge d) bs rs)
+    (hey : Edge d (.app f as) y) (hez : Edge d (.app f bs) z)
+    (hmin : y = Term.least y z) (hne : y ≠ z) :
+    ∃ σ, QueryMatches d (congruenceRule sub f as.length).query σ ∧
+      Env.lookup "@y" σ = some y ∧ Env.lookup "@z" σ = some z := by
+  cases sub with
+  | false =>
+    exact ⟨_, congruence_fire_plain h (h.plain_live rfl (h.key_of_edge hey))
+      (h.plain_live rfl (h.key_of_edge hez)) hra hrb hey hez hmin hne,
+      plainCongEnv_lookup_y, plainCongEnv_lookup_z⟩
+  | true =>
+    exact ⟨_, congruence_fire_node h (h.nodes f as (h.key_of_edge hey) rfl)
+      (h.nodes f bs (h.key_of_edge hez) rfl) hra hrb hey hez hmin hne,
+      congEnv_lookup_y, congEnv_lookup_z⟩
 
 /-! ### The subsumption rule -/
 
@@ -511,7 +747,7 @@ theorem mem_subsume_vars {f : FnName} {n : Nat} {v : Var} :
 
 /-- The subsumption rule fires on a marker and a live application with the same live child
 parents. -/
-theorem subsume_fire {src d : Database} (h : Rel src d) {f : FnName} {as bs rs : List Term}
+theorem subsume_fire {src d : Database} (h : Rel sub src d) {f : FnName} {as bs rs : List Term}
     (hm : Marker d f as) (hl : Term.app f bs ∈ d.live)
     (hra : List.Forall₂ (Edge d) as rs) (hrb : List.Forall₂ (Edge d) bs rs) :
     QueryMatches d (subsumeRule f as.length).query (subEnv as bs rs as.length) := by

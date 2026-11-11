@@ -8,6 +8,8 @@ two sides, which at a canonical state are the representatives of the two source 
 
 namespace Egglog.Congruence
 
+variable {sub : Bool}
+
 variable {src d : Database}
 
 /-- The conditions on a source query the correspondence uses: minima over variables,
@@ -32,7 +34,7 @@ theorem QueryOk.head_vars {p : Pattern} {ps : Query} (h : QueryOk (p :: ps)) :
 /-- Both sides of a comparison: the flattening of the second continues the interval of the
 first, every atom matches under the joint fresh bindings, and the two ids evaluate to the
 representatives of the two source values. -/
-theorem complete_sides (h : Rel src d) (hc : Canon d) (hw : src.WF) {l r : Expr} (n : Nat)
+theorem complete_sides (h : Rel sub src d) (hc : Canon d) (hw : src.WF) {l r : Expr} (n : Nat)
     (hol : l.MinOverVars) (hor : r.MinOverVars) (hnl : SrcNames l) (hnr : SrcNames r)
     (hsl : ∀ v ∈ l.vars, NotFresh v) (hsr : ∀ v ∈ r.vars, NotFresh v) {σ : Env}
     (hσ : NoFreshDom σ) (hreps : ∀ b ∈ σ, b.2 ∈ src.reps) {t₁ t₂ : Term}
@@ -116,7 +118,7 @@ theorem cong_self_of_matches {σ : Env} (hreps : ∀ b ∈ σ, b.2 ∈ src.reps)
   Expr.Matches.eval_cong
     (fun v t hvt => Database.toCong (hreps (v, t) (Env.mem_of_lookup hvt)).1) ⟨he, hm⟩
 
-theorem complete_pattern (h : Rel src d) (hc : Canon d) (hw : src.WF) {p : Pattern} (n : Nat)
+theorem complete_pattern (h : Rel sub src d) (hc : Canon d) (hw : src.WF) {p : Pattern} (n : Nat)
     (ho : p.MinOverVars) (hsc : p.Scoped) (hnames : ∀ e ∈ p.exprs, SrcNames e)
     (hsrc : ∀ v ∈ p.vars, NotFresh v) {σ : Env} (hσ : NoFreshDom σ)
     (hreps : ∀ b ∈ σ, b.2 ∈ src.reps) (hm : Matches src p σ) :
@@ -178,7 +180,7 @@ theorem complete_pattern (h : Rel src d) (hc : Canon d) (hw : src.WF) {p : Patte
       rw [← heq] at hs₂
       exact hs₁.trans hs₂.symm
 
-theorem complete_query (h : Rel src d) (hc : Canon d) (hw : src.WF) {q : Query} (n : Nat)
+theorem complete_query (h : Rel sub src d) (hc : Canon d) (hw : src.WF) {q : Query} (n : Nat)
     (hq : QueryOk q) {σ : Env} (hσ : NoFreshDom σ) (hreps : ∀ b ∈ σ, b.2 ∈ src.reps)
     (hm : ∀ p ∈ q, Matches src p σ) :
     ∃ ρ, Fresh n (encodeQueryWith {} q n).2 ρ ∧ (∀ b ∈ ρ, b.2 ∈ d.terms) ∧
@@ -236,7 +238,7 @@ theorem complete_query (h : Rel src d) (hc : Canon d) (hw : src.WF) {q : Query} 
 
 /-- A source match of a rule's query extends to a match of the compiled query, agreeing on
 the source variables. -/
-theorem fire_complete (h : Rel src d) (hc : Canon d) (hw : src.WF) {q : Query}
+theorem fire_complete (h : Rel sub src d) (hc : Canon d) (hw : src.WF) {q : Query}
     (hq : QueryOk q) {σ : Env} (hm : QueryMatches src q σ) :
     ∃ σ', QueryMatches d (encodeQueryWith {} q 0).1 σ' ∧
       ∀ v ∈ Query.vars q, Env.lookup v σ' = Env.lookup v σ := by
@@ -316,7 +318,7 @@ theorem lookup_restrict {vs : List Var} {σ : Env} (hnd : vs.Nodup) {v : Var} (h
 
 /-- A match of the compiled query restricts to a source match that binds every source
 variable to its root, a source representative. -/
-theorem fire_sound (h : Rel src d) (hc : Canon d) (hw : src.WF) {q : Query} (hq : QueryOk q)
+theorem fire_sound (h : Rel sub src d) (hc : Canon d) (hw : src.WF) {q : Query} (hq : QueryOk q)
     (hkeyed : Query.VarsKeyed q) {σ' : Env} (hm : QueryMatches d (encodeQueryWith {} q 0).1 σ') :
     QueryMatches src q (restrict (Query.vars q) σ') ∧
       ∀ v ∈ Query.vars q, Env.lookup v (restrict (Query.vars q) σ') = Env.lookup v σ' := by

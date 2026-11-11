@@ -13,37 +13,37 @@ variable {P : Program}
 
 /-- The compiled schedule, structurally. -/
 def encS (P : Program) : Schedule → Schedule
-  | .run rs => .seq (.run (rs.map (encodeRuleWith {}))) (.saturate (.run (maintenance P)))
+  | .run rs => .seq (.run (rs.map (encodeRuleWith { subsumption := !P.schedule.subsumeFreeB }))) (.saturate (.run (maintenance (!P.schedule.subsumeFreeB) P)))
   | .saturate S => .saturate (encS P S)
   | .seq S₁ S₂ => .seq (encS P S₁) (encS P S₂)
 
 theorem encodeRules_fst (i : Nat) (rs : List Rule) :
-    (encodeRulesWith {} i rs).map Prod.fst = rs.map (encodeRuleWith {}) := by
+    (encodeRulesWith { subsumption := !P.schedule.subsumeFreeB } i rs).map Prod.fst = rs.map (encodeRuleWith { subsumption := !P.schedule.subsumeFreeB }) := by
   unfold encodeRulesWith
   rw [List.map_map]
   have : (Prod.fst ∘ fun ri : Rule × Nat =>
-      (encodeRuleWith {} ri.1, RuleOrigin.source (i + ri.2))) = encodeRuleWith {} ∘ Prod.fst := by
+      (encodeRuleWith { subsumption := !P.schedule.subsumeFreeB } ri.1, RuleOrigin.source (i + ri.2))) = encodeRuleWith { subsumption := !P.schedule.subsumeFreeB } ∘ Prod.fst := by
     funext ri; rfl
   rw [this, ← List.map_map, List.zipIdx_map_fst]
 
 theorem encodeSchedule_fst (P : Program) : ∀ (S : Schedule) (i : Nat),
-    (encodeScheduleWith {} P S i).1 = encS P S
+    (encodeScheduleWith { subsumption := !P.schedule.subsumeFreeB } P S i).1 = encS P S
   | .run rs, i => by
-      rcases hm : rebuildWith {} P with ⟨m, mo⟩
-      have hm' := rebuild_eq P
+      rcases hm : rebuildWith { subsumption := !P.schedule.subsumeFreeB } P with ⟨m, mo⟩
+      have hm' := rebuild_eq (sub := !P.schedule.subsumeFreeB) P
       rw [hm] at hm'
       simp only at hm'
       simp only [encodeScheduleWith, hm, encS]
       rw [encodeRules_fst, hm']
   | .saturate S, i => by
-      rcases h : encodeScheduleWith {} P S i with ⟨S', os, next⟩
+      rcases h : encodeScheduleWith { subsumption := !P.schedule.subsumeFreeB } P S i with ⟨S', os, next⟩
       have ih := encodeSchedule_fst P S i
       rw [h] at ih
       simp only at ih
       simp only [encodeScheduleWith, h, encS, ih]
   | .seq S₁ S₂, i => by
-      rcases h₁ : encodeScheduleWith {} P S₁ i with ⟨T₁, o₁, next⟩
-      rcases h₂ : encodeScheduleWith {} P S₂ next with ⟨T₂, o₂, last⟩
+      rcases h₁ : encodeScheduleWith { subsumption := !P.schedule.subsumeFreeB } P S₁ i with ⟨T₁, o₁, next⟩
+      rcases h₂ : encodeScheduleWith { subsumption := !P.schedule.subsumeFreeB } P S₂ next with ⟨T₂, o₂, last⟩
       have ih₁ := encodeSchedule_fst P S₁ i
       have ih₂ := encodeSchedule_fst P S₂ next
       rw [h₁] at ih₁
@@ -51,24 +51,26 @@ theorem encodeSchedule_fst (P : Program) : ∀ (S : Schedule) (i : Nat),
       simp only at ih₁ ih₂
       simp only [encodeScheduleWith, h₁, h₂, encS, ih₁, ih₂]
 
+theorem default_forProgram (P : Program) :
+    ({} : Options).forProgram P = { subsumption := !P.schedule.subsumeFreeB } := by
+  cases hs : P.schedule.subsumeFreeB <;> simp [Options.forProgram, hs]
+
 theorem encode_schedule (P : Program) : (encode P).schedule = encS P P.schedule := by
-  change (encodeScheduleWith {} P P.schedule 0).1 = encS P P.schedule
+  simp only [encode, compile, compileWith, default_forProgram]
   exact encodeSchedule_fst P P.schedule 0
 
 theorem encode_check (P : Program) : (encode P).check = (encodeQueryWith {} P.check 0).1 := by
-  unfold encode compile compileWith
-  rcases h : encodeScheduleWith {} P P.schedule 0 with ⟨S, os, n⟩
-  rfl
+  simp only [encode, compile, compileWith, default_forProgram]
 
 /-! ### The relation up to meaning -/
 
 /-- The partner of a source state: same meaning, related to the compiled state. -/
 def RelC (P : Program) (src d : Database) : Prop :=
-  ∃ x, SrcInv P x ∧ src.SameMeaning x ∧ Rel x d ∧ Canon d
+  ∃ x, SrcInv P x ∧ src.SameMeaning x ∧ Rel (!P.schedule.subsumeFreeB) x d ∧ Canon d
 
 /-- Two compiled states of one meaning have partners of one meaning. -/
 theorem partners_sameMeaning {x y d e : Database} (hx : SrcInv P x) (hy : SrcInv P y)
-    (hd : Rel x d) (he : Rel y e) (h : d.SameMeaning e) : x.SameMeaning y := by
+    (hd : Rel (!P.schedule.subsumeFreeB) x d) (he : Rel (!P.schedule.subsumeFreeB) y e) (h : d.SameMeaning e) : x.SameMeaning y := by
   have hterms := h.terms_eq_of_diag hd.diag he.diag
   have hrow : ∀ k p, Row d k p ↔ Row e k p := by
     intro k p
@@ -90,15 +92,15 @@ theorem partners_sameMeaning {x y d e : Database} (hx : SrcInv P x) (hy : SrcInv
 
 /-- A source pass that changes the meaning changes the compiled state too. -/
 theorem not_sameMeaning_of_source {src e x y d d' : Database} (hx : SrcInv P x) (hy : SrcInv P y)
-    (hsx : src.SameMeaning x) (hey : e.SameMeaning y) (hd : Rel x d) (hd' : Rel y d')
+    (hsx : src.SameMeaning x) (hey : e.SameMeaning y) (hd : Rel (!P.schedule.subsumeFreeB) x d) (hd' : Rel (!P.schedule.subsumeFreeB) y d')
     (hn : ¬ src.SameMeaning e) : ¬ d.SameMeaning d' := fun h =>
   hn (hsx.trans ((partners_sameMeaning hx hy hd hd' h).trans hey.symm))
 
 /-! ### One run -/
 
 theorem sim_run (hP : P.Fragment) {R : List Rule} (hR : ∀ r ∈ R, r ∈ P.rules) {x d : Database}
-    (hx : SrcInv P x) (hd : Rel x d) (hc : Canon d) :
-    ∃ d', Reach d (encS P (.run R)) d' ∧ Rel (RunRules R x) d' ∧ Canon d' := by
+    (hx : SrcInv P x) (hd : Rel (!P.schedule.subsumeFreeB) x d) (hc : Canon d) :
+    ∃ d', Reach d (encS P (.run R)) d' ∧ Rel (!P.schedule.subsumeFreeB) (RunRules R x) d' ∧ Canon d' := by
   have hrel := run_rel hd hc hx.wf (fun r hr => ruleOk_of_fragment hP (hR r hr))
     (fun r hr σ hσ => source_writes_some hP hx (hR r hr) hσ)
     ((hx.runRules hP hR).avoids hP)
@@ -107,8 +109,8 @@ theorem sim_run (hP : P.Fragment) {R : List Rule} (hR : ∀ r ∈ R, r ∈ P.rul
   exact ⟨d', .seq .run hd', hrel', hc'⟩
 
 theorem sim_run_bwd (hP : P.Fragment) {R : List Rule} (hR : ∀ r ∈ R, r ∈ P.rules)
-    {x d d' : Database} (hx : SrcInv P x) (hd : Rel x d) (hc : Canon d)
-    (hr : Reach d (encS P (.run R)) d') : Rel (RunRules R x) d' ∧ Canon d' := by
+    {x d d' : Database} (hx : SrcInv P x) (hd : Rel (!P.schedule.subsumeFreeB) x d) (hc : Canon d)
+    (hr : Reach d (encS P (.run R)) d') : Rel (!P.schedule.subsumeFreeB) (RunRules R x) d' ∧ Canon d' := by
   have hrel := run_rel hd hc hx.wf (fun r hr => ruleOk_of_fragment hP (hR r hr))
     (fun r hr σ hσ => source_writes_some hP hx (hR r hr) hσ)
     ((hx.runRules hP hR).avoids hP)
@@ -121,16 +123,16 @@ theorem sim_run_bwd (hP : P.Fragment) {R : List Rule} (hR : ∀ r ∈ R, r ∈ P
 
 /-- The statement of the forward simulation for a schedule. -/
 def Fwd (P : Program) (S : Schedule) : Prop :=
-  ∀ {src d x e : Database}, SrcInv P src → SrcInv P x → src.SameMeaning x → Rel x d → Canon d →
+  ∀ {src d x e : Database}, SrcInv P src → SrcInv P x → src.SameMeaning x → Rel (!P.schedule.subsumeFreeB) x d → Canon d →
     Reach src S e →
-    ∃ d' x', Reach d (encS P S) d' ∧ SrcInv P x' ∧ e.SameMeaning x' ∧ Rel x' d' ∧ Canon d' ∧
+    ∃ d' x', Reach d (encS P S) d' ∧ SrcInv P x' ∧ e.SameMeaning x' ∧ Rel (!P.schedule.subsumeFreeB) x' d' ∧ Canon d' ∧
       Rounds P x x'
 
 /-- The statement of the backward simulation for a schedule. -/
 def Bwd (P : Program) (S : Schedule) : Prop :=
-  ∀ {src d x d' : Database}, SrcInv P src → SrcInv P x → src.SameMeaning x → Rel x d → Canon d →
+  ∀ {src d x d' : Database}, SrcInv P src → SrcInv P x → src.SameMeaning x → Rel (!P.schedule.subsumeFreeB) x d → Canon d →
     Reach d (encS P S) d' →
-    ∃ e x', Reach src S e ∧ SrcInv P x' ∧ e.SameMeaning x' ∧ Rel x' d' ∧ Canon d' ∧
+    ∃ e x', Reach src S e ∧ SrcInv P x' ∧ e.SameMeaning x' ∧ Rel (!P.schedule.subsumeFreeB) x' d' ∧ Canon d' ∧
       Rounds P x x'
 
 /-- The universe of a stable state: terms over the program's vocabulary of bounded size. -/
@@ -150,8 +152,8 @@ theorem extra_passes (hP : P.Fragment) (hO : P.schedule.OrderingFree) {S : Sched
     (hstable : ∀ x y, SrcInv P x → e.SameMeaning x → Reach x S y → e.SameMeaning y)
     (hpass : ∀ x, SrcInv P x → e.SameMeaning x → ∃ y, Reach x S y)
     {x₀ : Database} (hx₀ : SrcInv P x₀) (hm₀ : e.SameMeaning x₀) :
-    ∀ d x, Rounds P x₀ x → e.SameMeaning x → Rel x d → Canon d →
-      ∃ d' x', Reach d (.saturate (encS P S)) d' ∧ SrcInv P x' ∧ e.SameMeaning x' ∧ Rel x' d' ∧
+    ∀ d x, Rounds P x₀ x → e.SameMeaning x → Rel (!P.schedule.subsumeFreeB) x d → Canon d →
+      ∃ d' x', Reach d (.saturate (encS P S)) d' ∧ SrcInv P x' ∧ e.SameMeaning x' ∧ Rel (!P.schedule.subsumeFreeB) x' d' ∧
         Canon d' ∧ Rounds P x₀ x' := by
   obtain ⟨U, hU, hmem⟩ := bounded_universe hP hO hx₀
   intro d x hr hm hd hc
@@ -180,9 +182,9 @@ theorem extra_passes (hP : P.Fragment) (hO : P.schedule.OrderingFree) {S : Sched
 theorem extra_passes_bwd {S : Schedule} (ih : Bwd P S) {e : Database}
     (hstable : ∀ x y, SrcInv P x → e.SameMeaning x → Reach x S y → e.SameMeaning y)
     {x₀ : Database} :
-    ∀ {d d' x : Database}, Rounds P x₀ x → SrcInv P x → e.SameMeaning x → Rel x d → Canon d →
+    ∀ {d d' x : Database}, Rounds P x₀ x → SrcInv P x → e.SameMeaning x → Rel (!P.schedule.subsumeFreeB) x d → Canon d →
       Reach d (.saturate (encS P S)) d' →
-      ∃ x', SrcInv P x' ∧ e.SameMeaning x' ∧ Rel x' d' ∧ Canon d' ∧ Rounds P x₀ x' := by
+      ∃ x', SrcInv P x' ∧ e.SameMeaning x' ∧ Rel (!P.schedule.subsumeFreeB) x' d' ∧ Canon d' ∧ Rounds P x₀ x' := by
   intro d d' x hr hx hm hd hc hreach
   generalize hT : Schedule.saturate (encS P S) = T at hreach
   induction hreach generalizing x with

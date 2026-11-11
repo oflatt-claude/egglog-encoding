@@ -146,7 +146,7 @@ theorem check_minOverVars (hP : P.Fragment) : ∀ p ∈ P.check, p.MinOverVars :
   · exact List.all_eq_true.mp (Bool.and_eq_true_iff.mp hM).2
 
 /-- Every rule of a fragment program satisfies the round correspondence's conditions. -/
-theorem ruleOk_of_fragment (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : RuleOk r := by
+theorem ruleOk_of_fragment (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : RuleOk (!P.schedule.subsumeFreeB) r := by
   have henc : r.query.Encodable := hP.queryEncodable.1 r hr
   obtain ⟨hoq, hoa⟩ := rule_minOverVars hP hr
   refine ⟨⟨hoq, fun p hp => (henc.1 p hp).2, pattern_names ?_ hP, fun v hv => ?_⟩, henc.2,
@@ -162,10 +162,17 @@ theorem ruleOk_of_fragment (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : R
     exact List.mem_flatMap.mpr ⟨r, hr, List.mem_union_iff.mpr (Or.inl hv)⟩
   · intro a ha f es heq
     subst a
-    apply noAt_of_mem_ctors hP (fk := (f, es.length))
-    apply mem_program_ctors (S := P.schedule) (fun _ h => h)
-    exact List.mem_flatMap.mpr ⟨r, hr, List.mem_append_right _
-      (List.mem_flatMap.mpr ⟨.subsume f es, ha, List.mem_cons_self⟩)⟩
+    constructor
+    · apply noAt_of_mem_ctors hP (fk := (f, es.length))
+      apply mem_program_ctors (S := P.schedule) (fun _ h => h)
+      exact List.mem_flatMap.mpr ⟨r, hr, List.mem_append_right _
+        (List.mem_flatMap.mpr ⟨.subsume f es, ha, List.mem_cons_self⟩)⟩
+    · cases hs : P.schedule.subsumeFreeB with
+      | false => rfl
+      | true =>
+        have hr' := List.all_eq_true.mp hs r hr
+        have ha' := List.all_eq_true.mp hr' (.subsume f es) ha
+        simp [Action.monotoneB] at ha'
 
 /-- The final check satisfies the query conditions. -/
 theorem queryOk_check (hP : P.Fragment) : QueryOk P.check where

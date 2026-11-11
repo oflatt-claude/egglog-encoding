@@ -10,6 +10,8 @@ representative of the source class. -/
 
 namespace Egglog.Congruence
 
+variable {sub : Bool}
+
 /-! ### Source representatives -/
 
 /-- The representative of a term's source class. -/
@@ -39,7 +41,7 @@ theorem srep_eq_of_cong {src : Database} (hr : src.HasReps) {a b : Term} (hab : 
 theorem srep_mem_terms {src : Database} (hr : src.HasReps) {t : Term} (ht : Cong src t t) :
     srep src t ∈ src.terms := (srep_spec hr ht).1.1
 
-theorem Rel.root_eq_srep {src d : Database} (h : Rel src d) (hc : Canon d) (hw : src.WF)
+theorem Rel.root_eq_srep {src d : Database} (h : Rel sub src d) (hc : Canon d) (hw : src.WF)
     {k : Term} (hk : k ∈ Keys d) : root d k = srep src k := by
   obtain ⟨h₁, h₂⟩ := (h.edge_iff_rep hc hw hk).mp (h.edge_root hk)
   obtain ⟨h₃, h₄⟩ := srep_spec h.src_hasReps (h.cong_self_of_key hk)
@@ -280,7 +282,7 @@ def ArgsComplete (src d : Database) (es : List Expr) (n : Nat) (σ : Env) : Prop
 
 mutual
 
-theorem complete_expr (h : Rel src d) (hc : Canon d) (hw : src.WF) :
+theorem complete_expr (h : Rel sub src d) (hc : Canon d) (hw : src.WF) :
     ∀ (e : Expr) (n : Nat) {σ : Env}, e.MinOverVars → SrcNames e →
     (∀ v ∈ e.vars, NotFresh v) → NoFreshDom σ → (∀ b ∈ σ, b.2 ∈ src.reps) →
     Expr.Matches src σ e → ExprComplete src d e n σ
@@ -453,7 +455,7 @@ theorem complete_expr (h : Rel src d) (hc : Canon d) (hw : src.WF) :
           rw [hrootl, hr, h.root_eq_srep hc hw hkey,
             srep_eq_of_cong h.src_hasReps (Cong.congr hself hcl)]
 
-theorem complete_args (h : Rel src d) (hc : Canon d) (hw : src.WF) :
+theorem complete_args (h : Rel sub src d) (hc : Canon d) (hw : src.WF) :
     ∀ (es : List Expr) (n : Nat) {σ : Env}, Expr.MinOverVarsList es →
     (∀ g ∈ Expr.fnsList es, SourceName g) → (∀ v ∈ Expr.varsList es, NotFresh v) → NoFreshDom σ →
     (∀ b ∈ σ, b.2 ∈ src.reps) → Expr.MatchesList src σ es → ArgsComplete src d es n σ
