@@ -8,8 +8,9 @@ These are source-language obligations for phase 3, not a simulation or a proof o
 `WellBound` checks the fields a binder annotation names; `PayloadConsistent` describes the
 inferred layout; `Scoped` allows only query-bound variables and fresh action slots. The
 paper's renaming assumption is `Commutes`: a source round commutes, up to slotted meaning,
-with a permutation of names that fixes its concrete constants. Fixing constants matters
-because the parser substitutes globals into rules. This assumption mentions no target state.
+with a permutation of names that fixes concrete constants and literal query slots.
+Action-only slots remain fresh choices. The parser substitutes globals into rules.
+This assumption mentions no target state.
 -/
 
 namespace Egglog.Slotted.Pass
@@ -59,11 +60,12 @@ def renameDatabase (ρ : NamePermutation) (db : Database) : Database :=
   { eqs := (fun p => (renameTerm ρ p.1, renameTerm ρ p.2)) '' db.eqs,
     subsumed := renameTerm ρ '' db.subsumed }
 
-/-- A permutation fixes all concrete slot constants of a rule. Pattern slots are variables
-and may move with the match. -/
+/-- A permutation fixes concrete slot terms and literal query slots. Action-only slots
+remain fresh choices and need not be fixed. -/
 def FixesConstants (ρ : NamePermutation) (r : Rule) : Prop :=
-  ∀ fa ∈ r.query.flatMap Encode.Pattern.apps ++ r.actions.flatMap Encode.Action.apps,
-    isSlotName fa.1 = true → fa.2 = [] → ρ.names fa.1 = fa.1
+  (∀ fa ∈ r.query.flatMap Encode.Pattern.apps ++ r.actions.flatMap Encode.Action.apps,
+    isSlotName fa.1 = true → fa.2 = [] → ρ.names fa.1 = fa.1) ∧
+  (∀ v ∈ r.query.vars, isSlotVar v = true → ρ.names v = v)
 
 /-- Consistently renaming a match only renames the facts it produces: the paper's source
 rule assumption, stated for the complete round (including all choices of fresh slots). -/

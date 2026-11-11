@@ -7,10 +7,11 @@ import Mathlib.Data.List.Defs
 The computations the paper's slotted rules use, as functions on the canonical values of
 `Values.lean`: the renaming algebra (`img`, `dom`, `⁻¹`, `∘`, `|_A`, `id_A`, application),
 the slot set algebra, `Perm`, the Collide union `align`, the Migrate extension `extend`, the
-binder name `mint`, the successor `succ` of a row generation, finite permutations for membership witnesses, and the e-matching operations `fresh`, `distinct`/`cliques`, `identity`, `unify`,
-`final-refine` and `anchor` over frames. A **frame** is a renaming on
-placeholders that sends each placeholder to the least member of its block; the cliques are a
-list of slot sets whose members must stay in distinct blocks.
+binder name `mint`, the successor `succ` of a row generation, finite permutations for
+membership witnesses, and the e-matching operations `fresh`, `distinct`/`cliques`, `identity`, `unify`,
+`final-refine` and `anchor` over unification maps. A **unification map** identifies
+temporary names, preserving fixed literals supplied separately as `P`. The cliques `C`
+are slot sets whose members must stay in distinct blocks.
 
 `Prim.eval` evaluates one application of a primitive name to canonical arguments, `none`
 off its domain; `Prim.norm?` is the primitive step, reducing every primitive application of a
@@ -63,35 +64,42 @@ def permutations (A : List Slot) : List Renaming :=
   let A := canonSlots A
   A.permutations.map (A.zip ·)
 
-/-! ### Frames -/
+/-! ### Unification maps -/
 
-/-- The block of a placeholder: its representative under the frame, itself if unknown. -/
-def frameRep (F : Renaming) (p : Slot) : Slot := (F.apply p).getD p
+/-- The representative of a temporary name under the unification map. -/
+def unificationRep (U : Renaming) (p : Slot) : Slot := (U.apply p).getD p
 
-/-- Merge the blocks of two placeholders, keeping the smaller representative. -/
-def frameMerge (F : Renaming) (a b : Slot) : Renaming :=
-  let ra := frameRep F a
-  let rb := frameRep F b
-  if ra = rb then F else
-    let lo := if decide (ra ≤ rb) then ra else rb
-    let hi := if decide (ra ≤ rb) then rb else ra
-    F.map fun pr => (pr.1, if pr.2 = hi then lo else pr.2)
+/-- Merge two blocks, keeping a fixed literal when either block contains one.
+`fixesLiterals` rejects a merge of two distinct literals. -/
+def mergeNames (U : Renaming) (a b : Slot) (P : List Slot) : Renaming :=
+  let ra := unificationRep U a
+  let rb := unificationRep U b
+  let r := if ra ∈ P then ra else if rb ∈ P then rb
+    else if decide (ra ≤ rb) then ra else rb
+  U.map fun pr => (pr.1, if pr.2 = ra || pr.2 = rb then r else pr.2)
+
+/-- Literal identities are separate from the disequality cliques. -/
+def fixesLiterals (U : Renaming) (P : List Slot) : Bool :=
+  P.all fun p => U.apply p == some p
 
 /-- No clique has two members in one block. -/
-def frameConsistent (F : Renaming) (C : List (List Slot)) : Bool :=
-  C.all fun K => (K.dedup.map (frameRep F)).dedup.length == K.dedup.length
+def consistent (U : Renaming) (C : List (List Slot)) : Bool :=
+  C.all fun K => (K.dedup.map (unificationRep U)).dedup.length == K.dedup.length
 
-/-- Merge the pairs in turn and check the cliques; the placeholders must be known. -/
-def unifyPairs (F : Renaming) (pairs : List (Slot × Slot)) (C : List (List Slot)) :
-    Option Renaming :=
-  if pairs.all (fun p => p.1 ∈ F.dom && p.2 ∈ F.dom) then
-    let F' := pairs.foldl (fun acc p => frameMerge acc p.1 p.2) F
-    if frameConsistent F' C then some F' else none
+/-- Required equalities, followed by the independent literal and clique checks.
+Every operand must already be in the unification map's domain. -/
+def unifyPairs (U : Renaming) (pairs : List (Slot × Slot)) (C : List (List Slot))
+    (P : List Slot) : Option Renaming :=
+  if pairs.all (fun p => p.1 ∈ U.dom && p.2 ∈ U.dom) then
+    let U' := pairs.foldl (fun acc p => mergeNames acc p.1 p.2 P) U
+    if fixesLiterals U' P && consistent U' C then some U' else none
   else none
 
-/-- `unify(F, m, m′, C)`: identify `m(t)` with `m′(t)` for every common key `t`. -/
-def unify (F : Renaming) (m m' : Renaming) (C : List (List Slot)) : Option Renaming :=
-  unifyPairs F (m.dom.filterMap fun t => do pure (← m.apply t, ← m'.apply t)) C
+/-- `unify(U,m,m′,C,P)`: identify the images of each common key, preserving the
+fixed literals `P` and each disequality clique in `C`. -/
+def unify (U : Renaming) (m m' : Renaming) (C : List (List Slot))
+    (P : List Slot) : Option Renaming :=
+  unifyPairs U (m.dom.filterMap fun t => do pure (← m.apply t, ← m'.apply t)) C P
 
 /-- The set partitions of a list. -/
 def partitions {α : Type} : List α → List (List (List α))
@@ -103,23 +111,23 @@ where
     | [] => []
     | g :: gs => ((x :: g) :: gs) :: (insertions x gs).map (g :: ·)
 
-/-- `final-refine(F, C, D)`: every consistent coarsening of `F` that merges blocks touched by
-`D`, the frame itself first. -/
-def refine (F : Renaming) (C : List (List Slot)) (D : List Slot) : List Renaming :=
-  let touched := canonSlots (D.map (frameRep F))
-  (partitions touched).filterMap fun P =>
-    let F' := P.foldl (fun acc g => match g with
+/-- `final-refine(U,C,P,D)`: every consistent coarsening obtained by merging blocks
+reached by `D`. Fixed literals retain their identities; independent placeholders may alias. -/
+def refine (U : Renaming) (C : List (List Slot)) (P D : List Slot) : List Renaming :=
+  let touched := canonSlots (D.map (unificationRep U))
+  (partitions touched).filterMap fun partition =>
+    let U' := partition.foldl (fun acc g => match g with
       | [] => acc
-      | r :: rs => rs.foldl (fun acc' r' => frameMerge acc' r r') acc) F
-    if frameConsistent F' C then some F' else none
+      | r :: rs => rs.foldl (fun acc' r' => mergeNames acc' r r' P) acc) U
+    if fixesLiterals U' P && consistent U' C then some U' else none
 
-/-- `anchor(q, ν)`: name the blocks of the frame `q`, giving the block of `ν(s)` the name
+/-- `anchor(q, ν)`: name the blocks of the unification map `q`, giving the block of `ν(s)` the name
 `s` and every other block a fresh canonical name outside `dom(ν)`. -/
 def anchor (q : Renaming) (ν : Renaming) : Option Renaming := do
   let A := ν.dom
   let named ← ν.foldlM (fun (acc : List (Slot × Slot)) sp =>
     if sp.2 ∈ q.dom then
-      let r := frameRep q sp.2
+      let r := unificationRep q sp.2
       match acc.lookup r with
       | some s => if s = sp.1 then some acc else none
       | none => some (acc ++ [(r, sp.1)])
@@ -153,7 +161,7 @@ def eval (f : FnName) (args : List Term) : Option Term :=
     | [a, b] => do let _ ← decodeSlot a; let _ ← decodeSlot b; pure (.app pairName [a, b])
     | _ => none
   else if f = renName then do
-    -- A frame is a renaming value too, and frames are not injective: only functionality is
+    -- A unification map is a renaming value too and need not be injective: only functionality is
     -- required of the value form.
     let m : Renaming ← args.mapM decodePair
     if (m.map Prod.fst).Nodup then pure (encodeRen m) else none
@@ -187,13 +195,14 @@ def eval (f : FnName) (args : List Term) : Option Term :=
       pure (encodeRen (S.zip (freshPlaceholders S.length (← decodeSet U))))
   | "@cliques", As => (As.mapM decodeSet).map encodeSets
   | "@identity", [A] => (decodeSet A).map fun A => encodeRen (Renaming.id (canonSlots A))
-  | "@unify", [F, m, m', C] => do
-      pure (encodeRen (← unify (← decodeRen F) (← decodeRen m) (← decodeRen m') (← decodeSets C)))
-  | "@unify1", [F, p, p', C] => do
-      pure (encodeRen (← unifyPairs (← decodeRen F) [(← decodeSlot p, ← decodeSlot p')]
-        (← decodeSets C)))
-  | "@refine", [F, C, D] => do
-      pure (encodeRens (refine (← decodeRen F) (← decodeSets C) (← decodeSet D)))
+  | "@unify", [U, m, m', C, P] => do
+      pure (encodeRen (← unify (← decodeRen U) (← decodeRen m) (← decodeRen m')
+        (← decodeSets C) (← decodeSet P)))
+  | "@unify1", [U, p, p', C, P] => do
+      pure (encodeRen (← unifyPairs (← decodeRen U) [(← decodeSlot p, ← decodeSlot p')]
+        (← decodeSets C) (← decodeSet P)))
+  | "@refine", [U, C, P, D] => do
+      pure (encodeRens (refine (← decodeRen U) (← decodeSets C) (← decodeSet P) (← decodeSet D)))
   | "@anchor", [q, ν] => do pure (encodeRen (← anchor (← decodeRen q) (← decodeRen ν)))
   | _, _ => none
 

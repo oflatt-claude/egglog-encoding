@@ -3,27 +3,22 @@ import EgglogSemantics.Slotted.Encode.Maintenance
 /-!
 # Compiling slotted queries and actions
 
-A source query is flattened to depth-one **atoms**, one row pattern per constructor
-application over a root variable, with every child a variable, a slot leaf or another atom's
-root. A ground source term, such as a `let` global the parser substituted, is matched the same
-way: its concrete slots are slots of a pseudo-root whose local names are the global names, so
-two concrete slots stay distinct and a pattern slot may coincide with one. What the match says
-about slots is then computed in the query, as the paper's compiled distribution rule does:
-every atom's local slots receive placeholders by `fresh`, the first occurrence of a variable
-defines the placeholders of its class slots through the edge that carries it, every later
-occurrence is read through a symmetry `Sym(c, π)` and joined by `unify`, a pattern slot is a
-placeholder unified with the columns that carry it, the distinctness cliques are the slots of
-each node, the concrete slots and the written pattern slots, `final-refine` ranges over the
-aliasings of the placeholders reached by variables and carried slots, and `anchor` restores
-the root's class slots. From the anchored frame the query reads
-`μ_v = q′ ∘ ν_v` for every variable and `s′ = q′(q_s)` for every pattern slot, and the guards
-test them: `NotFree($s, e…)` is `s′ ∉ ⋃ img(μ_e)`, `=` is class equality with `cosetSame`
-under `G`, `!=` its negation as a disjunction, `renaming-=` class equality.
+A source query is flattened to depth-one atoms. Each atom's local slots receive
+separate temporary names. The unification map identifies required equalities, while
+independent arguments `C` and `P` record disequality cliques and fixed pattern literals.
+Repeated variables are joined through self-equations `RenamesTo(c,π,c)`. Refinement tries
+remaining aliases without collapsing a term's distinct slots or changing literal identities.
 
-Actions are built bottom-up in the anchored frame with their edges bound in the query; a
-`rewrite` unions the built right-hand side with the root class, a bare-variable right-hand
-side inserts `RenamesTo(root, μ_v, c_v)`. A matched row's generation is a wildcard; a built row
-has generation `0`.
+Concrete free names and written pattern literals retain their names during unification.
+Ground binders are normalized to fresh temporary names within their scopes. Action-only
+slots are separate blocks outside refinement. Anchoring changes coordinates to the root's
+stored names for the action; it transports every matched literal consistently as well.
+Equality selects a self-equation. Disequality compares finite symmetry-membership witnesses
+when classes and map images agree, and otherwise uses the differing class or image.
+
+Actions build bottom-up in these root coordinates. A union at the root is a plain union;
+a variable with a different invocation contributes a `RenamesTo` equation. Matched row
+generations are wildcards; built rows have generation zero.
 -/
 
 namespace Egglog.Slotted.Encode
@@ -271,16 +266,16 @@ inductive Occ where
 structure Emit where
   flat : Flat
   pats : Array Pattern := #[]
-  /-- The frame variable in force. -/
-  frame : Var := "@F0"
   next : Nat := 0
   /-- The first occurrence of each term variable, in order. -/
   firstOcc : List (Var × Occ) := []
   /-- The pattern slots and action-only slots. -/
   patSlots : List Var := []
+  /-- User-written query literals, excluding generated and action-only names. -/
+  fixedSlots : List Var := []
   carried : List Var := []
   concrete : List Slot := []
-  /-- The unifications, collected while scanning the atoms and emitted after the frame. -/
+  /-- The unifications, collected while scanning the atoms and emitted after the unification map. -/
   unifs : Array (Expr × Expr × Bool) := #[]
 
 abbrev EmitM := StateT Emit (Except String)
@@ -326,7 +321,7 @@ def noteSlotRef (carriedHere : Bool) : SlotRef → EmitM Unit
     { st with patSlots := st.patSlots ∪ [v], carried := carried }
   | .concrete s => modify fun st => { st with concrete := st.concrete ∪ [s] }
 
-/-- Record a unification to emit after the frame starts. -/
+/-- Record a unification to emit after the unification map starts. -/
 def unifyLater (m m' : Expr) (single : Bool) : EmitM Unit :=
   modify fun st => { st with unifs := st.unifs.push (m, m', single) }
 
@@ -390,15 +385,16 @@ def classSlots (v : Var) : Occ → EmitM Expr
     pure (.var A)
   | .child _ e => pure (pdom (.var e))
 
-/-- Emit the placeholders, the variables' placeholder maps, the cliques, the frame, the
+/-- Emit the placeholders, the variables' placeholder maps, the cliques, the unification map, the
 unifications, the refinement and the anchor at `anchorVar`; then `μ_v` for every variable and
 the final names of the slots. -/
-def emitFrame (anchorVar : Var) : EmitM Unit := do
+def emitUnification (anchorVar : Var) : EmitM Unit := do
   let facts := (← get).flat.facts.toList
-  -- Local slots and placeholders of each node, the concrete pseudo-root first.
+  -- Fixed literals and concrete names are separate from each node's temporary names.
   let st ← get
-  push (bindP "@nuG" (prim "@fresh" [pset (st.concrete.map slotTerm), emptySet]))
-  let mut used : Expr := pimg nuG
+  let P ← compute "P" (pset ((st.fixedSlots ∪ st.concrete).map slotTerm))
+  push (bindP "@nuG" (pid (pset (st.concrete.map slotTerm))))
+  let mut used : Expr := P
   -- The concrete slots and the binders of ground terms are pairwise distinct: a bound name
   -- is fresh for the free slots of its term.
   let groundBinders := st.flat.groundBinders.map fun v => papply nuLit (slotTerm v)
@@ -416,9 +412,10 @@ def emitFrame (anchorVar : Var) : EmitM Unit := do
     used := punion used (pimg (nuAtom i))
     cliques := cliques ++ [pimg (nuAtom i)]
   let st ← get
-  push (bindP "@nuLit" (prim "@fresh" [pset (st.patSlots.map slotTerm), used]))
+  let temporary := st.patSlots.filter (· ∉ st.fixedSlots)
+  push (bindP "@nuLit" (prim "@align"
+    [pid (pset (st.fixedSlots.map slotTerm)), prim "@fresh" [pset (temporary.map slotTerm), used]]))
   used := punion used (pimg nuLit)
-  cliques := cliques ++ [pimg nuLit]
   -- The placeholder map of every variable's class slots.
   for (v, occ) in st.firstOcc do
     let nu : Expr ← match occ with
@@ -427,20 +424,20 @@ def emitFrame (anchorVar : Var) : EmitM Unit := do
     push (bindP s!"@nu_{v}" nu)
   let C ← compute "C" (prim "@cliques" cliques)
   let U ← compute "U" used
-  push (bindP "@F0" (prim "@identity" [U]))
+  push (bindP "@u0" (prim "@identity" [U]))
   -- The unifications, in order.
   let mut k := 0
   for (m, m', single) in st.unifs do
-    let F' := s!"@F{k + 1}"
-    push (bindP F' (if single then prim "@unify1" [.var s!"@F{k}", m, m', C]
-      else prim "@unify" [.var s!"@F{k}", m, m', C]))
+    let U' := s!"@u{k + 1}"
+    push (bindP U' (if single then prim "@unify1" [.var s!"@u{k}", m, m', C, P]
+      else prim "@unify" [.var s!"@u{k}", m, m', C, P]))
     k := k + 1
   -- Refinement over the placeholders reached by variables and carried slots, then anchoring.
   let D ← compute "D" (unions ((st.firstOcc.map fun vo => pimg (nuVar vo.1)) ++
     [pimg nuG] ++
     (if st.carried.isEmpty then [] else [pset (st.carried.map fun v => papply nuLit (slotTerm v))])))
   let q ← fresh "q"
-  push (.expr (.app memName [.var q, prim "@refine" [.var s!"@F{k}", C, D]]))
+  push (.expr (.app memName [.var q, prim "@refine" [.var s!"@u{k}", C, P, D]]))
   push (bindP "@qa" (prim "@anchor" [.var q, nuVar anchorVar]))
   for (v, _) in st.firstOcc do
     push (bindP s!"@mu_{v}" (pcomp (.var "@qa") (nuVar v)))
@@ -449,7 +446,7 @@ def emitFrame (anchorVar : Var) : EmitM Unit := do
   for s in st.concrete do
     push (bindP s!"@c_{s.drop 1}" (papply (.var "@qa") (papply nuG (slotTerm s))))
 
-/-- A comparison of two class variables under the frame: the alternatives it compiles to. -/
+/-- A comparison of two class variables under the unification map: the alternatives it compiles to. -/
 def cmpPatterns (k : Cmp) (a b : Expr) (payload : Bool) : EmitM (List (List Pattern)) := do
   if payload then
     let st ← get
@@ -511,7 +508,7 @@ def leafBuilt (s' : Expr) : EmitM Built := do
   let ed ← compute "ed" (.app renName [.app pairName [leafExpr, s']])
   pure ⟨ed, leafExpr, pset [s']⟩
 
-/-- Build a right-hand side bottom-up in the anchored frame, binding every computation. -/
+/-- Build a right-hand side bottom-up in the root coordinates, binding every computation. -/
 partial def build (e : Expr) : EmitM Built := do
   let st ← get
   match e with
@@ -577,7 +574,7 @@ def atomRoot (st : Emit) (e : Expr) : Option Var :=
     | .atom a => if exprEqB a.src e then some a.root else none
     | _ => none
 
-/-- A term in the frame: a variable is its invocation, a matched application its root class,
+/-- A term in the unification map: a variable is its invocation, a matched application its root class,
 anything else a build. -/
 def termOf (e : Expr) : EmitM (Expr × Option Var) := do
   let st ← get
@@ -593,7 +590,7 @@ def termOf (e : Expr) : EmitM (Expr × Option Var) := do
       pure (b.child, none)
 
 /-- Compile one action. A union with the anchored root, whose renaming is the identity, is a
-plain union; a union with another variable's invocation is an `RenamesTo` fact. -/
+plain union; a union with another variable's invocation is a `RenamesTo` fact. -/
 def compileAction (anchorVar : Var) : Action → EmitM (List Action)
   | .expr (.var _) => pure []
   | .expr e => do pure [.expr (← build e).child]
@@ -660,14 +657,16 @@ def compileRuleParts (L : Layout) (q : Query) (as : List Action) :
     let st ← get
     for v in st.flat.termVars do
       if (st.firstOcc.lookup v).isNone then throw s!"variable {v} is bound by no pattern"
-    -- A concrete slot in an action must already belong to the query's global frame.
+    -- A concrete slot in an action must already belong to the query's concrete-name set.
     for (f, args) in as.flatMap Action.apps do
       if isSlotName f && args.isEmpty && f ∉ st.concrete then
         throw s!"action-only concrete slot {f}; use a fresh slot variable"
-    -- Action-only slots receive placeholders of their own.
+    -- Query literals have their own fixed-name argument. Generated binder names and
+    -- action-only names remain temporary, with freshness handled independently.
+    modify fun st => { st with fixedSlots := st.patSlots.filter fun v => !v.startsWith "$@" }
     for v in actionSlotVars as do
       modify fun st => { st with patSlots := st.patSlots ∪ [v] }
-    emitFrame anchorVar
+    emitUnification anchorVar
     let alts ← emitGuards
     let acts ← plainActions (← as.flatMapM (compileAction anchorVar))
     let st ← get
@@ -685,32 +684,33 @@ rows bound as wildcards and the built rows at generation `0`; the flattened sour
   \begin{aligned}
    &\mathit{prod}=\mathtt{Mul}(g_0,\rho_x,\mathit{factor},\rho_s,\mathit{sum})\\
    &\land\mathit{sum}=\SumZeroTen(g_1,\$r,\rho_b,\mathit{body})\\
-   &\land(\nu_0,\nu_1,q_v)=\operatorname{fresh}
+   &\land(\nu_0,\nu_1)=\operatorname{fresh}
       (\operatorname{img}(\rho_x)\cup\operatorname{img}(\rho_s),
-       \{\$r\}\cup\operatorname{img}(\rho_b),\{\$v\})\\
-   &\land C=\operatorname{distinct}(\operatorname{img}(\nu_0))
+       \{\$r\}\cup\operatorname{img}(\rho_b))\\
+   &\land P=\{\$v\}\land C=\operatorname{distinct}(\operatorname{img}(\nu_0))
        \cup\operatorname{distinct}(\operatorname{img}(\nu_1))\\
-   &\land\mathtt{RenamesTo}(\mathit{sum},\pi,\mathit{sum})\land\mathtt{FS}(\mathit{prod},A)\\
-   &\land D=\operatorname{img}(\nu_0\circ\rho_x)\cup\operatorname{img}(\nu_1\circ\rho_b)\\
-   &\land F_0=\operatorname{identity}(\nu_0,\nu_1,q_v)\\
-   &\land F_1=\operatorname{unify}(F_0,\nu_0\circ\rho_s,\nu_1\circ\pi,C)\\
-   &\land F_2=\operatorname{unify}(F_1,\nu_1(\$r),q_v,C)\\
-   &\land q\in\operatorname{final\text{-}refine}(F_2,C,D)
+   &\land\mathtt{RenamesTo}(\mathit{sum},\pi,\mathit{sum})
+       \land\mathtt{FS}(\mathit{sum},B)\land\pi\in\operatorname{Perm}(B)\\
+   &\land\mathtt{FS}(\mathit{prod},A)
+       \land D=\operatorname{img}(\nu_0\circ\rho_x)\cup\operatorname{img}(\nu_1\circ\rho_b)\\
+   &\land U_0=\operatorname{identity}(\operatorname{img}(\nu_0)\cup\operatorname{img}(\nu_1)\cup P)\\
+   &\land U_1=\operatorname{unify}(U_0,\nu_0\circ\rho_s,\nu_1\circ\pi,C,P)\\
+   &\land U_2=\operatorname{unify}(U_1,\nu_1(\$r),\$v,C,P)\\
+   &\land q\in\operatorname{final\text{-}refine}(U_2,C,P,D)
        \land q'=\operatorname{anchor}(q,\nu_0|_A)\\
    &\land\mu_x=q'\circ\nu_0\circ\rho_x\land\mu_b=q'\circ\nu_1\circ\rho_b\\
-   &\land\$v'=q'(q_v)\land\$v'\notin\operatorname{img}(\mu_x)\\
-   &\land P=\operatorname{img}(\mu_x)\cup\operatorname{img}(\mu_b)\\
+   &\land\$v'=q'(\$v)\land\$v'\notin\operatorname{img}(\mu_x)
+       \land T=\operatorname{img}(\mu_x)\cup\operatorname{img}(\mu_b)\\
    &\Rightarrow\kw{union}\bigl(\mathit{prod},
-       \SumZeroTen(0,\$v',\mathrm{id}_P,
+       \SumZeroTen(0,\$v',\mathrm{id}_T,
          \mathtt{Mul}(0,\mu_x,\mathit{factor},\mu_b,\mathit{body}))\bigr).
   \end{aligned}
   \]
-  Here \texttt{fresh} abbreviates successive calls with disjoint images;
-  \texttt{distinct} cliques are stored by \texttt{cliques}. The generated refinement also
-  lists intermediate roots, whose live slots are already reached by $x,b$ in this example.
-  A bare-variable right-hand side $y$ writes
-  $\mathtt{RenamesTo}(\mathit{prod},\mu_y,c_y)$.
-  Action-only slots receive separate blocks and fresh names at anchoring.
+  The temporary images are disjoint and avoid $P$. Unification preserves $\$v$;
+  anchoring then transports the complete match into the product's stored coordinates.
+  The generated refinement also lists intermediate roots, whose live slots are already
+  reached by $x,b$ here. A variable right-hand side $y$ writes
+  $\mathtt{RenamesTo}(\mathit{prod},\mu_y,c_y)$; action-only slots get fresh blocks.
   -/)
   (latexEnv := "paperfragment")]
 def compileRule (L : Layout) (r : Rule) : Except String (List Rule) := do

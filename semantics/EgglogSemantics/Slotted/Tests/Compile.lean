@@ -53,24 +53,34 @@ private def ev (f : FnName) (args : List Term) : Option Term := Prim.eval f args
 -- `extend` names the missing slots outside the image and the avoided set.
 #guard ev "@extend" [ren [("$a", "$0")], set ["$a", "$b"], set ["$1"]] =
   some (ren [("$a", "$0"), ("$b", "$2")])
--- A frame on three placeholders: unify merges, refine enumerates the two aliasings of the
+-- A unification map on three placeholders: unify merges, refine enumerates the two aliasings of the
 -- touched blocks that no clique forbids, anchor names the blocks.
-private def F0 : Term := ren [("$@0", "$@0"), ("$@1", "$@1"), ("$@2", "$@2")]
+private def U0 : Term := ren [("$@0", "$@0"), ("$@1", "$@1"), ("$@2", "$@2")]
 private def C1 : Term := encodeSets [["$@0", "$@1"]]
-#guard ev "@unify1" [F0, .slot "$@1", .slot "$@2", C1] =
+#guard ev "@unify1" [U0, .slot "$@1", .slot "$@2", C1, set []] =
   some (ren [("$@0", "$@0"), ("$@1", "$@1"), ("$@2", "$@1")])
-#guard ev "@unify1" [F0, .slot "$@0", .slot "$@1", C1] = none
-#guard (ev "@refine" [F0, C1, set ["$@0", "$@2"]]).bind Prim.elements =
-  some [ren [("$@0", "$@0"), ("$@1", "$@1"), ("$@2", "$@0")], F0]
-#guard ev "@anchor" [F0, ren [("$i", "$@1")]] =
+#guard ev "@unify1" [U0, .slot "$@0", .slot "$@1", C1, set []] = none
+#guard (ev "@refine" [U0, C1, set [], set ["$@0", "$@2"]]).bind Prim.elements =
+  some [ren [("$@0", "$@0"), ("$@1", "$@1"), ("$@2", "$@0")], U0]
+#guard ev "@anchor" [U0, ren [("$i", "$@1")]] =
   some (ren [("$@0", "$0"), ("$@1", "$i"), ("$@2", "$1")])
 #guard (ev "@perms" [set ["$a", "$b"]]).bind Prim.elements =
   some (canonTerms [ren (Renaming.id ["$a", "$b"]), ren [("$a", "$b"), ("$b", "$a")]])
 
--- Inversion requires an injection; frames can share a value but cannot be inverted.
+-- Inversion requires an injection; unification maps can share a value but cannot be inverted.
 #guard ev "@inv" [ren [("$a", "$c"), ("$b", "$c")]] = none
 #guard ev "@ren" [.app "@pair" [.slot "$a", .slot "$b"],
   .app "@pair" [.slot "$a", .slot "$c"]] = none
+
+-- Fixed literal identities are independent of clique constraints. A placeholder may
+-- join a literal, but two literals never merge, even when C is empty.
+private def fixedU : Term := ren (Renaming.id ["$@0", "$x", "$y"])
+private def fixedP : Term := set ["$x", "$y"]
+#guard ev "@unify1" [fixedU, .slot "$@0", .slot "$x", encodeSets [], fixedP] =
+  some (ren [("$@0", "$x"), ("$x", "$x"), ("$y", "$y")])
+#guard ev "@unify1" [fixedU, .slot "$x", .slot "$y", encodeSets [], fixedP] = none
+#guard ((ev "@refine" [fixedU, encodeSets [], fixedP, set ["$@0", "$x", "$y"]]).bind
+  decodeRens).map List.length = some 3
 
 /-! ### Target matching boundaries -/
 

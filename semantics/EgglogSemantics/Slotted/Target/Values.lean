@@ -94,7 +94,7 @@ def decodeBool : Term → Option Bool
 /-! ### Fresh names
 
 Final slot names minted by the pass's primitives are the least unused of `$0, $1, …`;
-placeholders, which only frames see, are `$@0, $@1, …`. Both are slot names, so they live in
+placeholders, used by unification, are `$@0, $@1, …`. Both are slot names, so they live in
 the same value kinds as source slots. -/
 
 /-- The `k`th canonical name. -/
