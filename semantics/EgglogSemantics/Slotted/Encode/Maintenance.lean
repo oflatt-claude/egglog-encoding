@@ -129,7 +129,8 @@ def composeRule : Rule :=
     actions := [wRenamesTo va vk vc] }
 
 /-- Retire only a strictly shortened map. Transport reads its original entries in the same
-pre-state. Self-equations use the same rule; symmetry consumers check the current support. -/
+pre-state. Self-equations use the same rule; at a fixpoint they are permutations of the
+current support. -/
 def restrictRenamesRule : Rule :=
   { query := [renamesTo va vm vb, fs va vA, fs vb vB,
               bindP "@n" (trimmed vA vm vB), .ne vn vm],
@@ -151,21 +152,27 @@ def orbitMemberRule : Rule :=
 
 /-- `Collide_f`: two nodes with the same children and payloads are equal under the union of
 the correspondences of their children, each read through a symmetry of the child, and the
-alignment of their binders. -/
+alignment of their binders. Composition uses only entries where all steps are defined;
+child maps and self-equations need not yet be restricted to the current free slots. -/
 @[blueprint "def:slotted-collide"
   (statement := /--
   \[
   \begin{aligned}
    \textsc{Collide}:\quad
-   &a=\SumZeroTen(g,\$i,\rho,b)\land a'=\SumZeroTen(g',\$j,\eta,b)\\
-   &\land\mathtt{FS}(b,B)\land\operatorname{dom}(\rho)=B=\operatorname{dom}(\eta)\\
-   &\land\mathtt{RenamesTo}(b,\pi,b)\land\pi\in\operatorname{Perm}(B)\\
-   &\land m=\operatorname{align}(\rho\circ\pi\circ\eta^{-1},[\$j\mapsto\$i])
-     \Rightarrow\mathtt{RenamesTo}(a,m,a').
+   &a=\mathtt{Mul}(g,\rho_1,c_1,\rho_2,c_2)
+     \land a'=\mathtt{Mul}(g',\eta_1,c_1,\eta_2,c_2)\\
+   &\land\mathtt{RenamesTo}(c_1,\pi_1,c_1)\land\mathtt{RenamesTo}(c_2,\pi_2,c_2)\\
+   &\land m=\operatorname{align}(\rho_1\circ\pi_1\circ\eta_1^{-1},
+     \rho_2\circ\pi_2\circ\eta_2^{-1})\\
+   &\Rightarrow\mathtt{RenamesTo}(a,m,a').
   \end{aligned}
   \]
-  For $f$, combine one correspondence per child and one per binding field;
-  payloads agree. The case $a=a'$ discovers parent symmetries.
+  The $\pi_i$ are the symmetries of the children, the self-equations
+  $\mathtt{RenamesTo}(c_i,\pi_i,c_i)$, which \textsc{Trim} keeps as permutations of
+  their free slots.
+  A binding position is a slot name stored in the node itself, so for the sum
+  $\operatorname{align}$ also receives $[\$j\mapsto\$i]$; with $a=a'$ the rule discovers
+  a symmetry of the parent.
   -/)
   (latexEnv := "paperfragment")]
 def collideRule (L : Layout) (f : FnName) (n : Nat) : Option Rule :=
@@ -178,10 +185,7 @@ def collideRule (L : Layout) (f : FnName) (n : Nat) : Option Rule :=
     | .binder => .var s!"@d{j}"
     | .payload => .var s!"@p{j}"
   let perChild := children.flatMap fun j =>
-    [fs (.var s!"@c{j}") (.var s!"@B{j}"),
-     .eq (pdom (.var s!"@m{j}")) (.var s!"@B{j}"), .eq (pdom (.var s!"@n{j}")) (.var s!"@B{j}"),
-     renamesTo (.var s!"@c{j}") (.var s!"@pi{j}") (.var s!"@c{j}"),
-     isTrue (pisPerm (.var s!"@pi{j}") (.var s!"@B{j}")),
+    [renamesTo (.var s!"@c{j}") (.var s!"@pi{j}") (.var s!"@c{j}"),
      bindP s!"@k{j}" (pcomp (.var s!"@m{j}") (pcomp (.var s!"@pi{j}") (pinv (.var s!"@n{j}"))))]
   let perBinder := binders.map fun k =>
     bindP s!"@k{k}" (.app renName [.app pairName [.var s!"@d{k}", .var s!"@b{k}"]])

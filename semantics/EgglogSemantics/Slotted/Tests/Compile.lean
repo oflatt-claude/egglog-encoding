@@ -50,6 +50,13 @@ private def ev (f : FnName) (args : List Term) : Option Term := Prim.eval f args
 #guard ev "@align" [ren [("$a", "$b")], ren [("$c", "$d")]] = some (ren [("$a", "$b"), ("$c", "$d")])
 #guard ev "@align" [ren [("$a", "$b")], ren [("$a", "$c")]] = none
 #guard ev "@align" [ren [("$a", "$b")], ren [("$c", "$b")]] = none
+-- Collide composes a stale symmetry on three slots through smaller child maps.
+-- Only the path $y ↦ $a ↦ $b ↦ $x survives both partial compositions.
+#guard Prim.norm? (.app "@align" [
+    .app "@comp" [ren [("$b", "$x")],
+      .app "@comp" [ren [("$a", "$b"), ("$b", "$a"), ("$c", "$c")],
+        .app "@inv" [ren [("$a", "$y"), ("$b", "$z")]]]],
+    ren [("$w", "$v")]]) = some (ren [("$y", "$x"), ("$w", "$v")])
 -- `extend` names the missing slots outside the image and the avoided set.
 #guard ev "@extend" [ren [("$a", "$0")], set ["$a", "$b"], set ["$1"]] =
   some (ren [("$a", "$0"), ("$b", "$2")])

@@ -191,9 +191,9 @@ RenamesTo(a,m,b) ∧ FS(a,A) ∧ FS(b,B)
   ∧ n=trim(A,m,B) ∧ n≠m
   ⇒ RenamesTo(a,n,b), subsume(RenamesTo(a,m,b))
 
-a=N_g(s,ρ,c) ∧ a'=N_h(t,η,c) ∧ FS(c,C)
-  ∧ dom(ρ)=C=dom(η) ∧ RenamesTo(c,π,c) ∧ π∈Perm(C)
-  ∧ m=align(ρ∘π∘η⁻¹,[t↦s])
+a=Mul(g,ρ₁,c₁,ρ₂,c₂) ∧ a'=Mul(g',η₁,c₁,η₂,c₂)
+  ∧ RenamesTo(c₁,π₁,c₁) ∧ RenamesTo(c₂,π₂,c₂)
+  ∧ m=align(ρ₁∘π₁∘η₁⁻¹,ρ₂∘π₂∘η₂⁻¹)
   ⇒ RenamesTo(a,m,a')
 
 a=N_g(s,ρ,c) ∧ RenamesTo(a,m,b) ∧ FS(a,A) ∧ FS(b,B)
@@ -210,7 +210,14 @@ a=f(g,t̄) ∧ a'=f(h,t̄) ∧ g<h
   ⇒ union(a,a'), subsume(f(g,t̄))
 ```
 
-`align` is defined only for a consistent injective union. Before collision or
+The `πᵢ` are the symmetries of the children, the self-equations
+`RenamesTo(cᵢ,πᵢ,cᵢ)`, which `Trim` keeps as permutations of their free slots.
+A binding position is a slot name stored in the node itself, so for the sum
+`align` also receives `[t↦s]`; with `a=a'` the rule discovers a symmetry of the parent.
+
+`align` is defined only for a consistent injective union. Partial composition
+retains only entries where both steps are defined, so `ρᵢ∘πᵢ∘ηᵢ⁻¹` tolerates
+`πᵢ` having a larger domain than either child map. Before collision or
 migration, a binder shared with an outside occurrence is refreshed in its field
 and in the child images it binds, using a name outside all the node's local
 slots. An earlier shadowed binder is refreshed without changing the occurrences
@@ -236,10 +243,15 @@ form. All maintenance rules run in one saturation.
   `FS`, restriction, map comparison, and the executable value representation.
 - **Shrinking maps.** Retire an equation only when `trim(A,m,B)≠m`, after writing
   its restriction. Transport fires on the same pre-state, so the removed entries
-  have already contributed both support estimates. For self-equations use exactly
-  the same rule; matching and collision require the eventual restriction to be a
-  permutation of the current support. The `redundancy-orbit` and
-  `symmetry-with-redundancy` corpus files test this interaction.
+  have already contributed both support estimates. Self-equations use the same
+  `Trim` rule, giving permutations of the current support at a fixpoint;
+  `Restrict` cuts child maps to that support. Collide reads self-equations without
+  support or permutation premises: every retained entry is a true equation, and
+  every correspondence accepted by `align` gives a true equation of the parents.
+  A collision blocked by stale entries is retried when maps shrink. Matching and
+  orbit membership check permutations of the current support explicitly.
+  The `redundancy-orbit` and `symmetry-with-redundancy` corpus files test this
+  interaction.
 - **Later unions and reversed edges.** Do not delete a fact because its endpoints
   change order. Inversion retains both directions; migration and child update
   choose the smaller endpoint when they fire. Unions cannot revive a removed slot,
@@ -255,7 +267,9 @@ form. All maintenance rules run in one saturation.
   execution-limit blocker, not evidence of semantic divergence.
 - **Arrow audit.** Migrate requires `b=min(a,b) ∧ b≠a`; Child requires
   `d=min(c,d) ∧ d≠c`. Closure, transport, and collision permit reflexive edges.
-  A symmetry consumer requires equal endpoints and a permutation of current `FS`.
+  Collide requires equal endpoints for each child self-equation and accepts
+  untrimmed maps; matching and orbit membership additionally require a permutation
+  of current `FS`.
   Restriction needs strict map change; Dedup needs strict generation order.
 - **Unification terminology.** Use “unification map”: a possibly noninjective map
   on initially separate temporary names. Keep disequality cliques `C` and fixed
@@ -536,9 +550,10 @@ symmetries, a follower becoming leader, redundancy after symmetry, forbidden lit
 collapse and a child update through a symmetric child. Their 47 checks plus the
 unrestricted corpus's 203 give **250 agreements, zero disagreements**: 61 files,
 46 parser-accepted, 45 compiled, 1 policy rejection, 15 parser rejections.
-The prior gate had 235 agreements across 41 compiled files (57 total). All six
-`paper/` files (18 checks) and distribution (2 checks) agree. No Rust binary rebuild
-or source modification is needed; no Python file is changed.
+Collide's self-equation premises, without support, domain-equality or permutation
+guards, pass this entire gate at the default 600-second and 256-pass limits.
+All six `paper/` files (18 checks) and distribution (2 checks) agree. The gate uses
+the supplied Rust binaries without rebuilding them.
 
 ### Per-file report
 

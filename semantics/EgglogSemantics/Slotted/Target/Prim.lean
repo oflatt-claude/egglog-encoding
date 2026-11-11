@@ -14,6 +14,10 @@ membership witnesses, and the e-matching operations `fresh`, `distinct`/`cliques
 temporary names, preserving fixed literals supplied separately as `P`. The cliques `C`
 are slot sets whose members must stay in distinct blocks.
 
+`@comp` uses partial composition: it retains an entry only where both steps are defined.
+Thus Collide can compose `ρ ∘ π ∘ η⁻¹` when a self-equation `π` still has entries outside
+the child maps' domains; `align` checks the resulting correspondences' union.
+
 `Prim.eval` evaluates one application of a primitive name to canonical arguments, `none`
 off its domain; `Prim.norm?` is the primitive step, reducing every primitive application of a
 term bottom-up; `Prim.elements` reads a set-valued result for the membership pattern.
