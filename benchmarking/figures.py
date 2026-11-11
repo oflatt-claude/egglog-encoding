@@ -149,7 +149,7 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def load_config(path: Path) -> FigureConfig:
     """Read the figure definitions without touching workloads."""
     path = path.expanduser().resolve()
-    data = json.loads(path.read_text(), object_pairs_hook=_unique_object)
+    data = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
     if (
         not isinstance(data, dict)
         or not {"rounds", "figures"} <= set(data)
@@ -273,7 +273,7 @@ def resolve_figures(config: FigureConfig, names: Sequence[str], invocation_cwd: 
         if figure.spec not in specs:
             if not figure.spec.is_file():
                 raise ValueError(f"figure spec does not exist: {figure.spec}")
-            spec = json.loads(figure.spec.read_bytes())
+            spec = json.loads(figure.spec.read_bytes().decode("utf-8"))
             if (
                 not isinstance(spec, dict)
                 or not isinstance(spec.get("data"), dict)
@@ -439,31 +439,6 @@ def render_figures(
                 parameter["value"] = bindings[parameter["name"]]
         spec["data"]["url"] = grouped_report_path(report_path).as_uri()
         results = figure_results(figure.name, selected_inputs, grouped, config.rounds, t_critical)
-        for condition in results["conditions"]:
-            issue = (
-                f"excluded ({condition['exclusion']['kind']}): {condition['exclusion']['reason']}"
-                if condition["exclusion"]
-                else condition["validation_issue"]
-                or (f"{condition['failed_n']} failed observations" if condition["failed_n"] else None)
-                or (
-                    f"{condition['sample_n']}/{config.rounds} observations"
-                    if condition["sample_n"] != config.rounds
-                    else None
-                )
-                or next(
-                    (
-                        f"{metric}: measurement unavailable"
-                        for metric, values in condition["metrics"].items()
-                        if values["valid_n"] != config.rounds
-                    ),
-                    None,
-                )
-            )
-            if issue:
-                raise ValueError(
-                    f"{figure.name}: {condition['label']} · {condition['treatment']}: {issue}; "
-                    "no figure outputs replaced"
-                )
         if figure.name.startswith("corpus-"):
             domains = corpus_view_domains(results)
             results["view_domains"] = domains
@@ -507,21 +482,49 @@ def render_figure_data(
     images: bool = True,
     renderer: dict[str, Any] | None = None,
 ) -> tuple[Path, ...]:
-    """Atomically export and optionally draw portable, per-figure selected snapshots."""
+    """Validate and atomically publish snapshots; images=False skips only drawing."""
     from .figure_results import figure_results, latex_results
 
     command = [*shlex.split(os.environ.get("NPX", "npx --yes")), *[f"--package={p}" for p in VEGA_PACKAGES]]
     renderer = renderer_metadata() if renderer is None else renderer
     destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
+    prepared = []
+    for item in data:
+        name, spec = item.name, deepcopy(item.spec)
+        parameters = {parameter["name"]: parameter["value"] for parameter in spec["params"] if "value" in parameter}
+        results = figure_results(
+            name, parameters["selected_inputs"], item.grouped, parameters["rounds"], parameters["t_critical"]
+        )
+        for condition in results["conditions"]:
+            issue = (
+                f"excluded ({condition['exclusion']['kind']}): {condition['exclusion']['reason']}"
+                if condition["exclusion"]
+                else condition["validation_issue"]
+                or (f"{condition['failed_n']} failed observations" if condition["failed_n"] else None)
+                or (
+                    f"{condition['sample_n']}/{parameters['rounds']} observations"
+                    if condition["sample_n"] != parameters["rounds"]
+                    else None
+                )
+                or next(
+                    (
+                        f"{metric}: measurement unavailable"
+                        for metric, values in condition["metrics"].items()
+                        if values["valid_n"] != parameters["rounds"]
+                    ),
+                    None,
+                )
+            )
+            if issue:
+                raise ValueError(
+                    f"{name}: {condition['label']} · {condition['treatment']}: {issue}; no figure outputs replaced"
+                )
+        prepared.append((item, spec, parameters, results))
     rendered: list[Path] = []
     with tempfile.TemporaryDirectory(dir=destination, prefix=".figures.") as temporary:
-        for item in data:
-            name, spec = item.name, deepcopy(item.spec)
-            parameters = {parameter["name"]: parameter["value"] for parameter in spec["params"] if "value" in parameter}
-            results = figure_results(
-                name, parameters["selected_inputs"], item.grouped, parameters["rounds"], parameters["t_critical"]
-            )
+        for item, spec, parameters, results in prepared:
+            name = item.name
             results.update(figure_data_version=FIGURE_DATA_VERSION, provenance=item.provenance, renderer=renderer)
             # Include only selected measurements; full profiling/provenance lives outside the plot view.
             selections: dict[tuple[str, str, str], set[int]] = {}
@@ -561,7 +564,7 @@ def render_figure_data(
             numbers, table = latex_results(results)
             console.print(f"Rendering {name}" if images else f"Exporting {name}", markup=False)
             bound_path = Path(temporary) / f"{name}.bound.vl.json"
-            bound_path.write_text(json.dumps(spec, ensure_ascii=False, separators=(",", ":")) + "\n")
+            bound_path.write_text(json.dumps(spec, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
             metadata_outputs = [bound_path]
             for suffix, content in (
                 (
@@ -572,7 +575,7 @@ def render_figure_data(
                 ("table.tex", table),
             ):
                 exported = Path(temporary) / f"{name}.{suffix}"
-                exported.write_text(content)
+                exported.write_text(content, encoding="utf-8")
                 metadata_outputs.append(exported)
             outputs = []
             if images:
@@ -617,7 +620,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.reuse_from is not None and not any(token.split("=", 1)[0] == "--target" for token in raw):
             from .figure_reuse import import_figure, restyle_figure, reuse_figure
-            from .targets import git_dirty, git_sha
 
             directory = args.reuse_from.expanduser().resolve()
             explicit = {token.split("=", 1)[0] for token in raw}
@@ -656,7 +658,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 data,
                 args.output_dir.expanduser().resolve(),
                 console,
-                renderer={"git_sha": git_sha(ROOT), "is_dirty": git_dirty(ROOT)},
+                renderer=renderer_metadata(),
             )
             return 0
         cwd = Path.cwd()

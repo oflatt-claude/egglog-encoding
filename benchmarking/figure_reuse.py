@@ -16,6 +16,8 @@ FIGURE_DATA_VERSION = 2
 
 @dataclass
 class FigureData:
+    """Selected observations and frozen settings for one portable figure export."""
+
     name: str
     spec: dict[str, Any]
     grouped: GroupedReport
@@ -64,7 +66,7 @@ def read_figure_json(path: Path) -> dict[str, Any]:
     """Accept plain or gzip sidecars without depending on the producer's filesystem."""
     if not path.exists():
         path = Path(str(path) + ".gz")
-    with gzip.open(path, "rt") if path.suffix == ".gz" else path.open() as handle:
+    with gzip.open(path, "rt", encoding="utf-8") if path.suffix == ".gz" else path.open(encoding="utf-8") as handle:
         return cast(dict[str, Any], json.load(handle))
 
 
@@ -73,7 +75,7 @@ def import_figure(name: str, directory: Path) -> FigureData:
     path = directory / f"{name}.results.json"
     if not path.exists():
         path = directory / f"{name}.results.json.gz"
-    with gzip.open(path, "rt") if path.suffix == ".gz" else path.open() as handle:
+    with gzip.open(path, "rt", encoding="utf-8") if path.suffix == ".gz" else path.open(encoding="utf-8") as handle:
         result = json.load(handle)
     if result["figure"] != name or result.get("figure_data_version") != FIGURE_DATA_VERSION:
         raise ValueError(f"unsupported figure data in {path}; regenerate exports with the current renderer")
@@ -261,8 +263,8 @@ def collect_recorded(
 
     from .collection import BenchmarkRequest, BenchmarkRunPlan, CollectionPlan, collect
     from .engines import TREATMENT_SPECS
-    from .models import BuiltBinary, EndpointRequest, FileSpec, ResolvedTarget, TargetRow
-    from .targets import parse_target, sha256_file
+    from .models import BuiltBinary, EndpointRequest, FileSpec, ResolvedTarget, TargetRequest, TargetRow
+    from .targets import sha256_file
 
     reference = next((row for row in rows if row["binary_sha256"] == item["binary_sha256"]), None)
     metadata = (
@@ -272,9 +274,8 @@ def collect_recorded(
     )
     if metadata is None:
         raise ValueError(f"{data.name}: recorded target provenance is unavailable; choose --target for a new identity")
-    row = TargetRow(
-        **{key: value for key, value in metadata.items() if key != "label"}, label=parameters["target_label"]
-    )
+    # Historical measurements must not move live cache label pointers.
+    row = TargetRow(**{key: value for key, value in metadata.items() if key != "label"}, label=None)
     checkout = Path(row.path)
     treatment = TREATMENT_SPECS[item["treatment"]]
     directory = Path(treatment.target_directory or os.environ.get("CARGO_TARGET_DIR", "target"))
@@ -293,7 +294,7 @@ def collect_recorded(
             f"{data.name}: original input {item['file_sha256']} is unavailable or changed; no runs collected"
         )
     file = FileSpec(str(source), source.resolve(), item["file_sha256"])
-    request = parse_target(f"{row.label}={checkout}")
+    request = TargetRequest(raw=str(checkout), source=str(checkout), label=None)
     target = ResolvedTarget(
         request,
         row,
@@ -336,7 +337,7 @@ def merge_grouped(local: GroupedReport, imports: list[FigureData], label: str) -
 
 def restyle_figure(data: FigureData, spec_path: Path) -> None:
     """Replace drawing code while preserving every recorded selection/settings parameter."""
-    spec = json.loads(spec_path.read_text())
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
     saved = {parameter["name"]: parameter for parameter in data.spec["params"]}
     names = set()
     for parameter in spec.setdefault("params", []):

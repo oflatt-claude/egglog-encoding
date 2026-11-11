@@ -174,3 +174,19 @@ def test_explicit_collection_resolves_current_compiler_before_reusing_unsupporte
     assert new[0]["row"]["proof_congruence_ast_nodes"] == 16
     assert slotted_ast.slotted_ast_records([case["file"]], case["cache"], collect=True) == new
     assert len(lowered) == 1 and len(case["cache"].read_text().splitlines()) == 2
+
+
+def test_unicode_ast_cache_and_exports_use_utf8(
+    ast_case: dict[str, Any], tmp_path: Path, non_utf8_text_defaults: None
+) -> None:
+    ast_case["measured"]["benchmark"] = "mmm_sum_1st-44rules"
+    ast_case["measured"]["proof_congruence_error"] = "Σ has no proof translation"
+    records = slotted_ast.slotted_ast_records(
+        [ast_case["file"]], ast_case["cache"], collect=True, compiler=ast_case["compiler"]
+    )
+    assert "Σ" in ast_case["cache"].read_bytes().decode("utf-8")
+    assert slotted_ast.slotted_ast_records([ast_case["file"]], ast_case["cache"]) == records
+    outputs = slotted_ast.export_slotted_ast(records, tmp_path / "unicode")
+    assert all(path.read_bytes().decode("utf-8") for path in outputs)
+    assert "ΣMMM" in (tmp_path / "unicode/slotted-runtime.ast.csv").read_bytes().decode("utf-8")
+    assert "Σ has no proof translation" in (tmp_path / "unicode/slotted-runtime.ast.md").read_bytes().decode("utf-8")

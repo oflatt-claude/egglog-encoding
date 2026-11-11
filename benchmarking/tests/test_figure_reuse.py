@@ -5,6 +5,8 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import subprocess
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,7 +15,9 @@ from rich.console import Console
 
 from benchmarking import collection, figures, slotted_ast, targets
 from benchmarking.engines import Treatment
+from benchmarking.figure_results import figure_results
 from benchmarking.figure_reuse import FigureData, grouped_figure, import_figure, merge_observations, reuse_figure
+from benchmarking.figures import renderer_metadata
 from benchmarking.reports.store import ReportStore
 
 from .report_fixtures import make_record
@@ -22,8 +26,6 @@ from .report_fixtures import make_record
 @pytest.fixture
 def saved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(figures, "renderer_metadata", lambda: {"git_sha": "renderer", "is_dirty": False})
-    monkeypatch.setattr(targets, "git_sha", lambda *_: "renderer")
-    monkeypatch.setattr(targets, "git_dirty", lambda *_: False)
     name = "retired-export"
     inputs = []
     rows: list[dict[str, Any]] = []
@@ -249,7 +251,7 @@ def test_exact_missing_fill_collects_only_deficit_and_rejects_changed_input(
     saved: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
-    checkout = tmp_path / "historical"
+    checkout = tmp_path / "historical=source"
     binary = checkout / "target/release/egglog-experimental"
     binary.parent.mkdir(parents=True)
     binary.write_text("frozen executable")
@@ -258,6 +260,7 @@ def test_exact_missing_fill_collects_only_deficit_and_rejects_changed_input(
     data = import_figure("retired-export", saved)
     parameters = {p["name"]: p["value"] for p in data.spec["params"]}
     parameters["selected_inputs"][:] = parameters["selected_inputs"][:1]
+    next(p for p in data.spec["params"] if p["name"] == "target_label")["value"] = "figures"
     item = parameters["selected_inputs"][0]
     item["binary_sha256"], item["file_sha256"] = targets.sha256_file(binary), targets.sha256_file(source)
     rows = [dict(row) for row in data.grouped.records if row["treatment"] == "off"]
@@ -283,13 +286,21 @@ def test_exact_missing_fill_collects_only_deficit_and_rejects_changed_input(
             binary_sha256=item["binary_sha256"],
             file_sha256=item["file_sha256"],
             max_rss_bytes=1048576,
+            target_label=plans[0].target.row.label,
         )
+        assert _args[0][0].endpoint.target.label is None
+        assert not collection.current_label_bindings(_args[0], _args[1])
         store.append(row)
 
     monkeypatch.setattr(collection, "collect", collect)
     path = tmp_path / "new.jsonl"
+    store = ReportStore(path)
+    store.append(make_record(0, started_at="2026-01-01T00:00:00Z", target_label="figures", binary_sha256="sha256:live"))
+    pointer = store.find_label_pointer("figures", "egglog-experimental")
     reuse_figure(data, path, False, {"rounds": 3}, Console(file=io.StringIO()))
-    assert len(calls) == 1 and ReportStore(path).row_count == 1
+    assert len(calls) == 1 and ReportStore(path).row_count == 2
+    assert ReportStore(path).find_label_pointer("figures", "egglog-experimental") == pointer
+    assert all(group["labels"] == ["figures"] for group in data.grouped.data["groups"])
     assert len(data.grouped.records) == 3
     source.write_text("changed bytes")
     with pytest.raises(ValueError, match="original input.*unavailable or changed"):
@@ -306,8 +317,11 @@ def test_failures_and_exclusions_remain_recorded_outcomes(saved: Path, tmp_path:
     inputs[1]["exclusion"] = {"kind": "unsupported", "reason": "known", "evidence": "source"}
     inputs[1]["selected_row_indices"] = []
     reuse_figure(data, tmp_path / "unused.jsonl", True, {}, Console(file=io.StringIO()))
-    figures.render_figure_data([data], tmp_path / "out", Console(file=io.StringIO()), images=False)
-    exported = json.loads((tmp_path / "out/retired-export.results.json").read_text())
+    with pytest.raises(ValueError, match="failed observations"):
+        figures.render_figure_data([data], tmp_path / "out", Console(file=io.StringIO()), images=False)
+    parameters = {p["name"]: p["value"] for p in data.spec["params"]}
+    exported = figure_results(data.name, inputs, data.grouped, parameters["rounds"], parameters["t_critical"])
+    assert not list((tmp_path / "out").iterdir())
     assert exported["conditions"][0]["failed_n"] == 1
     assert exported["conditions"][1]["exclusion"]["reason"] == "known"
     assert exported["conditions"][1]["sample_n"] == 0
@@ -487,3 +501,119 @@ def test_incompatible_export_version_is_rejected_before_reading_bindings(saved: 
     (saved / "retired-export.bound.vl.json").unlink()
     with pytest.raises(ValueError, match="unsupported figure data.*regenerate exports"):
         import_figure("retired-export", saved)
+
+
+def test_portable_replay_outside_git_records_unknown_renderer(
+    saved: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(figures, "ROOT", tmp_path)
+    monkeypatch.setattr(figures, "renderer_metadata", renderer_metadata)
+    run = subprocess.run
+    git_failures = []
+
+    def render(command: list[str], **kwargs: Any) -> Any:
+        if command[0] == "git":
+            try:
+                return run(command, **kwargs)
+            except subprocess.CalledProcessError as error:
+                git_failures.append(error)
+                raise
+        Path(command[command.index("--base") - 1]).write_bytes(b"rendered")
+        return None
+
+    monkeypatch.setattr(figures.subprocess, "run", render)
+    output = tmp_path / "outside-git"
+    assert figures.main(["--reuse-from", str(saved), "--no-runs", "--output-dir", str(output)]) == 0
+    assert git_failures
+    result = json.loads((output / "retired-export.results.json").read_text(encoding="utf-8"))
+    assert result["renderer"] == {"git_sha": None, "is_dirty": None}
+
+
+@pytest.mark.parametrize("issue", ["failed", "excluded", "validation", "missing", "runtime", "memory"])
+@pytest.mark.parametrize("images", [False, True])
+def test_replay_publication_rejects_invalid_late_figure_atomically(
+    saved: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, issue: str, images: bool
+) -> None:
+    valid = import_figure("retired-export", saved)
+    invalid = deepcopy(valid)
+    invalid.name = "invalid"
+    item = next(p["value"] for p in invalid.spec["params"] if p["name"] == "selected_inputs")[0]
+    row = invalid.grouped.data["groups"][0]["samples"][0]
+    if issue == "failed":
+        row["status"] = "failure"
+    elif issue == "excluded":
+        item["exclusion"] = {"kind": "unsupported", "reason": "known", "evidence": "source"}
+    elif issue == "validation":
+        item["validation_issue"] = "strict check failed"
+    elif issue == "missing":
+        item["selected_row_indices"].pop()
+    else:
+        row["wall_sec" if issue == "runtime" else "max_rss_bytes"] = None
+    destination = tmp_path / "existing"
+    destination.mkdir()
+    for name in (valid.name, invalid.name):
+        for suffix in ("pdf", "svg", "png", "results.json", "bound.vl.json", "numbers.tex", "table.tex"):
+            (destination / f"{name}.{suffix}").write_bytes(b"previous bundle")
+    before = {path.name: path.read_bytes() for path in destination.iterdir()}
+
+    monkeypatch.setattr(
+        figures.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("invalid bundle started image rendering")
+    )
+    with pytest.raises(ValueError, match="invalid:.*no figure outputs replaced"):
+        figures.render_figure_data([valid, invalid], destination, Console(file=io.StringIO()), images=images)
+    assert {path.name: path.read_bytes() for path in destination.iterdir()} == before
+    # Rejected outcomes remain inspectable without publishing figures or tables.
+    parameters = {p["name"]: p["value"] for p in invalid.spec["params"]}
+    result = figure_results(
+        invalid.name, parameters["selected_inputs"], invalid.grouped, parameters["rounds"], parameters["t_critical"]
+    )
+    condition = result["conditions"][0]
+    if issue == "failed":
+        assert condition["failed_n"] == 1
+    elif issue == "excluded":
+        assert condition["exclusion"]["reason"] == "known"
+    elif issue == "validation":
+        assert condition["validation_issue"] == "strict check failed"
+    elif issue == "missing":
+        assert condition["sample_n"] == 1
+    else:
+        assert condition["metrics"][issue]["valid_n"] == 1
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_portable_unicode_roundtrip_with_non_utf8_defaults(
+    saved: Path, tmp_path: Path, compressed: bool, non_utf8_text_defaults: None
+) -> None:
+    data = import_figure("retired-export", saved)
+    name = data.name = "Σ-export"
+    data.spec["title"] = "Σ workload"
+    next(p["value"] for p in data.spec["params"] if p["name"] == "selected_inputs")[0]["label"] = "Σ workload"
+    source = tmp_path / "unicode"
+    figures.render_figure_data([data], source, Console(file=io.StringIO()), images=False)
+    if compressed:
+        for suffix in ("results.json", "bound.vl.json"):
+            path = source / f"{name}.{suffix}"
+            Path(str(path) + ".gz").write_bytes(gzip.compress(path.read_bytes()))
+            path.unlink()
+    imported = import_figure(name, source)
+    style = tmp_path / "style.json"
+    style.write_text(
+        json.dumps({"title": "Σ restyled", "data": {"url": "unused"}}, ensure_ascii=False), encoding="utf-8"
+    )
+    config = tmp_path / "catalog.json"
+    config.write_text(
+        json.dumps(
+            {"rounds": 2, "figures": {"Σ": {"spec": "style.json", "files": ["absent"], "treatments": ["off"]}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (styled,) = figures.load_config(config).figures
+    from benchmarking.figure_reuse import restyle_figure
+
+    restyle_figure(imported, styled.spec)
+    destination = tmp_path / "unicode-again"
+    figures.render_figure_data([imported], destination, Console(file=io.StringIO()), images=False)
+    for suffix in ("results.json", "bound.vl.json", "numbers.tex", "table.tex"):
+        text = (destination / f"{name}.{suffix}").read_bytes().decode("utf-8")
+        assert "Σ" in text

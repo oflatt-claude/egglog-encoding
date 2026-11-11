@@ -46,7 +46,7 @@ def slotted_ast_records(
 ) -> tuple[dict[str, Any], ...]:
     """Select one stored compiler cohort; explicitly collect missing identities."""
     validate_unique_file_identities(files)
-    records = [json.loads(line) for line in cache.read_text().splitlines()] if cache.exists() else []
+    records = [json.loads(line) for line in cache.read_text(encoding="utf-8").splitlines()] if cache.exists() else []
     records = [record for record in records if record["version"] == CACHE_VERSION and record["pipeline"] == PIPELINE]
     if collect and compiler is None:
         built = subprocess.run(
@@ -62,7 +62,7 @@ def slotted_ast_records(
                 "--message-format=json",
             ],
             cwd=ROOT,
-            text=True,
+            encoding="utf-8",
             stdout=subprocess.PIPE,
             check=True,
         )
@@ -87,7 +87,7 @@ def slotted_ast_records(
         completed = subprocess.run(
             [str(compiler.resolve()), *(str(file.absolute_path) for file in missing)],
             cwd=ROOT,
-            text=True,
+            encoding="utf-8",
             stdout=subprocess.PIPE,
             check=True,
         )
@@ -125,7 +125,7 @@ def slotted_ast_records(
                 }
             )
         cache.parent.mkdir(parents=True, exist_ok=True)
-        with cache.open("a") as handle:
+        with cache.open("a", encoding="utf-8") as handle:
             for record in pending:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 indexed[record["row"]["file_sha256"]] = record
@@ -200,6 +200,6 @@ def export_slotted_ast(records: Sequence[dict[str, Any]], destination: Path) -> 
     outputs = []
     for suffix, content in contents.items():
         path = destination / f"slotted-runtime.{suffix}"
-        path.write_text(content)
+        path.write_text(content, encoding="utf-8")
         outputs.append(path)
     return tuple(outputs)

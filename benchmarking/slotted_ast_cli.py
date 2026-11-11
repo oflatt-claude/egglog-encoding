@@ -11,6 +11,7 @@ from .slotted_ast import ROOT, export_slotted_ast, slotted_ast_records
 
 
 def main() -> None:
+    """Export cached AST sizes, compiling missing identities only with --collect."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "figures/output/eval")

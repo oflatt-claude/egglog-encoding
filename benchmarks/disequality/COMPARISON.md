@@ -1,7 +1,7 @@
 # Parameter-analysis implementation comparison
 
-The paper figure compares the authors' native DE and NEE implementations with
-relation-based Egglog NEE, with proofs off. Native EE/OEE remain correctness checks.
+The paper figure compares the authors' native DE implementation with extlog,
+with proofs off. Native EE/OEE remain correctness checks.
 The author-supplied [native corpus](parameter-analysis.in) is canonical. Its checked-in
 [Egglog translation](parameter-analysis.egg) contains the same six fixed numeral
 constraints, 100,000 equality pairs, and 10,000 disequality pairs in author order,
@@ -30,7 +30,7 @@ observations are reused. Cargo dependency resolution and release builds happen
 automatically, outside measurement. Each measured interval spans the complete
 engine process, including input reading, expression parsing, and shutdown.
 The native CSV timers start after file reading and line-splitting, so the figure
-uses external whole-process time for all three timed configurations. The shared
+uses external whole-process time for both timed configurations. The shared
 timeout defaults to 500 seconds. Correctness checks run separately from these timings.
 
 Native rows identify the `.in` file and its hash; Egglog rows identify the `.egg`
@@ -44,7 +44,7 @@ results JSON, numeric TeX macros, and TeX table. Automatic cache reuse collects
 only missing observations, refreshes the grouped snapshot and renders changed
 figures. The specification selects the `figures` label and
 configured physical inputs. Boxplots show medians and interquartile ranges,
-with 1.5-IQR whiskers and outlier points. Exports retain arithmetic means and
+with 1.5-IQR whiskers and outlier points. Numeric exports retain arithmetic means and
 95% intervals, including ratios against native DE. Missing or failed conditions
 stop export. See the [figure guide](../../figures/README.md) for selection and
 provenance details.
