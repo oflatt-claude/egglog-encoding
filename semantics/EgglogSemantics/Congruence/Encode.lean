@@ -342,6 +342,7 @@ including the ones built after the marker. -/
     \land y=\min(y,z)\land y\ne z\Rightarrow\mathtt{UF}(z,y).
   \end{aligned}
   \]
+  Lifting reads a node row as its node: $\lceil\mathtt{Node}_f(\bar a,t)\rceil\triangleq(t=t)$.
   -/)
   (latexEnv := "paperfragment")]
 def subsumeRule (f : FnName) (arity : Nat) : Rule :=

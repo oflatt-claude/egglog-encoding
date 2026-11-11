@@ -14,11 +14,7 @@ reflexive claim. -/
 @[blueprint "def:lift-claim"
   (statement := /--
   \[
-  \begin{gathered}
-  \lceil\mathtt{UF}(a,b)\rceil\triangleq(a=b)\qquad
-  \lceil\mathtt{Node}_f(\bar a,t)\rceil\triangleq(t=t)\\
-  \lceil t\rceil\triangleq(t=t)\ \text{ otherwise}
-  \end{gathered}
+  \lceil\mathtt{UF}(a,b)\rceil\triangleq(a=b)\qquad\lceil t\rceil\triangleq(t=t)\ \text{ otherwise}
   \]
   -/)
   (latexEnv := "paperfragment")]
