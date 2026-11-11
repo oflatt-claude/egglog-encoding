@@ -400,19 +400,27 @@ sets, renamings, renaming lists, cliques, booleans, integer generations) as cano
 `f(g, ρ₁, c₁, …, s̄)`: its generation `g`, and for each child a renaming from the child's
 slots to the node's names beside the child, with binding positions holding their slot;
 every slot leaf is the one term `$0`, reached through the edge `[$0 ↦ $s]`. The maintenance
-rules the pass emits are the paper's: the free-slot analysis `@FS` (merged by intersection
-through the rule form of a merge annotation), the leader equations `@Leader`/`@Equated`
-oriented toward the smaller class, the symmetries `@Sym` collected into `@G`, `Collide`,
-and the term updates `Migrate`, `Child`, `Restrict` with the binder refresh, each writing
-its replacement at the replaced row's generation plus one and subsuming the replaced row.
-A compiled query matches rows structurally, assigns placeholders to every node's slots,
-joins repeated variables through symmetries, refines the frame over the remaining aliasings
-and anchors it to the root's names, from which it reads each variable's renaming; `=`, `!=`
-and the free-name guards test those renamings. The generation keeps every replacement a new
-key: the plain `subsume` is permanent on a row key, so without it a spelling retired in a
-follower could never return live when a later union makes its class the leader
-(`SLOTTED.md`, "Deviations from the paper and the reference", lists this and the other
-departures from the displayed rules).
+rules maintain `@FS` by intersection and the unoriented relation `@RenamesTo(a,m,b)`,
+meaning `a=m*b`, by finite identity, inversion and composition. Self-equations are
+symmetries. Support transports in both directions, and maps shrink to current support.
+`Collide` aligns children through their self-equations. `Migrate` and `Child` choose a
+strictly smaller destination at use sites; `Restrict` and binder refresh maintain edge
+maps. Each update unions its replacement and subsumes the old row. Generations keep
+recreated spellings live under permanent subsumption, and `Dedup` removes older duplicate
+spellings. Both remain necessary for the corpus gate; see the experiments in
+[SLOTTED.md](SLOTTED.md). All maintenance runs in one saturation.
+
+A compiled query separates temporary names, required equalities, constraint checks and
+remaining alias choices. Its unification map `U`, disequality cliques `C` and fixed query
+literals `P` are separate arguments to unification and refinement. Placeholders may alias
+literals, but literals keep their identities and two different literals cannot merge.
+Repeated variables read `RenamesTo(c,π,c)`; anchoring then transports the complete match
+into the stored root's coordinates for guards and actions. Equality selects a self-equation;
+disequality splits into different classes, different map images, or nonmembership of a
+relative permutation in the symmetry group. The last case uses ordinary finite `Orbit`
+witnesses, unioned with the identity witness precisely for self-equations. There is no
+separate symmetry table, group collection or coset primitive. Action-only slots remain
+fresh for the match.
 
 `difftest slotted-compile` compiles every slotted corpus file the parser accepts, runs it on
 the target interpreter (`Slotted/Target/Interp.lean`) and compares each check with the
@@ -427,15 +435,17 @@ The target interpreter recognizes congruent spellings and excludes subsumed rows
 includes each file's final program, reports explicit parser and execution-policy rejections,
 and fails on crashes, timeouts, exhausted fuel or disagreeing outcomes. The restricted
 aliasing fixture is verified with Rust's corresponding mode and explicitly rejected by the
-unrestricted pass. The current comparison is 235 agreements across 41 compiled files.
+unrestricted pass. The current comparison is 250 agreements across 45 compiled files.
 
 `Slotted.Pass.Correct` is the phase 3 proposition: successful compilation under
 `Pass.Premises` preserves every outcome and divergence. `Encode/Premises.lean` defines
 well-bound expressions, payload consistency, action scope and source-round commutation with
-slot-name permutations fixing concrete constants. No slotted correctness proof is claimed.
+slot-name permutations fixing concrete constants and literal query slots.
+No slotted correctness proof is claimed.
 The output fails the existing congruence fragment's `ordering`, `noAt`, `queryEncodable`,
 `noLitUnion` and `aritiesAgree` clauses on all asserted checks; `headsScoped` holds. Empty
-final programs fail only the first three. `fragmentReport` prints each program's clauses.
+final programs fail only `noAt` and `queryEncodable`.
+`fragmentReport` prints each program's clauses.
 
 ### Simulation with subsumption
 

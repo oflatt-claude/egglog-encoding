@@ -180,7 +180,8 @@ def collideRule (L : Layout) (f : FnName) (n : Nat) : Option Rule :=
   let perChild := children.flatMap fun j =>
     [fs (.var s!"@c{j}") (.var s!"@B{j}"),
      .eq (pdom (.var s!"@m{j}")) (.var s!"@B{j}"), .eq (pdom (.var s!"@n{j}")) (.var s!"@B{j}"),
-     renamesTo (.var s!"@c{j}") (.var s!"@pi{j}") (.var s!"@c{j}"), isTrue (pisPerm (.var s!"@pi{j}") (.var s!"@B{j}")),
+     renamesTo (.var s!"@c{j}") (.var s!"@pi{j}") (.var s!"@c{j}"),
+     isTrue (pisPerm (.var s!"@pi{j}") (.var s!"@B{j}")),
      bindP s!"@k{j}" (pcomp (.var s!"@m{j}") (pcomp (.var s!"@pi{j}") (pinv (.var s!"@n{j}"))))]
   let perBinder := binders.map fun k =>
     bindP s!"@k{k}" (.app renName [.app pairName [.var s!"@d{k}", .var s!"@b{k}"]])
@@ -210,7 +211,8 @@ def migrateRule (L : Layout) (f : FnName) (n : Nat) : Rule :=
     | .child => .var s!"@c{j}"
     | .binder => .var s!"@w{j}"
     | .payload => .var s!"@p{j}"
-  let query := [renamesTo va vm vb, fs va vA, fs vb vB, .eq vb (.min va vb), .ne vb va, nodeAtom L f n,
+  let query := [renamesTo va vm vb, fs va vA, fs vb vB, .eq vb (.min va vb), .ne vb va,
+      nodeAtom L f n,
       bindP "@n" (trimmed vA vm vB),
       bindP "@L" (localSlots L f n), bindP "@h" (prim "@extend" [pinv vn, .var "@L", vB])] ++
     ((L.childPositions f n).map fun j => bindP s!"@e{j}" (pcomp (.var "@h") (.var s!"@m{j}"))) ++
@@ -226,7 +228,8 @@ def childRule (L : Layout) (f : FnName) (n : Nat) (j : Nat) : Rule :=
     | .binder => .var s!"@b{i}"
     | .payload => .var s!"@p{i}"
   let c : Expr := .var s!"@c{j}"
-  let query := [nodeAtom L f n, renamesTo c vm (.var "@d"), fs c vA, fs (.var "@d") vB, .ne c (.var "@d"),
+  let query := [nodeAtom L f n, renamesTo c vm (.var "@d"), fs c vA, fs (.var "@d") vB,
+      .ne c (.var "@d"),
       .eq (.var "@d") (.min c (.var "@d")), bindP "@n" (trimmed vA vm vB),
       bindP "@e" (pcomp (.var s!"@m{j}") vn)]
   updateRule L f n query va cols'
@@ -268,14 +271,14 @@ child `i`; `g` is the row's generation, which every rule binds as a wildcard. -/
    &a=\SumZeroTen(g,\$i,\rho,b)
      \Rightarrow\mathtt{FS}(a,\operatorname{img}(\rho)\setminus\{\$i\})\\
    \textsc{NodeFS}_f&:\ a=f(g,\bar\rho,\bar c,\bar s)
-     \Rightarrow\mathtt{FS}\bigl(a,\textstyle\bigcup_i(\operatorname{img}(\rho_i)\setminus B_i)\bigr)\\
+     \Rightarrow\mathtt{FS}\bigl(a,
+       \textstyle\bigcup_i(\operatorname{img}(\rho_i)\setminus B_i)\bigr)\\
    \textsc{Intersect}&:\ \mathtt{FS}(a,A)\land\mathtt{FS}(a,B)\land C=A\cap B\land C\ne A
      \\
    &\quad\Rightarrow\mathtt{FS}(a,C),\ \kw{subsume}(\mathtt{FS}(a,A))\\
    \textsc{Transport}&:\ \mathtt{RenamesTo}(a,m,b)\land\mathtt{FS}(a,A)\land\mathtt{FS}(b,B)
      \\
    &\quad\Rightarrow\mathtt{FS}(a,m[B]),\ \mathtt{FS}(b,m^{-1}[A])
-
   \end{aligned}
   \]
   -/)
@@ -401,7 +404,8 @@ def updateRulesAll (L : Layout) (ctors : List (FnName × Nat)) : List Rule :=
         [childRule L fk.1 fk.2 j, restrictRule L fk.1 fk.2 j]) ++
       [dedupRule L fk.1 fk.2]
 
-/-- The maintenance rules `M`, in their three groups: the analyses, renaming closure, and the term updates. -/
+/-- The maintenance rules `M`, in three groups: analyses, renaming closure,
+and term updates. -/
 def maintenanceGroups (L : Layout) (ctors : List (FnName × Nat)) : List (List Rule) :=
   [analysisRules L ctors, renamingRules L ctors, updateRulesAll L ctors]
 

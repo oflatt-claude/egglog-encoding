@@ -8,7 +8,8 @@ The computations the paper's slotted rules use, as functions on the canonical va
 `Values.lean`: the renaming algebra (`img`, `dom`, `⁻¹`, `∘`, `|_A`, `id_A`, application),
 the slot set algebra, `Perm`, the Collide union `align`, the Migrate extension `extend`, the
 binder name `mint`, the successor `succ` of a row generation, finite permutations for
-membership witnesses, and the e-matching operations `fresh`, `distinct`/`cliques`, `identity`, `unify`,
+membership witnesses, and the e-matching operations `fresh`, `distinct`/`cliques`,
+`identity`, `unify`,
 `final-refine` and `anchor` over unification maps. A **unification map** identifies
 temporary names, preserving fixed literals supplied separately as `P`. The cliques `C`
 are slot sets whose members must stay in distinct blocks.

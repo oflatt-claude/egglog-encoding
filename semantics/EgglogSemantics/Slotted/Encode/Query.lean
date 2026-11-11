@@ -435,7 +435,8 @@ def emitUnification (anchorVar : Var) : EmitM Unit := do
   -- Refinement over the placeholders reached by variables and carried slots, then anchoring.
   let D ← compute "D" (unions ((st.firstOcc.map fun vo => pimg (nuVar vo.1)) ++
     [pimg nuG] ++
-    (if st.carried.isEmpty then [] else [pset (st.carried.map fun v => papply nuLit (slotTerm v))])))
+    (if st.carried.isEmpty then []
+     else [pset (st.carried.map fun v => papply nuLit (slotTerm v))])))
   let q ← fresh "q"
   push (.expr (.app memName [.var q, prim "@refine" [.var s!"@u{k}", C, P, D]]))
   push (bindP "@qa" (prim "@anchor" [.var q, nuVar anchorVar]))
@@ -446,7 +447,7 @@ def emitUnification (anchorVar : Var) : EmitM Unit := do
   for s in st.concrete do
     push (bindP s!"@c_{s.drop 1}" (papply (.var "@qa") (papply nuG (slotTerm s))))
 
-/-- A comparison of two class variables under the unification map: the alternatives it compiles to. -/
+/-- The alternatives for a comparison of two class variables under the unification map. -/
 def cmpPatterns (k : Cmp) (a b : Expr) (payload : Bool) : EmitM (List (List Pattern)) := do
   if payload then
     let st ← get
@@ -574,7 +575,7 @@ def atomRoot (st : Emit) (e : Expr) : Option Var :=
     | .atom a => if exprEqB a.src e then some a.root else none
     | _ => none
 
-/-- A term in the unification map: a variable is its invocation, a matched application its root class,
+/-- A variable denotes its invocation, a matched application its root class,
 anything else a build. -/
 def termOf (e : Expr) : EmitM (Expr × Option Var) := do
   let st ← get
@@ -603,8 +604,10 @@ def compileAction (anchorVar : Var) : Action → EmitM (List Action)
       else if x = anchorVar then pure [wRenamesTo ta (muVar y) tb]
       else if y = anchorVar then pure [wRenamesTo tb (muVar x) ta]
       else pure [wRenamesTo ta (pcomp (pinv (muVar x)) (muVar y)) tb]
-    | none, some y => if y = anchorVar then pure [.union ta tb] else pure [wRenamesTo ta (muVar y) tb]
-    | some x, none => if x = anchorVar then pure [.union ta tb] else pure [wRenamesTo tb (muVar x) ta]
+    | none, some y =>
+      if y = anchorVar then pure [.union ta tb] else pure [wRenamesTo ta (muVar y) tb]
+    | some x, none =>
+      if x = anchorVar then pure [.union ta tb] else pure [wRenamesTo tb (muVar x) ta]
     | none, none => pure [.union ta tb]
   | .subsume _ _ => throw "subsume in a slotted program"
 
@@ -693,7 +696,8 @@ rows bound as wildcards and the built rows at generation `0`; the flattened sour
        \land\mathtt{FS}(\mathit{sum},B)\land\pi\in\operatorname{Perm}(B)\\
    &\land\mathtt{FS}(\mathit{prod},A)
        \land D=\operatorname{img}(\nu_0\circ\rho_x)\cup\operatorname{img}(\nu_1\circ\rho_b)\\
-   &\land U_0=\operatorname{identity}(\operatorname{img}(\nu_0)\cup\operatorname{img}(\nu_1)\cup P)\\
+   &\land U_0=\operatorname{identity}
+       (\operatorname{img}(\nu_0)\cup\operatorname{img}(\nu_1)\cup P)\\
    &\land U_1=\operatorname{unify}(U_0,\nu_0\circ\rho_s,\nu_1\circ\pi,C,P)\\
    &\land U_2=\operatorname{unify}(U_1,\nu_1(\$r),\$v,C,P)\\
    &\land q\in\operatorname{final\text{-}refine}(U_2,C,P,D)

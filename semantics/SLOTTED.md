@@ -168,8 +168,8 @@ to a `Slotted.Program`.
 `RenamesTo(a,m,b)` means `a = m * b`: the finite partial injection `m` maps
 `b`'s slots to `a`'s names. It has no ordering invariant. A term child is stored
 as `(ρ,c)`, so terms differing only in names can share `c`. A self-equation
-`RenamesTo(c,π,c)` is a symmetry. The following is the rule design, written before
-editing the compiler; the experiments below determine the cleanup details.
+`RenamesTo(c,π,c)` is a symmetry. Closure, support analysis and replacements run
+together in one saturation.
 
 Write `N_g(s,ρ,c) = Sum(g,s,ρ,c)`, `A=FS(a)`, `B=FS(b)`, and
 `trim(A,m,B) = id_A ∘ m ∘ id_B`. The general constructor rules use one map per
@@ -217,7 +217,7 @@ slots. An earlier shadowed binder is refreshed without changing the occurrences
 bound by the later field. Both updates use the same generation and subsumption
 form. All maintenance rules run in one saturation.
 
-### Revision checklist: questions and experiments
+### Revision checklist: answers and evidence
 
 - **Fresh binders.** The capture-avoiding semantic action chooses pairwise distinct
   names outside the term and `dom(m) ∪ img(m)`. This is local to that action, not
@@ -244,10 +244,15 @@ form. All maintenance rules run in one saturation.
   change order. Inversion retains both directions; migration and child update
   choose the smaller endpoint when they fire. Unions cannot revive a removed slot,
   so map-size cleanup is different from deleting a direction that may be needed
-  again. A new follower-to-leader regression tests the latter case.
-- **Generations and Dedup.** Experiment: replace `g+1` by `g` and omit `Dedup`,
-  then run `paper/fgh-transitive-symmetry.egg`. If permanent subsumption still hides
-  the recreated `H` spelling, retain both and record the failing assertion.
+  again. `hand/follower-later-leader.egg` tests the latter case.
+- **Generations and Dedup.** Both remain. Replacing `g+1` by `g` makes both
+  assertions of `paper/fgh-transitive-symmetry.egg` false: permanent subsumption
+  hides the recreated `H` spelling. Removing only Dedup passes that file, but
+  makes `binder-tests.egg` exceed the gate's 600-second limit; its nested-binder
+  check #7, `(check (= a b))` at line 60, also exceeds a focused 30-second limit
+  with the final matcher. Dedup retires duplicate
+  spellings before their combinations overwhelm structural matching. This is an
+  execution-limit blocker, not evidence of semantic divergence.
 - **Arrow audit.** Migrate requires `b=min(a,b) ∧ b≠a`; Child requires
   `d=min(c,d) ∧ d≠c`. Closure, transport, and collision permit reflexive edges.
   A symmetry consumer requires equal endpoints and a permutation of current `FS`.
@@ -261,12 +266,22 @@ form. All maintenance rules run in one saturation.
   pattern literals and are fresh after refinement.
 - **Equality and disequality without a group collection.** Equality can join a
   self-equation and compare maps. Disequality cannot negate one selected symmetry:
-  identity may distinguish two uses that a swap equates. Experiment with finite
+  identity may distinguish two uses that a swap equates. Use finite
   membership witnesses `Orbit(c,π)` for every `π∈Perm(FS(c))`, unioning
   `Orbit(c,π)` with `Orbit(c,id)` precisely for self-equations. Comparing the witness
   for `μ₂⁻¹∘μ₁` against identity then decides nonmembership with ordinary target
-  disequality. Different classes or images are separate branches. This needs no
-  `G` collection or change to `Target.Eval`.
+  disequality. Different classes or images are separate branches. The implemented rules are:
+
+  ```text
+  FS(c,A) ∧ π∈Perm(A) ⇒ Orbit(c,π)
+  RenamesTo(c,π,c) ∧ FS(c,A) ∧ π∈Perm(A)
+    ⇒ union(Orbit(c,π),Orbit(c,id_A))
+  ```
+
+  Only witness terms are unioned, never primitive maps. There is no group
+  collection or change to `Target.Eval`. Enumerating all permutations is finite
+  but factorial in support size; this specification-oriented pass makes no
+  scalability claim for large supports.
 - **Presentation.** The main block shows the compact closure, support merge and
   transport, collision, and replacement rules. Constructor-specific refresh and
   the detailed executable membership encoding belong in these implementation
@@ -279,56 +294,26 @@ form. All maintenance rules run in one saturation.
 
 ## The target extension
 
-The compiled program needs two things the plain specification lacks: primitive values
-(slot sets, renamings, lists of renamings, lists of slot sets, booleans, and the integer
-generation of a row) with primitive functions on them, and analyses with a merge function
-(`FS` by intersection, `G` by union).
+`Slotted/Target/` extends evaluation with canonical primitive values and reductions
+under reserved `@` names. `Expr`, the plain specification, `Target.Eval` and the
+existing theorems are unchanged. Values are sorted slot sets `@set`, functional
+maps `@ren(@pair(s,t),…)`, map lists `@rens`, lists of disequality cliques `@sets`,
+booleans and integer generations. A unification map may be noninjective; the
+renamings carried by term edges are injective.
 
-**Why no new constructor.** `Expr.min` is the one computation of the plain specification. A
-new constructor `Expr.prim` would be the natural generalization, but `Expr` is matched
-exhaustively at 126 sites in 37 modules outside `Slotted/`, and `Matches` is inverted in
-about 195 proof steps; every such definition and proof would have to change. The pass keeps
-the existing definitions and proofs intact by encoding
-primitive values and primitive applications as applications of reserved `@`-names and adds
-the primitive step as a separate evaluation layer (`Slotted/Target/`), without touching
-`Spec/`:
+`Prim.norm?` reduces primitive applications bottom-up. `TExpr.Matches` reads
+ordinary applications as live rows and evaluates primitive operands without
+requiring stored rows. A computed variable, bound by `v=@op(…)` or `@mem(v,…)`,
+is exempt from the representative requirement; other match variables are bound
+to class representatives. Ordinary literals and tables still require live membership.
+`@mem` enumerates a primitive list. Actions remain plain: queries compute their
+operands before ordinary writes, unions and subsumptions. Thus `Database`, `Cong`,
+`reps`, `live`, `evalActions` and `SameMeaning` are reused. `Target.Eval` and
+`Target.Diverges` use the resulting target query relation. Without primitive
+names, reduction is the identity; its conservativity is a phase 3 obligation.
 
-- A **value** is a canonical term: a slot `$s` is itself; a slot set is `@set(s₁, …, sₙ)`
-  with the names sorted and distinct; a renaming is `@ren(@pair(s₁, t₁), …)` sorted by key
-  and functional (a frame is a renaming value too, and frames are not injective); a list of
-  renamings (a group, or the results of `final-refine`) is `@rens(m₁, …)`; a list of slot
-  sets (distinctness cliques) is `@sets(A₁, …)`; the booleans are `@true()` and `@false()`;
-  a generation is an integer literal. Value heads applied to non-canonical arguments
-  evaluate to the canonical form (`Prim.eval`).
-- A **primitive application** is `@op(args)` for `op` in the catalogue below. The
-  **primitive step** `Prim.norm?` reduces a term bottom-up: every application of a primitive
-  name is replaced by its value, and `none` is a stuck computation. `Target.evalExpr e σ`
-  is `Expr.eval` followed by that step.
-- The target semantics `Target.Eval` (`Slotted/Target/Spec.lean`) is the plain `Eval` with
-  `Target.evalExpr` in place of `Expr.eval` in matching: `TExpr.Matches` reads a
-  non-primitive application as a live row of its *reduced* instance and a primitive
-  application by evaluating its operands, which need not be stored. In particular, the
-  placeholder keys passed to `fresh` are constants of the rule, not rows. Ordinary literals
-  and table applications still require live membership. `TMatches` compares the reduced
-  values of an equality or disequality, equal when identical or congruent; the membership
-  pattern `@mem(x, e)` binds `x` to an element of the value of `e`. Query variables are
-  *match variables*, bound to representatives as in `ValidEnv`, except the **computed
-  variables** of a query: a variable `v` whose defining pattern is `v = @op(…)` or
-  `@mem(v, …)` (`computedVars`) is bound by that pattern and exempt from the representative
-  requirement. Actions are plain: the pass binds every computation in the query, so
-  `evalActions`, `Database`, `Cong`, `reps`, `live` and `SameMeaning` are reused unchanged,
-  and `TRunRules`, `TReach`, `Target.Eval` and `Target.Diverges` are the plain definitions
-  over `TQueryMatches`.
-- On a program without primitive names, `Prim.norm?` is the identity on every term the
-  program can build, so the target semantics is the plain one; phase 3 may prove this
-  conservativity where it needs it.
-
-**Analyses with merge.** `FS(a, A)` and `G(a, Π)` are tables with a functional dependency
-and a merge function. They compile to a row plus the paper's rule form of a merge annotation
-(`def:fd-rule`): `FS(a, A) ∧ FS(a, B) ∧ C = A ∩ B ∧ C ≠ A ⇒ FS(a, C), subsume(FS(a, A))`
-and the same for `G` with union, so the target needs no merge feature. The symmetries
-themselves are the paper's `Sym(a, π)` rows; `G(a, Π)` collects them into one value for the
-comparisons `=` and `!=` (`cosetSame`).
+`FS` uses the functional-dependency rule form of intersection merge shown above.
+No merge feature or collected symmetry value is needed in the target.
 
 ### The primitive catalogue
 
@@ -336,187 +321,143 @@ Arguments are values; a primitive is stuck (`none`) off its domain.
 
 | Primitive | Meaning |
 | --- | --- |
-| `@set(s…)`, `@ren(@pair(s,t)…)`, `@rens(m…)`, `@sets(A…)`, `@true()`, `@false()` | value constructors, canonicalized |
-| `@img(m)`, `@dom(m)` | image and domain of a renaming, as slot sets |
-| `@inv(m)`, `@comp(m, m′)`, `@restrict(m, A)`, `@id(A)` | `m⁻¹`, `m ∘ m′` (`s ↦ m(m′(s))`), `m|_A`, `id_A` |
-| `@apply(m, s)` | `m(s)`; stuck when `s ∉ dom(m)` |
-| `@union(A, B)`, `@inter(A, B)`, `@diff(A, B)` | set operations |
-| `@elem(s, A)` | `s ∈ A`, a boolean |
-| `@isPerm(π, A)` | `π ∈ Perm(A)`: a bijection of `A` |
-| `@align(m₁, …, mₙ)` | the union of renamings, defined when they agree and the result is injective (Collide) |
-| `@extend(m, S, B)` | `extend(m, S, B)`: `m` extended injectively to `S`, fresh names outside `img(m) ∪ B` (Migrate) |
-| `@mint(L)` | the least canonical name outside `L` (binder refresh) |
-| `@succ(g)` | `g + 1` on an integer literal (the generation of a replacement) |
-| `@gunion(Π, Π′)` | union of renaming lists (the merge of `G`) |
-| `@cosetSame(μ, μ′, Π)` | `∃π ∈ Π. μ′ ∘ π = μ` |
-| `@fresh(S, U)` | placeholders: an injection of `S` into placeholder names outside `U` |
-| `@cliques(A…)` | the distinctness cliques `distinct(A) ∪ …` |
-| `@identity(A)` | the frame with every placeholder in `A` in its own block |
-| `@unify(F, m, m′, C)`, `@unify1(F, p, p′, C)` | identify `m(t)` with `m′(t)` for `t ∈ dom m ∩ dom m′` (or `p` with `p′`) and re-close; stuck when a clique of `C` would share a block |
-| `@refine(F, C, D)` | `final-refine`: every consistent coarsening of `F` by merging blocks touched by `D`, as a renaming list; read with `@mem` |
-| `@anchor(q, ν)` | `anchor`: names the blocks, `q′(ν(s)) = s` for `s ∈ dom ν`, fresh names for the others |
+| `@set(s…)`, `@ren(@pair(s,t)…)`, `@rens(m…)`, `@sets(A…)`, `@true()`, `@false()` | canonical value constructors |
+| `@img(m)`, `@dom(m)` | image and domain |
+| `@inv(m)`, `@comp(m,n)`, `@restrict(m,A)`, `@id(A)` | inverse, composition `s↦m(n(s))`, restriction, finite identity |
+| `@apply(m,s)` | `m(s)`, stuck outside its domain |
+| `@union(A,B)`, `@inter(A,B)`, `@diff(A,B)` | set operations |
+| `@elem(s,A)`, `@isPerm(π,A)` | membership and permutation tests |
+| `@perms(A)` | every permutation of the finite set `A` |
+| `@align(m…)` | consistent injective union of maps |
+| `@extend(m,S,B)` | injective extension to `S`, fresh outside `img(m)∪B` |
+| `@mint(L)`, `@succ(g)` | least canonical name outside `L`; integer successor |
+| `@fresh(S,U)` | injection of `S` into temporary names outside `U` |
+| `@cliques(A…)` | separate distinctness constraints for each `A` |
+| `@identity(A)` | initial unification map with singleton blocks |
+| `@unify(U,m,n,C,P)`, `@unify1(U,s,t,C,P)` | merge required pairs, preserving cliques `C` and fixing every literal in `P` |
+| `@refine(U,C,P,D)` | all valid coarsenings by merging blocks touched by `D` |
+| `@anchor(q,ν)` | root coordinates: `q′(ν(s))=s`, fresh names for other blocks |
 
-A frame is itself a renaming on placeholders, sending each placeholder to the least member
-of its block; placeholders are the slot names `$@0, $@1, …` minted by `@fresh`, and final
-names from `@anchor`, `@extend` and `@mint` are the least unused of `$0, $1, …`.
+A unification map sends each name to its block representative. A block containing
+one fixed literal uses that literal; a block cannot contain two different fixed
+literals. Other blocks use their least member. Temporary names are `$@0,$@1,…`;
+`anchor`, `extend` and `mint` choose canonical names `$0,$1,…`.
 
 ## The pass
 
 | Module | Contents |
 | --- | --- |
-| `Slotted/Target/Values.lean` | the value kinds as canonical terms, their encoders and decoders, fresh names |
-| `Slotted/Target/Prim.lean` | the catalogue, `Prim.eval`, `Prim.elements`, `Prim.norm?`, the frame operations |
-| `Slotted/Target/Spec.lean` | the target semantics `Target.Eval` and `Target.Diverges` |
-| `Slotted/Target/Interp.lean` | the executable e-graph interpreter for target programs (`Target.observe`) |
-| `Slotted/Spec/Divergence.lean` | `SDiverges`, divergence of a slotted schedule |
-| `Slotted/Encode/Layout.lean` | constructor layouts: term children, binding fields, payload columns inferred from the program; the generation column; the representation `repr` of a ground term |
-| `Slotted/Encode/Maintenance.lean` | the maintenance rules and the rebuild schedule |
-| `Slotted/Encode/Query.lean` | flattening, binder normalization, frames, query compilation, the guards, action compilation |
-| `Slotted/Encode/Premises.lean` | well-bound expressions, payload consistency, action scope and source-round equivariance |
-| `Slotted/Encode.lean` | `compile`, `encode`, the schedule and the check, `Pass.Correct`, `fragmentReport` |
+| `Target/Values.lean`, `Target/Prim.lean` | values, primitive reductions, unification and refinement |
+| `Target/Spec.lean`, `Target/Interp.lean` | target semantics and executable interpreter |
+| `Encode/Layout.lean` | constructor layouts and ground representation |
+| `Encode/Maintenance.lean` | support, renaming closure, collision and replacement rules |
+| `Encode/Query.lean` | flattening, binder normalization, unification, guards and actions |
+| `Encode/Premises.lean`, `Encode.lean` | source premises, compilation, schedule, correctness proposition and fragment report |
 
-**Representation.** A constructor position is a binding position (`bind`), a payload column
-(some occurrence holds a literal there; inferred per program, as the Rust declares it) or a
-term child. A term child becomes two columns, a renaming and the child; a binding position
-holds its slot; a payload column holds its value; and every row's first column is its
-**generation**, an integer. The slot leaf is `$0`: `repr($s) = $0` and the edge to it is
-`[$0 ↦ $s]`; `repr(f(t̄))` keeps the source names at every other level, so the edge to a
-non-leaf child is the identity on its free slots, and writes generation `0`. This is the
-paper's initialization of the distribution example, with the generation added.
+**Representation.** A source constructor position is a child, a binding field or a
+payload inferred from literal occurrences. A child becomes `(ρ,c)`, mapping its
+class's slots to the parent's names. A binding field holds a slot, and a payload
+holds its value. Every row starts with an integer generation. `repr($s)=$0`, with
+edge `[$0↦$s]`; other nodes keep their source names, identity child edges and
+generation zero. Terms with different names can share a child class.
 
-**Maintenance** (`Maintenance.lean`), with the paper's names: `nodeFS_f` and the leaf fact
-`FS($0, {$0})`; `intersectFS` (the `FS` merge), `transportFS`, `symFS`; `identity`, `reverse`,
-`orient`, `edge`, `compress`, `parents`; `symIdentity`, `symEquation`, `symmetry`, `group`,
-`inherit`, `trimLeader`, `trimSym`, the `G` collection and merge; per constructor `collide_f`
-(the union of the children's correspondences and the binder alignment is `@align`),
-`migrate_f`, `child_f,j`, `restrict_f,j`, the binder rules `refresh_f,k,u` and
-`shadow_f,k,k′`, and `dedup_f`. A source run compiles to the compiled rules followed by
-`saturate(run M)`, as the paper says.
+**Maintenance.** `analysisRules`, `renamingRules` and `updateRulesAll` contain the
+rules above. Each source round is followed by `saturate(run M)` over their union.
+Closure uses no ordering; only Migrate and Child choose smaller destinations.
+All updates union the replacement into its destination and subsume the old row.
+Binder refresh and shadowing are constructor-specific:
 
-**Queries** (`Query.lean`). A query is flattened to depth-one atoms over fresh root
-variables; a ground source term (a `let` global substituted by the parser) is matched
-structurally the same way, its concrete slots living on a pseudo-root whose local names are
-the global names, so two concrete slots stay distinct and a pattern slot may coincide with
-one; its binders, which carry no identity, are α-renamed to fresh pattern slots kept apart
-from the concrete slots. Each atom's node slots receive placeholders by `@fresh`; the first
-occurrence of a variable defines the placeholders of its class slots through the edge that
-carries it, and every later occurrence, including the root of a nested atom, is read
-through a symmetry `Sym(c, π)` and joined by `@unify`; a pattern slot is a placeholder
-unified with the column that carries it; a row's generation is a wildcard. The cliques are
-the node slots of each atom, the concrete slots with the ground binders, and the written
-pattern slots. `@refine` ranges over the aliasings of the placeholders reached by variables
-and by carried pattern slots (written slots outside binding positions); `@anchor` restores
-the root's class slots. From the anchored frame the pass reads `μ_v = q′ ∘ ν_v` for every
-variable and `$v′ = q′(q_v)` for every pattern slot; `NotFree($s, e…)` is
-`@elem($s′, ⋃ img μ) = @false`, `Free` the positive test, `free-names-are(e, s̄)` is
-`img(μ_e) = {s̄′}`, `renaming-=` is class equality, `=` is class equality with
-`@cosetSame(μ₁, μ₂, Π) = @true` under `G(c, Π)`, and `!=` is the disjunction of class
-disequality and `@cosetSame = @false`: a rule with `k` such guards compiles to `2^k` rules,
-and a check with one compiles to goal rules writing `@Goal()` after the schedule and the
-check `@Goal()`.
+```text
+a=f_g(ρ̄,c̄,s̄) ∧ s_k∈img(ρ_u) ∧ u∉scope(k)
+  ∧ (∀j≠k with scope(j)=scope(k), s_j≠s_k)
+  ∧ w=mint(local(a)) ∧ h=id_{local(a)∖{s_k}}∪[s_k↦w]
+  ⇒ union(a,f_{g+1}(ρ̄[k-covered↦h∘ρ],c̄,s̄[k↦w])), subsume(f_g(ρ̄,c̄,s̄))
+a=f_g(ρ̄,c̄,s̄) ∧ k<j ∧ scope(k)=scope(j) ∧ s_k=s_j
+  ∧ w=mint(local(a))
+  ⇒ union(a,f_{g+1}(ρ̄,c̄,s̄[k↦w])), subsume(f_g(ρ̄,c̄,s̄))
+```
 
-**Actions.** A right-hand side is built bottom-up in the anchored frame at generation `0`:
-a variable child is `(μ_v, c_v)`, a slot is the leaf with edge `[$0 ↦ s′]`, a nested build
-is a child at the identity on its estimated free slots, a binding position holds `s′`.
-`rewrite` unions the built term with the root class; a bare-variable right-hand side
-inserts `Equated(root, μ_v, c_v)`; a rule's `union(e₁, e₂)` is a plain union of two builds,
-`Equated` when a side is a variable, and a plain union when the variable side is the anchored
-root. Slots used only in actions receive placeholders of their own and fresh names from
-`@anchor`.
+The first rule changes the binder and covered edges; the second changes only the
+earlier shadowed field. Scope tests are compile-time choices of generated rules.
 
-**Rejections.** `compile` returns `.error` for unsupported programs: source `min` or
-`subsume`; names in the generated `@` or placeholder `$@` namespaces; inconsistent arities;
-applied slots; duplicate, unordered, out-of-range or overlapping nonidentical binder scopes;
-a binder binding itself, another binder or a payload; inconsistent payload/term variable
-roles; non-slot binders; predicates inside terms; literals built or unioned as terms;
-mixed payload/term comparisons; bare-slot query roots or union endpoints; unbound head
-variables; unkeyed query variables; and concrete action slots absent from the query's global
-frame (use a fresh slot variable). The unrestricted corpus uses none of these unsupported
-forms. The gate explicitly rejects the one `nested/` fixture's restricted-aliasing execution
-policy after verifying it with Rust's `--slotted-no-aliasing`; it is not silently omitted.
+**Matching.** Flatten to depth-one atoms, then:
+
+1. Give each atom's local slots separate temporary names. Ground free names and
+   written query slots remain literal names in `P`. Ground binders are normalized
+   to fresh synthetic slots. Action-only slots get separate blocks outside refinement.
+2. Build the identity unification map `U` and independent cliques `C` for each
+   atom's distinct slots and for concrete free names versus ground binders.
+   A repeated term variable selects `RenamesTo(c,π,c)` with `π∈Perm(FS(c))`,
+   then unifies its two occurrences through that symmetry.
+3. Unify literal occurrences with their own names. Every merge checks both `C`
+   and `P`; distinct literals cannot merge even when `C` is empty. For example,
+   `U={$@0↦$x,$x↦$x,$y↦$y}` aliases a temporary name with `$x` while fixing
+   both literals. A rule about `Sub($x,$y)` cannot match `Sub($x,$x)`.
+4. Refine all remaining alias choices among blocks reached by term variables,
+   concrete slots and carried query slots. Independent placeholders may alias;
+   the distinct slots of any one term may not. Anchor the result to the stored
+   root's names, transporting literals and variable maps together for guards/actions.
+
+`emitUnification` is the code name; the primitive signatures carry `U`, `C` and
+`P` separately. Anchoring changes coordinates after matching, rather than making
+literal names unification variables. `Free`, `NotFree` and `free-names-are` use
+images of the anchored maps, hence the maintained `FS` support. `renaming-=`
+compares classes. `=` selects a self-equation with `μ₁=μ₂∘π`. `!=` has three
+branches: different classes; same class and different images; or same class and
+images with `Orbit(c,μ₂⁻¹∘μ₁) != Orbit(c,id)`. With `k` disequalities this yields
+`3^k` rules. A disjunctive check writes `@Goal()` after its schedule.
+
+**Actions.** Build bottom-up at generation zero: a variable child is `(μ_v,c_v)`,
+a literal slot is the leaf with its transported name, and a nested build has an
+identity edge on its estimated free slots. A source equation is a plain union of
+built terms, including a union with the anchored root. A different variable
+invocation carries its map in a `RenamesTo` row. Action-only slots get fresh
+names through anchoring, retaining `Run′`'s freshness policy.
+
+**Rejections.** Unsupported forms include source `min`/`subsume`; reserved generated
+names; inconsistent arities, binder scopes or payload roles; non-slot binders;
+predicates inside terms; literals built or unioned as terms; mixed payload/term
+comparisons; bare-slot roots/endpoints; unbound action variables; unkeyed queries;
+and concrete action slots absent from the query's concrete names. Use an action-only
+slot variable for a fresh name. Restricted-aliasing execution is explicitly rejected
+after verifying its fixture with Rust's corresponding mode.
 
 ## Deviations from the paper and the reference
 
-Each choice that departs from the paper's displayed rules, with its reason:
-
-1. **Generations.** Every row carries a generation; an update writes its replacement at the
-   replaced row's generation plus one and subsumes the replaced row in the same action. The
-   paper's separate cleanup rules subsume the replaced row "once its replacement is
-   present", and the reference deletes it. In the plain target `subsume` marks a row key
-   for good, in every spelling: on `paper/fgh-transitive-symmetry.egg` the follower
-   `H($2,$1)` is migrated into `G($1,$2)` and retired, and when a later union makes the
-   class of `F($1,$2)` the leader, the migration of `G($1,$2)`'s rows back into it
-   recreates exactly the retired spelling, which can never be live again, so the leader has
-   no `H` row and `(check (= f12 h21))` fails. With generations the recreated row is a new
-   key. Its cost is `Dedup_f`, which retires the older of two live rows with one spelling
-   (a migration into a class that already holds the spelling creates such a pair), and the
-   generation wildcard in every compiled pattern.
-2. **No retirement of reversed leader edges.** A union can make a follower smaller than its
-   leader. The reference drops the stale edge; subsuming a `Leader` row would retire a key
-   that a second reversal needs again. The edge stays, every update fires only toward the
-   smaller class (`b = min(a, b)` in Migrate and in Child, as the reference's
-   `ordering-max` guards), so a reversed edge is inert, and `Orient` adds the edge the
-   right way round.
-3. **Binder refresh and shadowing** (`Refresh`, `Shadow`), from the reference: a bound name
-   also used outside its scope is renamed in the binder and its covered children, and of two
-   binding positions of one scope with one name the earlier, which binds nothing, is
-   renamed. The paper mentions the freshening in one sentence.
-4. **Ground terms in queries** are matched structurally, like patterns, rather than looked
-   up through `Leader(repr(t), γ, c)`: a global's concrete slots are the names of a
-   pseudo-root and its binders become fresh pattern slots that may not alias a free slot.
-   The lookup form can fail on globals whose stored spelling is no longer the leader's.
-5. **`!=` as a disjunction.** The target has no negation; `!=` between matched terms is
-   "different classes, or one class and renamings outside the group", compiled by rule
-   splitting; a check with such a guard compiles to goal rules.
-6. **Numeric slot names** `$01`, `$+1` are read as `$1` by the parser, as the reference
-   reads them (`named-slots.egg`).
-7. **`Equated` for a union with a variable side**, as the paper says for a bare-variable
-   right-hand side, extended to any `union` whose side is a matched variable other than the
-   anchored root, whose renaming is the identity.
-8. **One saturation.** The rebuild is `saturate(run M)` over all maintenance rules, as the
-   paper says; the reference runs its rulesets in phases, which the pass does not need.
-
-9. **Explicit symmetry enumeration and pairwise collisions.** The pass follows the paper's
-   `Sym` and `align` rules. It does not use the reference's shape indexes, coset reading
-   indexes, canonical invocation keys or stored-match tables. `@refine` enumerates all
-   consistent partitions without a prefix cutoff; the interpreter finds every firing
-   against the pre-state before applying actions.
-10. **Payload inference and the target layer.** The source model is untyped and has no
-    declarations. Literal occurrences determine payload columns; incompatible uses are
-    rejected. The target adds the reserved primitive layer described above, and compiles
-    `FS`/`G` merges to rows plus functional-dependency rules. Its snapshots describe that
-    target, not standalone inputs for the unextended Rust interpreter.
-11. **`SymFS` exposed.** `symFSRule` is the self-equation instance of Transport, shortcutting
-    `symEquationRule` followed by `transportFSRule`. The supplied paper text displays the
-    latter two rules rather than a separately named SymFS. Both directions are retained;
-    intersection removes redundant symmetry orbits.
-12. **Unrestricted matching only.** The paper's optional restricted-aliasing mode is outside
-    the pass. Its `nested/binder-safe-matching.egg` fixture is reported as an explicit policy
-    rejection, verified with Rust's corresponding mode, and is not counted as an agreement.
+- **Generation and Dedup.** Permanent target subsumption requires new replacement
+  keys; duplicate spellings require cleanup for the corpus gate. The exact blocking
+  experiments are recorded above. Generations are wildcards in compiled patterns.
+- **Retained directions.** Inversion keeps both endpoint directions. Native unions
+  can reverse their order; only map shortening retires an equation.
+- **Binder refresh and shadowing.** Explicit generated rules implement the paper's
+  capture-avoidance requirement for arbitrary annotated constructors.
+- **Structural ground matching.** Globals are flattened like other terms, so a
+  retired spelling can still match through a live equivalent structure. Ground
+  binders are normalized independently of free literal names.
+- **Finite nonmembership witnesses.** `Orbit` and `@perms` implement negative
+  symmetry membership in the unchanged target language. Equality reads self-equations
+  directly. No separate symmetry relation, group collection or coset primitive exists.
+- **One saturation and exhaustive matching.** There are no reference shape indexes,
+  canonical invocation keys, stored-match tables or phased rebuild. Pairwise collision,
+  symmetry enumeration and unrestricted refinement prioritize declarative clarity.
+- **Payload inference and primitive layer.** The source is untyped. Inferred payload
+  columns and canonical primitive values stand in for Rust declarations; snapshots
+  target this extended interpreter rather than the unextended Rust binary.
+- **Parser and policy boundary.** Numeric slots such as `$01` and `$+1` normalize to
+  `$1`. Restricted aliasing remains outside this pass and is reported explicitly.
 
 ### Rule names and paper nodes
 
-All rule names below are in `Egglog.Slotted.Encode`; the primitive is in
-`Egglog.Slotted.Target`. The three maintenance lists are `analysisRules`, `leaderRules`
-(including Collide), and `updateRulesAll`. `maintenanceGroups` combines them and `rebuild`
-saturates their union. The display block is `slotted-pass` in `paper/semantics.tex`.
-
 | Paper rule or operation | Lean declaration | Blueprint node |
 | --- | --- | --- |
-| Slot leaf, NodeFS | `leafFSRule`, `nodeFSRule` | `def:slotted-fs-rules` |
-| FS intersection, SymFS, Transport | `intersectFSRule`, `symFSRule`, `transportFSRule` | `def:slotted-fs-rules` |
-| Identity, Reverse, Orient, Edge | `identityRule`, `reverseRule`, `orientRule`, `edgeRule` | `def:slotted-leader-rules` |
-| Compress, Parents | `compressRule`, `parentsRule` | `def:slotted-leader-rules` |
-| SymIdentity, SymEquation, Symmetry | `symIdentityRule`, `symEquationRule`, `symmetryRule` | `def:slotted-leader-rules` |
-| Group, Inherit | `groupRule`, `inheritRule` | `def:slotted-leader-rules` |
-| TrimLeader, TrimSym | `trimLeaderRule`, `trimSymRule` | `def:slotted-leader-rules` |
-| G collection and union merge | `gCollectRule`, `gMergeRule` | `def:slotted-leader-rules` |
-| align; Collide | `Target.align`; `collideRule` | `def:slotted-align`; `def:slotted-collide` |
-| Migrate with extend, Child, Restrict | `migrateRule`, `childRule`, `restrictRule` | `def:slotted-term-updates` |
-| Binder refresh, shadowing, generation deduplication | `refreshRule`, `shadowRule`, `dedupRule` | `def:slotted-term-updates` |
-| Replacement and nonleader subsumption | `updateRule` | `def:slotted-term-updates` |
-| Maintenance between user rounds | `rebuild`, `compileSchedule` | `def:slotted-rebuild` |
-| Distribution, frames, NotFree, fresh actions, variable RHS | `compileRule`, `emitFrame`, `emitGuards`, `compileAction` | `def:slotted-compile-rule` |
+| Leaf, NodeFS, Intersect, Transport | `leafFSRule`, `nodeFSRule`, `intersectFSRule`, `transportFSRule` | `def:slotted-fs-rules` |
+| Reflexivity, inverse, composition, map restriction | `reflexiveRule`, `inverseRule`, `composeRule`, `restrictRenamesRule` | `def:slotted-renames-rules` |
+| Finite symmetry membership | `orbitSeedRule`, `orbitMemberRule` | implementation notes here |
+| align; Collide | `Target.align`, `collideRule` | `def:slotted-align`, `def:slotted-collide` |
+| Migrate, Child, Restrict | `migrateRule`, `childRule`, `restrictRule` | `def:slotted-term-updates` |
+| Refresh, Shadow, Dedup | `refreshRule`, `shadowRule`, `dedupRule` | `def:slotted-term-updates` |
+| One saturation between rounds | `rebuild`, `compileSchedule` | `def:slotted-rebuild` |
+| Distribution, literals, unification, guards and actions | `compileRule`, `emitUnification`, `emitGuards`, `compileAction` | `def:slotted-compile-rule` |
 
 ## The correctness statement for phase 3
 
@@ -532,13 +473,16 @@ For `P` with binder signature `β`, `Pass.Premises P` and `compile β P.plain = 
 annotations and slot literals or variables at binding positions); `PayloadConsistent`;
 `Scoped` (query-bound head variables, except fresh action slots); and `Commutes` for every
 source rule. `Commutes` says that a source round commutes up to `SameMeaning'` with a
-bijective slot-name permutation fixing the rule's concrete constants. `NamePermutation`,
+bijective slot-name permutation fixing concrete constants and literal query slots.
+`FixesConstants` includes query slots because they denote fixed names; action-only
+slots remain fresh choices. This is the one adjusted premise; `Correct` is unchanged.
+`NamePermutation`,
 `renameTerm`, `renameDatabase` and `FixesConstants` define that statement; none mentions
 the target or assumes its correctness. This premise's applicability is a phase 3 obligation.
 Successful compilation checks namespace separation, arities, supported forms, keyed queries,
 payload/term roles, source ordering exclusion and head scope.
 
-The proof will relate target and source states by decoding classes through leaders and `FS`,
+The proof will relate target and source states by decoding classes through `RenamesTo` and `FS`,
 using `reps'`, `live'`, `liveSlots` and `SQueryMatches` from phase 1. Generation is invisible
 to decoding. `Correct` is a definition of a proposition; no proof is claimed, and
 `ExtlogTheorems.lean` is unchanged. Interpreter adequacy, maintenance termination and
@@ -552,9 +496,9 @@ check and final program. Generated names violate `noAt`; maintenance takes `min`
 variables inside saturation (`ordering`); primitive queries are neither keyed table reads
 nor `min` (`queryEncodable`); variadic value/primitive heads violate `aritiesAgree`; and
 integer generations alongside unions through class variables violate `noLitUnion`.
-Every one of the 235 compiled asserted checks fails exactly these five clauses.
-Of the 41 final programs, 25 fail the same five clauses. The other 16 have no constructor
-occurrences (declaration-only files and states restored by `pop`) and fail only `ordering`,
+Every one of the 250 compiled asserted checks fails exactly these five clauses.
+Of the 45 final programs, 29 fail the same five clauses. The other 16 have no constructor
+occurrences (declaration-only files and states restored by `pop`) and fail only
 `noAt`, `queryEncodable`: `binder-tests`, `carrier-name`, `datatype`, `egglog-surface`,
 `lambda-binders`, `languages/{array,sdql,toy}`, `own-sort`, `proof-conditions`,
 `proof-renaming-guards`, `rewrite-tests`, `sdql-binders`, `sdql-sum-sing`, `symmetry-tests`,
@@ -586,11 +530,14 @@ hand-written compiled programs as `*.slotted.egg`, checked by `lean-slotted-egg-
 `lean-check`. Snapshots use the target's untyped term syntax and reserved primitive catalogue;
 they are not standalone programs for the unextended Rust binary.
 
-The seven hand-written files cover alpha-equivalence, capture, distribution, frames and
-fresh action slots, redundant slots, variable right-hand sides, and symmetries. Their 32
-checks plus the unrestricted corpus's 203 checks give **235 agreements, zero disagreements**:
-57 files, 42 parser-accepted, 41 compiled, 1 policy rejection, 15 parser rejections.
-All six `paper/` files (18 checks) and distribution (2 checks) agree. No Rust binary rebuild
+The eleven hand-written files cover alpha-equivalence, capture, distribution,
+unification and fresh action slots, redundant slots, variable right-hand sides,
+symmetries, a follower becoming leader, redundancy after symmetry, forbidden literal
+collapse and a child update through a symmetric child. Their 47 checks plus the
+unrestricted corpus's 203 give **250 agreements, zero disagreements**: 61 files,
+46 parser-accepted, 45 compiled, 1 policy rejection, 15 parser rejections.
+The prior gate had 235 agreements across 41 compiled files (57 total). All six
+`paper/` files (18 checks) and distribution (2 checks) agree. No Rust binary rebuild
 or source modification is needed; no Python file is changed.
 
 ### Per-file report
@@ -654,9 +601,13 @@ programs. Declaration-only files are compiled and executed with an empty final q
 | `hand/alpha.egg` | 6 | compiled; all agree |
 | `hand/capture.egg` | 4 | compiled; all agree |
 | `hand/distribution.egg` | 2 | compiled; all agree |
+| `hand/follower-later-leader.egg` | 4 | compiled; all agree |
 | `hand/frames.egg` | 8 | compiled; all agree |
+| `hand/literal-slot-collapse.egg` | 3 | compiled; all agree |
+| `hand/redundant-after-symmetry.egg` | 5 | compiled; all agree |
 | `hand/redundant.egg` | 4 | compiled; all agree |
 | `hand/rewrite-variable.egg` | 4 | compiled; all agree |
+| `hand/symmetric-child-update.egg` | 3 | compiled; all agree |
 | `hand/symmetry.egg` | 4 | compiled; all agree |
 
 ### Validation
@@ -666,13 +617,13 @@ Run from `semantics/` with the supplied Rust binaries, `LEAN_NUM_THREADS=4`,
 
 | Command | Exit | Result |
 | --- | ---: | --- |
-| `make lean-check LAKE="lake --no-cache"` | 0 | Whole library and hole audit; 116 congruence, 116 provenance and 104 resugaring cases; 29 existing snapshots; Rust certificate test; parser report; 7 slotted snapshots |
+| `make lean-check LAKE="lake --no-cache"` | 0 | Whole library and hole audit; 116 congruence, 116 provenance and 104 resugaring cases; 29 existing snapshots; Rust certificate test; parser report; 11 slotted snapshots |
 | `make lean-difftest` | 0 | 116 passed, 0 failed, 0 skipped |
 | `make lean-compiled-difftest` | 0 | 116 passed, 0 failed |
 | `make lean-slotted-difftest` | 0 | 18 paper checks agree, 0 disagree, 0 undecided |
-| `make lean-slotted-compile` | 0 | 235 checks agree; file statuses above; 0 disagreements, 0 undecided, 0 execution errors |
-| `make paper-check LAKE="lake --no-cache"` | 0 | Seven-page PDF; no overfull boxes |
-| `make lean-update-egg-snapshots LAKE="lake --no-cache"` | 0 | Seven slotted snapshots; the 29 existing plain snapshots are unchanged |
+| `make lean-slotted-compile` | 0 | 250 checks agree; file statuses above; 0 disagreements, 0 undecided, 0 execution errors |
+| `make paper-check LAKE="lake --no-cache"` | 0 | Six-page PDF; slotted blocks visually inspected; no overfull boxes |
+| `make lean-update-egg-snapshots LAKE="lake --no-cache"` | 0 | Eleven slotted snapshots; the 29 existing plain snapshots are unchanged |
 
 No Python source was changed, so root `make nits` was not run. `paper-sync` was not run.
 `ExtlogTheorems.lean`, the Rust subtrees and the restored `Cargo.lock` are unchanged.
