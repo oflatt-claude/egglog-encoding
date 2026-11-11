@@ -670,7 +670,7 @@ rows bound as wildcards and the built rows at generation `0`; the flattened sour
 `x`, `b` become the pairs `(μ_x, factor)`, `(μ_b, body)`, computed in the query. -/
 @[blueprint "def:slotted-compile-rule"
   (statement := /--
-  The distribution rule, schematically ($g_0,g_1$ are wildcards):
+  \par\noindent The distribution rule, schematically ($g_0,g_1$ are wildcards):
   \[
   \begin{aligned}
    &\mathit{prod}=\mathtt{Mul}(g_0,\rho_x,\mathit{factor},\rho_s,\mathit{sum})\\

@@ -374,8 +374,8 @@ necessity, and rejection of a rule firing whose constructor premise never existe
 ## Slotted semantics
 
 The slotted layer (`EgglogSemantics/Slotted/`, described in [SLOTTED.md](SLOTTED.md)) is a
-specification beside the plain one, not an encoding: the slotted pass that compiles it to
-plain egglog is phase 2. A slot `$s` is the nullary term `Term.app "$s" []`; a binder
+specification beside the plain one, with the slotted pass below compiling it to plain
+egglog. A slot `$s` is the nullary term `Term.app "$s" []`; a binder
 signature `bind(f)` says which argument positions of `f` hold names bound in which children;
 the congruence `SCong` adds the `Rename` rule, closing every known equation under every
 partial injection of slots defined on both sides, with fresh bound names, so α-equivalent
@@ -389,6 +389,53 @@ choice of fresh names for the slots used only in actions.
 slotted parser accepts, each as one program per check; `Slotted/Tests/Bounded.lean`
 evaluates the specification over finite slot and term universes, soundly for the equalities
 and redundancies it finds, and `Slotted/Tests/Examples.lean` runs the paper's example on it.
+
+### The slotted pass
+
+`Slotted.compile` (`Slotted/Encode.lean`) compiles a slotted program to a plain program
+over the target of `Slotted/Target/`: the plain specification with primitive values (slot
+sets, renamings, renaming lists, cliques, booleans, integer generations) as canonical
+`@`-terms and primitive applications `@op(…)` reduced by a separate step, so that `Expr`,
+`Matches` and every existing proof stay as they are. A source term `f(t̄)` becomes the row
+`f(g, ρ₁, c₁, …, s̄)`: its generation `g`, and for each child a renaming from the child's
+slots to the node's names beside the child, with binding positions holding their slot;
+every slot leaf is the one term `$0`, reached through the edge `[$0 ↦ $s]`. The maintenance
+rules the pass emits are the paper's: the free-slot analysis `@FS` (merged by intersection
+through the rule form of a merge annotation), the leader equations `@Leader`/`@Equated`
+oriented toward the smaller class, the symmetries `@Sym` collected into `@G`, `Collide`,
+and the term updates `Migrate`, `Child`, `Restrict` with the binder refresh, each writing
+its replacement at the replaced row's generation plus one and subsuming the replaced row.
+A compiled query matches rows structurally, assigns placeholders to every node's slots,
+joins repeated variables through symmetries, refines the frame over the remaining aliasings
+and anchors it to the root's names, from which it reads each variable's renaming; `=`, `!=`
+and the free-name guards test those renamings. The generation keeps every replacement a new
+key: the plain `subsume` is permanent on a row key, so without it a spelling retired in a
+follower could never return live when a later union makes its class the leader
+(`SLOTTED.md`, "Deviations from the paper and the reference", lists this and the other
+departures from the displayed rules).
+
+`difftest slotted-compile` compiles every slotted corpus file the parser accepts, runs it on
+the target interpreter (`Slotted/Target/Interp.lean`) and compares each check with the
+outcome the file asserts; `slotted-compile.sh` confirms those outcomes against the Rust
+reference first. `difftest slotted-trace` shows the state after every command and the
+matches of every prefix of a compiled query, and `difftest slotted-egg` snapshots the
+compiled hand-written programs under `tests/slotted/`.
+
+Primitive operands are evaluated without requiring stored rows, so placeholder keys and
+computed values can be fresh; ordinary table operands and literals retain live membership.
+The target interpreter recognizes congruent spellings and excludes subsumed rows. The gate
+includes each file's final program, reports explicit parser and execution-policy rejections,
+and fails on crashes, timeouts, exhausted fuel or disagreeing outcomes. The restricted
+aliasing fixture is verified with Rust's corresponding mode and explicitly rejected by the
+unrestricted pass. The current comparison is 235 agreements across 41 compiled files.
+
+`Slotted.Pass.Correct` is the phase 3 proposition: successful compilation under
+`Pass.Premises` preserves every outcome and divergence. `Encode/Premises.lean` defines
+well-bound expressions, payload consistency, action scope and source-round commutation with
+slot-name permutations fixing concrete constants. No slotted correctness proof is claimed.
+The output fails the existing congruence fragment's `ordering`, `noAt`, `queryEncodable`,
+`noLitUnion` and `aritiesAgree` clauses on all asserted checks; `headsScoped` holds. Empty
+final programs fail only the first three. `fragmentReport` prints each program's clauses.
 
 ### Simulation with subsumption
 
