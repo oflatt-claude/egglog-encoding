@@ -163,6 +163,120 @@ under `egglog-experimental/src/slotted/`. The pass is `Slotted.compile`
 (`Slotted/Encode.lean`); `Slotted.encode` is its total form and `Program.encode` applies it
 to a `Slotted.Program`.
 
+## Simplified maintenance
+
+`RenamesTo(a,m,b)` means `a = m * b`: the finite partial injection `m` maps
+`b`'s slots to `a`'s names. It has no ordering invariant. A term child is stored
+as `(ρ,c)`, so terms differing only in names can share `c`. A self-equation
+`RenamesTo(c,π,c)` is a symmetry. The following is the rule design, written before
+editing the compiler; the experiments below determine the cleanup details.
+
+Write `N_g(s,ρ,c) = Sum(g,s,ρ,c)`, `A=FS(a)`, `B=FS(b)`, and
+`trim(A,m,B) = id_A ∘ m ∘ id_B`. The general constructor rules use one map per
+term child, literal payloads, and one field per binding position. In the paper's
+rule syntax:
+
+```text
+FS(a,A) ⇒ RenamesTo(a,id_A,a)
+RenamesTo(a,m,b) ⇒ RenamesTo(b,m⁻¹,a)
+RenamesTo(a,m,b) ∧ RenamesTo(b,n,c) ⇒ RenamesTo(a,m∘n,c)
+
+$0 ⇒ FS($0,{$0})
+a = f(g,ρ̄,c̄,s̄) ⇒ FS(a, ⋃ᵢ (img(ρᵢ) ∖ Bᵢ))
+FS(a,A) ∧ FS(a,B) ∧ C=A∩B ∧ C≠A
+  ⇒ FS(a,C), subsume(FS(a,A))
+RenamesTo(a,m,b) ∧ FS(a,A) ∧ FS(b,B)
+  ⇒ FS(a,m[B]), FS(b,m⁻¹[A])
+RenamesTo(a,m,b) ∧ FS(a,A) ∧ FS(b,B)
+  ∧ n=trim(A,m,B) ∧ n≠m
+  ⇒ RenamesTo(a,n,b), subsume(RenamesTo(a,m,b))
+
+a=N_g(s,ρ,c) ∧ a'=N_h(t,η,c) ∧ FS(c,C)
+  ∧ dom(ρ)=C=dom(η) ∧ RenamesTo(c,π,c) ∧ π∈Perm(C)
+  ∧ m=align(ρ∘π∘η⁻¹,[t↦s])
+  ⇒ RenamesTo(a,m,a')
+
+a=N_g(s,ρ,c) ∧ RenamesTo(a,m,b) ∧ FS(a,A) ∧ FS(b,B)
+  ∧ b=min(a,b) ∧ b≠a ∧ n=trim(A,m,B)
+  ∧ h=extend(n⁻¹,{s}∪img(ρ),B)
+  ⇒ union(b,N_{g+1}(h(s),h∘ρ,c)), subsume(N_g(s,ρ,c))
+a=N_g(s,ρ,c) ∧ RenamesTo(c,m,d) ∧ FS(c,C) ∧ FS(d,D)
+  ∧ d=min(c,d) ∧ d≠c ∧ n=trim(C,m,D)
+  ⇒ union(a,N_{g+1}(s,ρ∘n,d)), subsume(N_g(s,ρ,c))
+a=N_g(s,ρ,c) ∧ FS(c,C) ∧ ρ'=ρ|_C ∧ ρ'≠ρ
+  ⇒ union(a,N_{g+1}(s,ρ',c)), subsume(N_g(s,ρ,c))
+
+a=f(g,t̄) ∧ a'=f(h,t̄) ∧ g<h
+  ⇒ union(a,a'), subsume(f(g,t̄))
+```
+
+`align` is defined only for a consistent injective union. Before collision or
+migration, a binder shared with an outside occurrence is refreshed in its field
+and in the child images it binds, using a name outside all the node's local
+slots. An earlier shadowed binder is refreshed without changing the occurrences
+bound by the later field. Both updates use the same generation and subsumption
+form. All maintenance rules run in one saturation.
+
+### Revision checklist: questions and experiments
+
+- **Fresh binders.** The capture-avoiding semantic action chooses pairwise distinct
+  names outside the term and `dom(m) ∪ img(m)`. This is local to that action, not
+  a prohibition on coincidences with other independently matched terms. Action-only
+  slots remain fresh for the entire match (`Run′` with `ν`). Uniform renaming
+  plus separate alpha-equivalence is deferred; capture-avoiding `Renames` stays.
+- **Free slots.** The intended support is `S(t)=⋂_{u∼t} slots(u)`; semantically
+  `liveSlots` says that changing a free name changes the class. `FS` estimates
+  that support from node images minus binders, intersects competing estimates,
+  and transports through every equation in both directions. A self-equation is
+  included: repeated transport and intersection remove a whole symmetry orbit
+  when any member becomes redundant. No separate symmetry propagation rule is
+  needed. The strict `C≠A` guard retires only a larger estimate; exchanging the
+  two inputs retires the other estimate when necessary.
+- **Identity.** Keep finite `id_A`, not a global identity. Its domain matters for
+  `FS`, restriction, map comparison, and the executable value representation.
+- **Shrinking maps.** Retire an equation only when `trim(A,m,B)≠m`, after writing
+  its restriction. Transport fires on the same pre-state, so the removed entries
+  have already contributed both support estimates. For self-equations use exactly
+  the same rule; matching and collision require the eventual restriction to be a
+  permutation of the current support. The `redundancy-orbit` and
+  `symmetry-with-redundancy` corpus files test this interaction.
+- **Later unions and reversed edges.** Do not delete a fact because its endpoints
+  change order. Inversion retains both directions; migration and child update
+  choose the smaller endpoint when they fire. Unions cannot revive a removed slot,
+  so map-size cleanup is different from deleting a direction that may be needed
+  again. A new follower-to-leader regression tests the latter case.
+- **Generations and Dedup.** Experiment: replace `g+1` by `g` and omit `Dedup`,
+  then run `paper/fgh-transitive-symmetry.egg`. If permanent subsumption still hides
+  the recreated `H` spelling, retain both and record the failing assertion.
+- **Arrow audit.** Migrate requires `b=min(a,b) ∧ b≠a`; Child requires
+  `d=min(c,d) ∧ d≠c`. Closure, transport, and collision permit reflexive edges.
+  A symmetry consumer requires equal endpoints and a permutation of current `FS`.
+  Restriction needs strict map change; Dedup needs strict generation order.
+- **Unification terminology.** Use “unification map”: a possibly noninjective map
+  on initially separate temporary names. Keep disequality cliques `C` and fixed
+  pattern literals `P` as separate arguments of unification and refinement. A
+  merge with a literal keeps that literal as representative; merging different
+  literals fails. Node and class cliques prevent collapsing distinct slots of one
+  term, while independent placeholders may alias. Action-only slots are not fixed
+  pattern literals and are fresh after refinement.
+- **Equality and disequality without a group collection.** Equality can join a
+  self-equation and compare maps. Disequality cannot negate one selected symmetry:
+  identity may distinguish two uses that a swap equates. Experiment with finite
+  membership witnesses `Orbit(c,π)` for every `π∈Perm(FS(c))`, unioning
+  `Orbit(c,π)` with `Orbit(c,id)` precisely for self-equations. Comparing the witness
+  for `μ₂⁻¹∘μ₁` against identity then decides nonmembership with ordinary target
+  disequality. Different classes or images are separate branches. This needs no
+  `G` collection or change to `Target.Eval`.
+- **Presentation.** The main block shows the compact closure, support merge and
+  transport, collision, and replacement rules. Constructor-specific refresh and
+  the detailed executable membership encoding belong in these implementation
+  notes; all generated rules remain reviewable in snapshots.
+- **Proof checker.** Future slotted certificates need the same capture-avoiding
+  renaming on both sides of a proved equation, with coverage and injection checks;
+  alpha-equivalence is the identity renaming with different fresh binder choices.
+  No checker extension or correctness proof is attempted here.
+
+
 ## The target extension
 
 The compiled program needs two things the plain specification lacks: primitive values
