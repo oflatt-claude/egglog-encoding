@@ -59,12 +59,15 @@ show only `propext`, `Classical.choice` and `Quot.sound`.
 
 ## Encoding passes
 
-The congruence compiler translates source programs that subsume no rows into an explicit
-union-find relation maintained by rules that subsume a stale row and write its
-replacement; the output has no merge function. Source rules and the final check may test
-disequalities, and may take the minimum of query variables when the program has no
-saturation (`Program.Fragment`). It handles query flattening and rebuilding,
-with one id column per relation. The provenance pass adds a firing log, one relation per
+The congruence compiler translates source programs into an explicit union-find relation
+maintained by rules that subsume a stale row and write its replacement; the output has no
+merge function. A source subsume builds and marks its row, records its children in
+`@Sub_f`, and maintenance subsumes every spelling with congruent children. Permanent
+`@Node_f(children, node)` rows keep subsumed applications available for congruence.
+Source rules and the final check may test disequalities, and may take the minimum of query
+variables when the program has no saturation (`Program.Fragment`). It handles query flattening and rebuilding,
+with source names outside the generated `@` namespace and the syntactic requirements
+specified by `Program.Fragment`. The provenance pass adds a firing log, one relation per
 rule recording the values each firing bound, and proofs are reconstructed from the log
 afterwards. Proof lifting turns them into source proofs that both the Lean and Rust
 checkers accept; the checkers and the lifting take the monotone, ordering-free part of the
@@ -99,3 +102,10 @@ lake build difftest
 The toolchain is pinned in [lean-toolchain](lean-toolchain), and Mathlib in
 [lakefile.toml](lakefile.toml) and [lake-manifest.json](lake-manifest.json). Install `elan`,
 then run `lake exe cache get` from this directory when setting up a fresh checkout.
+
+The subsumption regressions are `tests/subsume-*.egg`. Both compiler gates use live-row
+checks. The source egglog difftest uses its include-subsumed compatibility mode:
+`subsume-new-spelling` and `subsume-congruent-check` therefore predict a successful egglog
+check where the model's live-row check fails. The compiled difftest counts live canonical
+e-nodes through census rules, excluding subsumed constructor rows; raw table sizes still
+include them.

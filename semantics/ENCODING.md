@@ -11,11 +11,15 @@ schedule and the single check that decides its outcome. The state is an e-graph
 set `X` of subsumed rows. egglog's named rulesets, `rule` commands and `run-schedule`
 bodies are resolved by the parser, which expands a run of a ruleset into a run of the rules
 registered in it so far; the emitter does the reverse with one ruleset per run. The
-congruence compiler emits no merge function. Its one table, `@UF(key, parent)`, is a
-relation, and every change to a row is a rule that subsumes the stale row and writes its
-replacement. Two language features support this: a `subsume` action and a disequality
-pattern `e ≠ e`. Source programs subsume no rows (`Program.Fragment.subsumeFree`); their
-rules and their check may test disequalities.
+congruence compiler emits no merge function. Its union-find table, `@UF(key, parent)`,
+is a relation, and every change to an edge is a rule that subsumes the stale row and writes
+its replacement. Each constructor also has a permanent node relation and a subsumption
+marker relation. Two language features support this: a `subsume` action and a disequality
+pattern `e ≠ e`. Source rules may subsume rows, and rules and the final check may test
+disequalities. `Program.Fragment` requires names outside the generated `@` namespace,
+encodable queries, scoped heads, consistent constructor arities and unions that cannot
+receive literals. Minima over query variables are supported when the program has no
+saturation; otherwise rules and the check are ordering-free.
 
 ### Semantics
 
@@ -67,17 +71,25 @@ the model's term order (egglog: `ordering-min`), the generated maintenance rules
 | --- | --- | --- |
 | `compress` | `(@UF a b) (@UF b c) (≠ b c)` | `subsume (@UF a b)`, `(@UF a c)` |
 | `collide` | `(@UF a b) (@UF a c) (= b (min b c)) (≠ b c)` | `subsume (@UF a c)`, `(@UF c b)` |
-| `congruence f` | `(f ā) (f b̄) (@UF aᵢ rᵢ) (@UF bᵢ rᵢ)… (@UF (f ā) y) (@UF (f b̄) z) (= y (min y z)) (≠ y z)` | `(@UF z y)` |
+| `congruence f` | `(@Node_f ā k) (@Node_f b̄ l) (@UF aᵢ rᵢ) (@UF bᵢ rᵢ)… (@UF k y) (@UF l z) (= y (min y z)) (≠ y z)` | `(@UF z y)` |
+| `subsume f` | `(@Sub_f ā) (f b̄) (@UF aᵢ rᵢ) (@UF bᵢ rᵢ)…` | `subsume (f b̄)` |
 
-Builds write the self-loop `(@UF t t)` for every subterm; a union writes `(@UF a m)` and
-`(@UF b m)`. A self-loop written for a value that already has a parent is stale, and
-`compress` with `a = b` subsumes it. The collision rule keeps the smaller parent, subsumes
-the other edge, and links the larger parent under the smaller; a collision whose loser
+Builds write the self-loop `(@UF t t)` for every subterm and the permanent row
+`(@Node_f ā (f ā))` for every application. A union writes `(@UF a m)` and `(@UF b m)`.
+A source `subsume (f ē)` first builds the expression, then subsumes the built spelling
+`f(ā)` and writes `(@Sub_f ā)`. The marker keys on the children because a nested query
+for the subsumed application could no longer read it. The subsumption maintenance rule
+compares child leaders and hides each congruent spelling, including spellings built in
+later runs. The node relation is never subsumed: congruence must still merge hidden
+applications and propagate their equality to parents. A self-loop written for a value
+that already has a parent is stale, and `compress` with `a = b` subsumes it. The collision
+rule keeps the smaller parent, subsumes the other edge, and links the larger parent under
+the smaller; a collision whose loser
 already has a parent produces a collision one level up, so unions still meet at roots.
 The congruence rule of a constructor matches two of its applications whose children have
-the same parents and links the larger of their roots under the smaller; a nullary
-constructor has one application and no rule. It fires only while the roots differ, and the
-subsequent collision and compression make the two roots one.
+the same parents and links the larger of their roots under the smaller. It fires only
+while the roots differ, and the subsequent collision and compression make the two roots
+one. A nullary constructor has one application and needs only its subsumption rule.
 
 A source `run R` compiles to the run of the compiled rules followed by a saturation of the
 maintenance rules; `S; S` and `saturate S` compile structurally, so every pass of a
@@ -89,10 +101,10 @@ settles the maintenance rules. The final check is flattened like a query.
 The disequality guards keep the rules from firing on canonical rows. Without the guard,
 `compress` fires on a self-loop `(@UF m m)`, `(@UF m m)` and subsumes it, and `collide`
 fires on the pair `(@UF a c)`, `(@UF a c)` and subsumes the canonical parent; subsumption
-is permanent, so either would lose a row for good. With the guards no rule fires on a
-canonical row, every rule's write is strictly more canonical than the row it subsumes, and
-no rule subsumes a row it writes. A stale row is never needed again, because leaders only
-move down the term order, so leaving it subsumed in the table is harmless.
+is permanent, so either would lose a row for good. With the guards no union-find
+maintenance rule fires on a canonical edge, and each replacement moves toward a smaller
+parent. A stale row is never needed again, because leaders only move down the term order,
+so leaving it subsumed in the table is harmless.
 
 A compiled query matches the terms themselves and joins the union-find in between. A
 source application `f(e₁, …, eₙ)` becomes the atom `(f a₁ … aₙ)` over fresh child
@@ -119,7 +131,9 @@ each rebuild. `difftest congruence 64 --views=indexed --phased`
 and `DIFFTEST_OPTIONS="--views=indexed --phased" semantics/compiled-difftest.sh` check
 that the optimized compilations agree with the source and with egglog.
 
-The views materialize the joins of compiled queries. The paper presents them as an
+The views materialize the joins of compiled queries for programs without source
+subsumption. `Options.forProgram` selects the explicit node-and-marker encoding when a
+program subsumes rows, retaining the requested phasing. The paper presents views as an
 optimization; the compiler correctness and proof-lifting theorems concern the compilation
 without views.
 
@@ -128,10 +142,12 @@ without views.
 At a rebuild fixpoint no maintenance rule matches. `compress` not matching means every
 parent is a root; `collide` not matching means every key has one parent; the congruence
 rules not matching means two applications with the same child parents have the same root.
-A stale row is subsumed in the round that matches it and is only rewritten from a strictly
-staler row, so staleness is well founded and the fixpoint is reached. The formal argument
-(`Proofs/Congruence/Fixpoint.lean`) counts the rows and the marks still missing from the
-square of the keys; a round that changes the state lowers that count, and a round that
+The subsumption rules not matching means every held application with children congruent
+to a marker's is subsumed. A stale union-find row is subsumed in the round that matches it
+and is only rewritten from a strictly staler row, so staleness is well founded and the
+fixpoint is reached. The formal argument (`Proofs/Congruence/Fixpoint.lean`) counts the
+rows and marks still missing from a finite universe of union-find pairs, source terms,
+node rows and markers; a round that changes the state lowers that count, and a round that
 changes nothing leaves the state canonical.
 
 ### Provenance: a firing log
@@ -165,8 +181,11 @@ rule node carries one premise proof per equality pattern. `Provenance.reconstruc
 justifies the first available pending firing at each step, stopping when none can be
 justified or its fuel is exhausted. `Provenance.proofs` supplies one fuel unit per logged
 firing and returns `none` if any data row lacks a checked proof.
-Proof lifting (`Resugar/Lift.lean`) turns each such proof into a source proof that
-`SourceProof.check` and the Rust checker accept.
+For programs in `SourceProof.Fragment`, proof lifting (`Resugar/Lift.lean`) turns each
+such proof into a source proof that `SourceProof.check` and the Rust checker accept.
+This checker fragment excludes subsumption. Node facts lift to reflexivity
+of their recorded node; a subsumption maintenance firing adds no new equality. Exported
+certificates omit repeated identical proofs, preserving the first occurrence.
 
 The log keeps proof identity out of the data. The alternative, a proof column on every
 row with rules firing once per proof, does not work with row replacement: a row re-derived
@@ -185,9 +204,10 @@ for the composition with provenance instrumentation. Their proofs are under
 ### The fragment's boundary
 
 `Program.Fragment` (`Source/Domain.lean`) admits disequality patterns in rule queries and in
-the final check, and minima in the rules and the check of a program without saturation; a
-`min` applies only to query variables and to such minima. A disequality compares the ids of
-its two sides, and at a canonical compiled state every live edge leads to a root, the
+the final check, subsumption in rule heads, and minima in the rules and the check of a
+program without saturation; a `min` applies only to query variables and to such minima.
+A disequality compares the ids of its two sides, and at a canonical compiled state every
+live edge leads to a root, the
 representative of a source class, so two ids differ exactly when the source values are not
 congruent; rule queries and the final check are both read at such a state
 (`Proofs/Congruence/QueryCorr.lean`, `Check.lean`). Each boundary is where the theorem
@@ -211,7 +231,8 @@ fails:
 The proof checker and the lifting accept `SourceProof.Fragment`, the monotone,
 ordering-free part of the fragment: a rule node's disequality is a syntactic test on the
 substitution, which is not sound once the two terms become equal in the final e-graph, and
-a minimum compares spellings, which the final representatives need not be.
+a minimum compares spellings, which the final representatives need not be. It excludes
+subsumption as well: a previously matched row need not remain live.
 
 The reference interpreter refines the specification up to `Database.SameMeaning` for
 monotone, ordering-free programs (`exec_programStep`) and for union-free programs with
@@ -223,8 +244,8 @@ rule against the pre-state, then applies the firings' writes and subsumptions.
 
 `Congruence.compile` returns the compiled program with one origin per rule, in
 `Program.rules` order. Origins identify a source rule by index, path compression, parent
-collision, or a constructor's congruence rule. Proof lifting uses these tags; they do not
-affect execution.
+collision, or a constructor's congruence or subsumption rule. Proof lifting uses these
+tags; they do not affect execution.
 
 The output has no `union` actions. `Relational.exec` executes it with structural equality
 and stored-value existence, without implicit congruence rebuilding. The congruence gate
@@ -298,13 +319,13 @@ checks the whole corpus.
 `make -C semantics lean-check` builds the library, audits for proof holes, and runs the corpus gates.
 The congruence gate compares every pair of held source terms against the compiled
 program's reading, and checks that execution with and without equality reasoning agrees.
-The provenance gate checks data preservation
-and every retained row's proof read off the log. The resugar gate lifts those proofs and checks
-them against the original source program, and the certificate gate exports the same
-proofs and checks them with Rust egglog. Failures, stuck executions, and
+The provenance gate checks data preservation of terms, subsumption marks and check
+outcomes, and every retained row's proof read off the log. The resugar gate lifts those
+proofs and checks them against the original source program, and the certificate gate
+exports the same proofs and checks them with Rust egglog. Failures, stuck executions, and
 insufficient fuel fail the command. Out-of-domain cases are counted separately: a program
 outside the compiler's fragment is skipped by every gate, and one outside the checker's
-fragment, with a disequality or a minimum, has its encodings checked but no lifted
+fragment, with subsumption, a disequality or a minimum, has its encodings checked but no lifted
 proofs.
 
 The corpus is the curated and generated programs in `DiffTest.lean` together with the
@@ -336,3 +357,22 @@ lake build difftest
 
 Executable regressions also check recursive traversal order, origin tags, rebuilding
 necessity, and rejection of a rule firing whose constructor premise never existed.
+
+### Simulation with subsumption
+
+`Rel src d` records that union-find keys are the stored source terms, every application
+has a permanent node row, and `Marker d f ā` holds exactly for the source's subsumed
+spellings. A compiled mark either retires a stale union-find edge with a smaller
+replacement, or hides a source application whose children are congruent to a marker's.
+At `Canon d`, the converse holds too: every held application with such a marker is
+subsumed. Hence compiled application reads agree with source live rows. The source round
+correspondence transports marks by constructor and congruent children; maintenance keeps
+markers and source meaning fixed. Its finite rank counts both stored rows and marks.
+
+The hand-written subsumption corpus tests unions after subsumption, spellings built after
+marking, congruence through hidden nodes, and saturation with unary and nullary marks.
+`subsume-new-spelling` and `subsume-congruent-check` deliberately fail the model's live-row
+check. The source egglog difftest predicts their successful checks using
+`checkIncludesSubsumed := true` semantics. The compiled difftest's census is an ordinary
+rule query and excludes subsumed constructor rows on both sides, even though raw
+`print-size` includes them.
