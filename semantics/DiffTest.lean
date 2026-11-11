@@ -7,6 +7,7 @@ import EgglogSemantics.Tests.Egg
 import EgglogSemantics.Tests.Parse
 import EgglogSemantics.Tests.Render
 import EgglogSemantics.Tests.PaperTex
+import EgglogSemantics.Slotted.Tests.Parse
 
 /-!
 # Differential tests
@@ -624,6 +625,39 @@ theorem execAt_runFuel (P : Program) : execAt runFuel FDatabase.empty P.schedule
 
 end Egglog
 
+/-! ### The slotted corpus
+
+`difftest slotted-parse <dir>…` reads every `.egg` under the directories with the slotted
+parser (`Slotted/Tests/Parse.lean`) and reports the files it accepts, with their check
+counts, and the files it skips, with the unsupported form. It fails when nothing is accepted
+or when a file under a `paper/` directory is skipped: those port the slotted e-graphs paper's
+examples and must stay in the subset. -/
+
+private def runSlottedParse (dirs : List String) : IO UInt32 := do
+  let mut files : Array System.FilePath := #[]
+  for d in dirs do
+    let ps ← System.FilePath.walkDir d
+    files := files ++ ps.filter fun p => p.extension == some "egg"
+  let sorted := files.qsort fun a b => a.toString < b.toString
+  let mut accepted := 0
+  let mut cases := 0
+  let mut skipped := 0
+  let mut paperSkipped := 0
+  for f in sorted do
+    let src ← IO.FS.readFile f
+    match Slotted.parseFile src with
+    | .ok cs =>
+      accepted := accepted + 1
+      cases := cases + cs.length
+      IO.println s!"ACCEPT {f}: {cs.length} checks"
+    | .error e =>
+      skipped := skipped + 1
+      if (f.toString.splitOn "/paper/").length > 1 then paperSkipped := paperSkipped + 1
+      IO.println s!"SKIP {f}: {e}"
+  IO.println s!"slotted-parse: {accepted} of {sorted.size} files accepted, {cases} checks, \
+    {skipped} skipped"
+  return if accepted > 0 && paperSkipped == 0 then 0 else 1
+
 /-! ### Entry point -/
 
 
@@ -1039,6 +1073,7 @@ These write nothing and never invoke egglog; the comparison is between the model
 itself. -/
 def main (args : List String) : IO UInt32 := do
   match args with
+  | "slotted-parse" :: dirs => runSlottedParse dirs
   | "resugar" :: fuel :: names =>
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
@@ -1139,4 +1174,5 @@ def main (args : List String) : IO UInt32 := do
     IO.eprintln "       difftest egg <fuel> [update] [case…]"
     IO.eprintln "       difftest export-fixtures <path>"
     IO.eprintln "       difftest export-certificates <fuel> <path> [case…]"
+    IO.eprintln "       difftest slotted-parse <dir>…"
     return 1
