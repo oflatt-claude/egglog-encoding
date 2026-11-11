@@ -36,36 +36,12 @@
 
 (G (F (B))) = (G (F (B)))  rule 1 {}
 
-(G (F (B))) = (G (F (B)))  rule 1 {}
-
-(G (F (B))) = (G (F (B)))  rule 1 {}
-
 (F (B)) = (F (B))  rule 1 {}
-
-(F (B)) = (F (B))  rule 1 {}
-
-(F (B)) = (F (B))  rule 1 {}
-
-(B) = (B)  rule 1 {}
-
-(B) = (B)  rule 1 {}
 
 (B) = (B)  rule 1 {}
 
 (G (F (A))) = (G (F (A)))  rule 0 {}
 
-(G (F (A))) = (G (F (A)))  rule 0 {}
-
-(G (F (A))) = (G (F (A)))  rule 0 {}
-
 (F (A)) = (F (A))  rule 0 {}
-
-(F (A)) = (F (A))  rule 0 {}
-
-(F (A)) = (F (A))  rule 0 {}
-
-(A) = (A)  rule 0 {}
-
-(A) = (A)  rule 0 {}
 
 (A) = (A)  rule 0 {}

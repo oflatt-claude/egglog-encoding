@@ -44,52 +44,6 @@
             (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
             (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
 
-(Eval (Succ (Zero))) = (Eval (Succ (Zero)))  rule 1 {y := (Succ (Zero))}
-  (Eval (Add (Zero) (Succ (Zero)))) = (Eval (Add (Zero) (Succ (Zero))))  congr 0
-    (Eval (Add (Zero) (Succ (Zero)))) = (Eval (Add (Zero) (Succ (Zero))))  rule 2 {x := (Zero), y := (Succ (Zero))}
-      (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-          (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-            (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-            (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-        (Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-          (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-            (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-            (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-    (Add (Zero) (Succ (Zero))) = (Add (Zero) (Succ (Zero)))  rule 2 {x := (Zero), y := (Succ (Zero))}
-      (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-          (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-            (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-            (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-        (Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-          (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-            (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-            (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Eval (Succ (Zero))) = (Eval (Succ (Zero)))  rule 1 {y := (Succ (Zero))}
-  (Eval (Add (Zero) (Succ (Zero)))) = (Eval (Add (Zero) (Succ (Zero))))  congr 0
-    (Eval (Add (Zero) (Succ (Zero)))) = (Eval (Add (Zero) (Succ (Zero))))  rule 2 {x := (Zero), y := (Succ (Zero))}
-      (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-          (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-            (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-            (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-        (Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-          (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-            (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-            (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-    (Add (Zero) (Succ (Zero))) = (Add (Zero) (Succ (Zero)))  rule 2 {x := (Zero), y := (Succ (Zero))}
-      (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-          (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-            (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-            (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-        (Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-          (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-            (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-            (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
 (Succ (Eval (Add (Zero) (Succ (Zero))))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Zero), y := (Succ (Zero))}
   (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
     (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
@@ -112,73 +66,7 @@
         (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
         (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
 
-(Succ (Eval (Add (Zero) (Succ (Zero))))) = (Succ (Eval (Add (Zero) (Succ (Zero)))))  rule 2 {x := (Zero), y := (Succ (Zero))}
-  (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-    (Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Succ (Eval (Add (Zero) (Succ (Zero))))) = (Succ (Eval (Add (Zero) (Succ (Zero)))))  rule 2 {x := (Zero), y := (Succ (Zero))}
-  (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-    (Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
 (Eval (Add (Zero) (Succ (Zero)))) = (Eval (Add (Zero) (Succ (Zero))))  rule 2 {x := (Zero), y := (Succ (Zero))}
-  (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-    (Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Eval (Add (Zero) (Succ (Zero)))) = (Eval (Add (Zero) (Succ (Zero))))  rule 2 {x := (Zero), y := (Succ (Zero))}
-  (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-    (Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Eval (Add (Zero) (Succ (Zero)))) = (Eval (Add (Zero) (Succ (Zero))))  rule 2 {x := (Zero), y := (Succ (Zero))}
-  (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-    (Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Add (Zero) (Succ (Zero))) = (Add (Zero) (Succ (Zero)))  rule 2 {x := (Zero), y := (Succ (Zero))}
-  (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-    (Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-      (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-        (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-        (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Add (Zero) (Succ (Zero))) = (Add (Zero) (Succ (Zero)))  rule 2 {x := (Zero), y := (Succ (Zero))}
   (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  congr 0
     (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
       (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
@@ -210,37 +98,7 @@
     (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
     (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
 
-(Succ (Eval (Add (Succ (Zero)) (Succ (Zero))))) = (Succ (Eval (Add (Succ (Zero)) (Succ (Zero)))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-  (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-    (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Succ (Eval (Add (Succ (Zero)) (Succ (Zero))))) = (Succ (Eval (Add (Succ (Zero)) (Succ (Zero)))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-  (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-    (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
 (Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-  (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-    (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-  (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-    (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Eval (Add (Succ (Zero)) (Succ (Zero)))) = (Eval (Add (Succ (Zero)) (Succ (Zero))))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-  (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-    (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
-  (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
-    (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-    (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Add (Succ (Zero)) (Succ (Zero))) = (Add (Succ (Zero)) (Succ (Zero)))  rule 2 {x := (Succ (Zero)), y := (Succ (Zero))}
   (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  congr 0
     (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
     (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
@@ -252,30 +110,10 @@
 
 (Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
 
-(Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-
-(Eval (Add (Succ (Succ (Zero))) (Succ (Zero)))) = (Eval (Add (Succ (Succ (Zero))) (Succ (Zero))))  rule 0 {}
-
-(Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
-(Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
-
 (Add (Succ (Succ (Zero))) (Succ (Zero))) = (Add (Succ (Succ (Zero))) (Succ (Zero)))  rule 0 {}
 
 (Succ (Succ (Zero))) = (Succ (Succ (Zero)))  rule 0 {}
 
-(Succ (Succ (Zero))) = (Succ (Succ (Zero)))  rule 0 {}
-
-(Succ (Succ (Zero))) = (Succ (Succ (Zero)))  rule 0 {}
-
 (Succ (Zero)) = (Succ (Zero))  rule 0 {}
-
-(Succ (Zero)) = (Succ (Zero))  rule 0 {}
-
-(Succ (Zero)) = (Succ (Zero))  rule 0 {}
-
-(Zero) = (Zero)  rule 0 {}
-
-(Zero) = (Zero)  rule 0 {}
 
 (Zero) = (Zero)  rule 0 {}

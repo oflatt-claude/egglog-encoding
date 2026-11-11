@@ -823,7 +823,7 @@ private def congruenceCheck (fuel : Nat) (o : Congruence.Options) (p : Program) 
   | _, none => errors := errors ++ ["congruence target stuck or exhausted fuel"]
   return errors
 
-/-- Leading `--views=naive|indexed` and `--phased` arguments. -/
+/-- Leading encoding options; source subsumption is also detected automatically. -/
 private def parseOptions : List String → Congruence.Options × List String
   | "--views=naive" :: rest =>
       let (o, names) := parseOptions rest
@@ -831,6 +831,9 @@ private def parseOptions : List String → Congruence.Options × List String
   | "--views=indexed" :: rest =>
       let (o, names) := parseOptions rest
       ({ o with views := .indexed }, names)
+  | "--subsumption" :: rest =>
+      let (o, names) := parseOptions rest
+      ({ o with subsumption := true }, names)
   | "--phased" :: rest =>
       let (o, names) := parseOptions rest
       ({ o with phased := true }, names)
@@ -861,8 +864,20 @@ private def runCongruenceChecks (fuel : Nat) (o : Congruence.Options) (names : L
   IO.println s!"congruence: {tested} tested, {failed} failures, {skipped} outside domain"
   return if failed == 0 && tested > 0 then 0 else 1
 
-private def provenanceCheck (fuel : Nat) (p : Program) (liftProofs : Bool) : List String := Id.run do
-  let q := Congruence.encode p
+/-- Exercise lifting with the origins of an explicitly selected compilation. The public
+`Resugar.lift` is also tested below against the default compilation. -/
+private def checkedLiftFor (p : Program) (compiled : Congruence.Compiled)
+    (pf : SourceProof.Proof) : Option SourceProof.Proof := do
+  if !SourceProof.sourceOk p then none else do
+    let fact ← Provenance.check compiled.program pf
+    let wanted ← Resugar.factClaim p fact
+    let result ← Resugar.liftProof p compiled.origins pf
+    if SourceProof.check p result == some wanted then some result else none
+
+private def provenanceCheck (fuel : Nat) (p : Program) (liftProofs : Bool)
+    (forceSubsumption : Bool := false) : List String := Id.run do
+  let compiled := Congruence.compileWith { subsumption := forceSubsumption } p
+  let q := compiled.program
   let some encoded := Provenance.encode q | return ["provenance pass rejected input"]
   let some original := relationalExecAt fuel FDatabase.empty q.schedule |
     return ["congruence program stuck or exhausted fuel"]
@@ -880,7 +895,8 @@ private def provenanceCheck (fuel : Nat) (p : Program) (liftProofs : Bool) : Lis
   let proofs := Provenance.rowProofs q annotated.terms
   let bad := proofs.filter fun tp => match tp.2 with
     | none => true
-    | some pf => liftProofs && (Resugar.lift p pf).isNone
+    | some pf => liftProofs &&
+        (if forceSubsumption then checkedLiftFor p compiled pf else Resugar.lift p pf).isNone
   if !bad.isEmpty then
     errors := errors ++ [s!"{bad.length}/{proofs.length} rows without a proof"]
   return errors
@@ -897,18 +913,25 @@ private def runProvenanceChecks (fuel : Nat) (names : List String)
   let mut tested := 0
   let mut failed := 0
   let mut skipped := 0
+  let mut nodeTested := 0
   for (name, p₀) in cases do
     let p := p₀
     if !p.encodeDomainB || (liftProofs && !p.proofDomainB) then
       skipped := skipped + 1
       continue
     tested := tested + 1
-    let errors := provenanceCheck fuel p liftProofs
+    let mut errors := provenanceCheck fuel p liftProofs
+    -- The checker excludes source subsumption, so explicitly retain nodes on plain
+    -- sources to exercise both representations in the lifting gate as well.
+    if p.schedule.subsumeFreeB then
+      nodeTested := nodeTested + 1
+      errors := errors ++ (provenanceCheck fuel p liftProofs true).map ("node encoding: " ++ ·)
     unless errors.isEmpty do
       failed := failed + 1
       IO.println s!"FAIL {name}: {String.intercalate "; " errors}"
   let label := if liftProofs then "resugar" else "provenance"
   IO.println s!"{label}: {tested} tested, {failed} failures, {skipped} outside domain"
+  IO.println s!"{label}: {nodeTested} additional node encodings checked"
   return if failed == 0 && tested > 0 then 0 else 1
 
 private def firstDifference (expected actual : String) : String :=
@@ -1037,7 +1060,7 @@ def main (args : List String) : IO UInt32 := do
       | "update" :: names => runEggChecks n true names
       | names => runEggChecks n false names
   | "congruence" :: fuel :: rest =>
-    -- `difftest congruence <fuel> [--views=naive|indexed] [--phased] [names]`
+    -- `difftest congruence <fuel> [--views=naive|indexed] [--phased] [--subsumption] [names]`
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
     | some n =>
@@ -1091,7 +1114,7 @@ def main (args : List String) : IO UInt32 := do
       writeCase dir s!"rand-{n}" (prog (genProgram (k + 1)))
       return 0
   | dir :: "compiled" :: rest =>
-    -- `difftest <dir> compiled [--views=naive|indexed] [--phased]`
+    -- `difftest <dir> compiled [--views=naive|indexed] [--phased] [--subsumption]`
     let (o, extra) := parseOptions rest
     unless extra.isEmpty do
       IO.eprintln s!"difftest: unknown arguments {extra}"
