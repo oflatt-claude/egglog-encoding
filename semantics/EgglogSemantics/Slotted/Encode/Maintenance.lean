@@ -1,0 +1,506 @@
+import EgglogSemantics.Slotted.Encode.Layout
+import Architect
+
+/-!
+# Slotted maintenance
+
+The rules that keep the compiled e-graph canonical up to renaming, as the paper's
+"Representation and Slotted Maintenance" subsection displays them, in three groups: the
+free-slot analysis (`NodeFS` per constructor, the leaf fact, intersection and transport); the
+leader equations and symmetries (Identity, Reverse, Orient, Edge, Compress, Parents,
+SymIdentity, SymEquation, Symmetry, Group, Inherit, TrimLeader, TrimSym, with `G` collecting
+the symmetries of a class into one value); and the term updates per constructor (Collide,
+Migrate, Child, Restrict, the binder refresh, and Dedup). Every computation is bound in the
+query, so the actions are plain; `set` updates of `FS` and `G` are the rule form of a merge
+annotation (`def:fd-rule`). All maintenance rules saturate together after every compiled
+run, as the paper says.
+
+Three points follow from the plain `subsume` being permanent on a row key, in every
+spelling. Every update writes its replacement at the replaced row's generation plus one and
+subsumes the replaced row in the same action, as the reference's `delete` does: the
+replacement is a new key, so a cleanup waiting for it is not needed, and a replaced
+spelling that a later migration recreates arrives at a class that holds a live row for it.
+A leader edge is never retired when a union makes its follower the smaller class: the edge
+stays, the updates fire only toward the smaller class (`b = min(a, b)`, as the reference's
+`ordering-max` guards), so a reversed edge is inert, and the orientation re-derives the
+equation the right way round. And Dedup retires the older of two live rows with one spelling
+and different generations, which a migration into a class that already holds the spelling
+creates, and unions their classes.
+-/
+
+namespace Egglog.Slotted.Encode
+
+open Target
+
+/-! ### Shared variables and shorthands -/
+
+private def va : Expr := .var "@a"
+private def vb : Expr := .var "@b"
+private def vc : Expr := .var "@c"
+private def vm : Expr := .var "@m"
+private def vn : Expr := .var "@n"
+private def vk : Expr := .var "@k"
+private def vA : Expr := .var "@A"
+private def vB : Expr := .var "@B"
+private def vC : Expr := .var "@C"
+private def vp : Expr := .var "@p"
+private def vq : Expr := .var "@q"
+private def vI : Expr := .var "@I"
+
+def pimg (m : Expr) : Expr := prim "@img" [m]
+def pdom (m : Expr) : Expr := prim "@dom" [m]
+def pinv (m : Expr) : Expr := prim "@inv" [m]
+def pcomp (m m' : Expr) : Expr := prim "@comp" [m, m']
+def prestrict (m A : Expr) : Expr := prim "@restrict" [m, A]
+def pid (A : Expr) : Expr := prim "@id" [A]
+def papply (m s : Expr) : Expr := prim "@apply" [m, s]
+def punion (A B : Expr) : Expr := prim "@union" [A, B]
+def pinter (A B : Expr) : Expr := prim "@inter" [A, B]
+def pdiff (A B : Expr) : Expr := prim "@diff" [A, B]
+def pset (ss : List Expr) : Expr := .app setName ss
+def pisPerm (π A : Expr) : Expr := prim "@isPerm" [π, A]
+
+/-- `id_A ∘ m ∘ id_B`: `m` spelled on the slot sets of its two classes. -/
+def trimmed (A m B : Expr) : Expr := pcomp (pid A) (pcomp m (pid B))
+
+/-- The union of a list of slot set expressions. -/
+def unions : List Expr → Expr
+  | [] => emptySet
+  | [e] => e
+  | e :: es => punion e (unions es)
+
+def leader (a m b : Expr) : Pattern := row leaderName [a, m, b]
+def equated (a m b : Expr) : Pattern := row equatedName [a, m, b]
+def fs (a A : Expr) : Pattern := row fsName [a, A]
+def sym (a π : Expr) : Pattern := row symName [a, π]
+def wLeader (a m b : Expr) : Action := write leaderName [a, m, b]
+def wEquated (a m b : Expr) : Action := write equatedName [a, m, b]
+def wFS (a A : Expr) : Action := write fsName [a, A]
+def wSym (a π : Expr) : Action := write symName [a, π]
+
+/-! ### Free slots -/
+
+/-- `$0 ⇒ FS($0, {$0})`: the slot leaf depends on its one slot. -/
+def leafFSRule : Rule :=
+  { query := [.expr leafExpr], actions := [wFS leafExpr (pset [leafExpr])] }
+
+/-- The generation of the matched row, and of its replacement. -/
+def genVar : Expr := .var "@g"
+def nextGen : Expr := .var "@g1"
+
+/-- The pattern columns of a node of `f`: the generation `@g`, edge variables `@m_j`, child
+variables `@c_j`, binder field variables `@b_j` and payload variables `@p_j`. -/
+def nodeCols (L : Layout) (f : FnName) (n : Nat) : List Expr :=
+  L.targetCols f n genVar (fun j => .var s!"@m{j}") fun j => match L.column f j with
+    | .child => .var s!"@c{j}"
+    | .binder => .var s!"@b{j}"
+    | .payload => .var s!"@p{j}"
+
+/-- The node pattern `@a = f(…)`. -/
+def nodeAtom (L : Layout) (f : FnName) (n : Nat) : Pattern := .eq va (.app f (nodeCols L f n))
+
+/-- The binder fields bound in child `j`, as a slot set expression. -/
+def boundSet (L : Layout) (f : FnName) (j : Nat) : Expr :=
+  pset ((L.boundIn f j).map fun k => .var s!"@b{k}")
+
+/-- The node's own estimate of its free slots: the image of each child's edge less the names
+bound in that child. -/
+def nodeFSExpr (L : Layout) (f : FnName) (n : Nat) : Expr :=
+  unions ((L.childPositions f n).map fun j =>
+    if (L.boundIn f j).isEmpty then pimg (.var s!"@m{j}")
+    else pdiff (pimg (.var s!"@m{j}")) (boundSet L f j))
+
+/-- `NodeFS_f`: `a = f(ρ̄, c̄, s̄) ⇒ FS(a, ⋃ᵢ (img(ρᵢ) ∖ Bᵢ))`. -/
+def nodeFSRule (L : Layout) (f : FnName) (n : Nat) : Rule :=
+  if (L.childPositions f n).isEmpty then
+    { query := [nodeAtom L f n], actions := [wFS va emptySet] }
+  else
+    { query := [nodeAtom L f n, bindP "@S" (nodeFSExpr L f n)], actions := [wFS va (.var "@S")] }
+
+/-- The merge of `FS` by intersection: `FS(a, A) ∧ FS(a, B) ∧ C = A ∩ B ∧ C ≠ A ⇒ FS(a, C),
+subsume(FS(a, A))`. -/
+def intersectFSRule : Rule :=
+  { query := [fs va vA, fs va vB, bindP "@C" (pinter vA vB), .ne vC vA],
+    actions := [wFS va vC, .subsume fsName [va, vA]] }
+
+/-- `Equated(a, m, b) ∧ FS(a, A) ∧ FS(b, B) ⇒ FS(a, m[B]), FS(b, m⁻¹[A])`. -/
+def transportFSRule : Rule :=
+  { query := [equated va vm vb, fs va vA, fs vb vB,
+              bindP "@A'" (pimg (prestrict vm vB)), bindP "@B'" (pimg (prestrict (pinv vm) vA))],
+    actions := [wFS va (.var "@A'"), wFS vb (.var "@B'")] }
+
+/-- `SymFS`: the self-equation instance of Transport, exposed directly for symmetries.
+Together with intersection this removes the entire symmetry orbit of a redundant slot. -/
+def symFSRule : Rule :=
+  { query := [sym va vp, fs va vA,
+      bindP "@A'" (pimg (prestrict vp vA)),
+      bindP "@B'" (pimg (prestrict (pinv vp) vA))],
+    actions := [wFS va (.var "@A'"), wFS va (.var "@B'")] }
+
+/-! ### Leaders and symmetries -/
+
+def identityRule : Rule :=
+  { query := [fs va vA, bindP "@I" (pid vA)], actions := [wLeader va vI va] }
+
+def reverseRule : Rule :=
+  { query := [equated va vm vb, bindP "@n" (pinv vm)], actions := [wEquated vb vn va] }
+
+def orientRule : Rule :=
+  { query := [equated va vm vb, fs va vA, fs vb vB, .eq vb (.min va vb), .ne vb va,
+              bindP "@n" (trimmed vA vm vB)],
+    actions := [wLeader va vn vb] }
+
+def edgeRule : Rule := { query := [leader va vm vb], actions := [wEquated va vm vb] }
+
+def compressRule : Rule :=
+  { query := [leader va vm vb, leader vb vn vc, .ne vb vc, bindP "@k" (pcomp vm vn)],
+    actions := [wEquated va vk vc] }
+
+def parentsRule : Rule :=
+  { query := [leader va vm vb, leader va vn vc, bindP "@k" (pcomp (pinv vm) vn)],
+    actions := [wEquated vb vk vc] }
+
+def symIdentityRule : Rule :=
+  { query := [fs va vA, bindP "@I" (pid vA)], actions := [wSym va vI] }
+
+def symEquationRule : Rule := { query := [sym va vp], actions := [wEquated va vp va] }
+
+def symmetryRule : Rule :=
+  { query := [equated va vm va, fs va vA, bindP "@p" (trimmed vA vm vA), isTrue (pisPerm vp vA)],
+    actions := [wSym va vp] }
+
+def groupRule : Rule :=
+  { query := [sym va vp, sym va vq, fs va vA, isTrue (pisPerm vp vA), isTrue (pisPerm vq vA),
+              bindP "@r" (pinv vp), bindP "@s" (pcomp vp vq)],
+    actions := [wSym va (.var "@r"), wSym va (.var "@s")] }
+
+def inheritRule : Rule :=
+  { query := [leader va vm vb, sym va vp, bindP "@k" (pcomp (pinv vm) (pcomp vp vm))],
+    actions := [wEquated vb vk vb] }
+
+def trimLeaderRule : Rule :=
+  { query := [leader va vm vb, fs va vA, fs vb vB, bindP "@n" (trimmed vA vm vB), .ne vn vm],
+    actions := [wEquated va vm vb, wLeader va vn vb, .subsume leaderName [va, vm, vb]] }
+
+def trimSymRule : Rule :=
+  { query := [sym va vp, fs va vA, bindP "@q" (trimmed vA vp vA), .ne vq vp, isTrue (pisPerm vq vA)],
+    actions := [wEquated va vp va, wSym va vq, .subsume symName [va, vp]] }
+
+/-- `Sym(a, π) ⇒ G(a, {π})`: the symmetries of a class as one value. -/
+def gCollectRule : Rule :=
+  { query := [sym va vp, bindP "@g" (.app rensName [vp])], actions := [write gName [va, .var "@g"]] }
+
+/-- The merge of `G` by union. -/
+def gMergeRule : Rule :=
+  { query := [row gName [va, .var "@g"], row gName [va, .var "@h"],
+              bindP "@u" (prim "@gunion" [.var "@g", .var "@h"]), .ne (.var "@u") (.var "@g")],
+    actions := [write gName [va, .var "@u"], .subsume gName [va, .var "@g"]] }
+
+/-! ### Term updates, per constructor -/
+
+/-- `Collide_f`: two nodes with the same children and payloads are equal under the union of
+the correspondences of their children, each read through a symmetry of the child, and the
+alignment of their binders. -/
+@[blueprint "def:slotted-collide"
+  (statement := /--
+  \[
+  \begin{aligned}
+   \textsc{Collide}:\quad
+   &a=\SumZeroTen(g,\$i,\rho,b)\land a'=\SumZeroTen(g',\$j,\eta,b)\\
+   &\land\mathtt{FS}(b,B)\land\operatorname{dom}(\rho)=B=\operatorname{dom}(\eta)\\
+   &\land\mathtt{Sym}(b,\pi)\land\pi\in\operatorname{Perm}(B)\\
+   &\land m=\operatorname{align}(\rho\circ\pi\circ\eta^{-1},[\$j\mapsto\$i])
+     \Rightarrow\mathtt{Equated}(a,m,a').
+  \end{aligned}
+  \]
+  For $f$, combine one correspondence per child and one per binding field;
+  payloads agree. The case $a=a'$ discovers parent symmetries.
+  -/)
+  (latexEnv := "paperfragment")]
+def collideRule (L : Layout) (f : FnName) (n : Nat) : Option Rule :=
+  let children := L.childPositions f n
+  let binders := L.binderPositions f n
+  if children.isEmpty && binders.isEmpty then none else
+  let cols' := L.targetCols f n (.var "@g'") (fun j => .var s!"@n{j}") fun j =>
+    match L.column f j with
+    | .child => .var s!"@c{j}"
+    | .binder => .var s!"@d{j}"
+    | .payload => .var s!"@p{j}"
+  let perChild := children.flatMap fun j =>
+    [fs (.var s!"@c{j}") (.var s!"@B{j}"),
+     .eq (pdom (.var s!"@m{j}")) (.var s!"@B{j}"), .eq (pdom (.var s!"@n{j}")) (.var s!"@B{j}"),
+     sym (.var s!"@c{j}") (.var s!"@pi{j}"), isTrue (pisPerm (.var s!"@pi{j}") (.var s!"@B{j}")),
+     bindP s!"@k{j}" (pcomp (.var s!"@m{j}") (pcomp (.var s!"@pi{j}") (pinv (.var s!"@n{j}"))))]
+  let perBinder := binders.map fun k =>
+    bindP s!"@k{k}" (.app renName [.app pairName [.var s!"@d{k}", .var s!"@b{k}"]])
+  let parts : List Expr := (children ++ binders).map fun j => .var s!"@k{j}"
+  let query := [nodeAtom L f n, .eq (.var "@a'") (.app f cols')] ++ perChild ++ perBinder ++
+    [bindP "@m" (prim "@align" parts)]
+  some { query := query, actions := [wEquated va vm (.var "@a'")] }
+
+/-- The node's local slots: the images of its edges and its binder fields. -/
+def localSlots (L : Layout) (f : FnName) (n : Nat) : Expr :=
+  unions (((L.childPositions f n).map fun j => pimg (.var s!"@m{j}")) ++
+    (if (L.binderPositions f n).isEmpty then []
+     else [pset ((L.binderPositions f n).map fun k => .var s!"@b{k}")]))
+
+/-- A term update: the query, which binds the replacement's generation `@g1 = @g + 1`, the
+replacement's columns, and the rule `query ⇒ union(target, f(cols′)), subsume(f(cols))`. -/
+def updateRule (L : Layout) (f : FnName) (n : Nat) (query : List Pattern) (target : Expr)
+    (cols' : List Expr) : Rule :=
+  { query := query ++ [bindP "@g1" (prim "@succ" [genVar])],
+    actions := [.union target (.app f cols'), .subsume f (nodeCols L f n)] }
+
+/-- `Migrate_f`: a follower's node rebuilt in its leader's names and unioned into the leader,
+the inverse leader map extended to the node's slots by `extend`. -/
+def migrateRule (L : Layout) (f : FnName) (n : Nat) : Rule :=
+  let cols' := L.targetCols f n nextGen (fun j => .var s!"@e{j}") fun j =>
+    match L.column f j with
+    | .child => .var s!"@c{j}"
+    | .binder => .var s!"@w{j}"
+    | .payload => .var s!"@p{j}"
+  let query := [leader va vm vb, fs vb vB, .eq vb (.min va vb), .ne vb va, nodeAtom L f n,
+      bindP "@L" (localSlots L f n), bindP "@h" (prim "@extend" [pinv vm, .var "@L", vB])] ++
+    ((L.childPositions f n).map fun j => bindP s!"@e{j}" (pcomp (.var "@h") (.var s!"@m{j}"))) ++
+    ((L.binderPositions f n).map fun k => bindP s!"@w{k}" (papply (.var "@h") (.var s!"@b{k}")))
+  updateRule L f n query vb cols'
+
+/-- `Child_{f,j}`: a node whose child `j` has a smaller leader points at the leader, its edge
+composed with the leader map. -/
+def childRule (L : Layout) (f : FnName) (n : Nat) (j : Nat) : Rule :=
+  let cols' := L.targetCols f n nextGen (fun i => if i = j then .var "@e" else .var s!"@m{i}")
+    fun i => match L.column f i with
+    | .child => if i = j then .var "@d" else .var s!"@c{i}"
+    | .binder => .var s!"@b{i}"
+    | .payload => .var s!"@p{i}"
+  let c : Expr := .var s!"@c{j}"
+  let query := [nodeAtom L f n, leader c vm (.var "@d"), .ne c (.var "@d"),
+      .eq (.var "@d") (.min c (.var "@d")), bindP "@e" (pcomp (.var s!"@m{j}") vm)]
+  updateRule L f n query va cols'
+
+/-- `Restrict_{f,j}`: an edge restricted to the free slots of its child. -/
+def restrictRule (L : Layout) (f : FnName) (n : Nat) (j : Nat) : Rule :=
+  let cols' := L.targetCols f n nextGen (fun i => if i = j then .var "@e" else .var s!"@m{i}")
+    fun i => match L.column f i with
+    | .child => .var s!"@c{i}"
+    | .binder => .var s!"@b{i}"
+    | .payload => .var s!"@p{i}"
+  let query := [nodeAtom L f n, fs (.var s!"@c{j}") vA,
+      bindP "@e" (prestrict (.var s!"@m{j}") vA), .ne (.var "@e") (.var s!"@m{j}")]
+  updateRule L f n query va cols'
+
+/-- `Dedup_f`: two live rows with one spelling and different generations are one node: their
+classes are unioned and the older row is retired. -/
+def dedupRule (L : Layout) (f : FnName) (n : Nat) : Rule :=
+  let cols' := L.targetCols f n (.var "@g'") (fun j => .var s!"@m{j}") fun j =>
+    match L.column f j with
+    | .child => .var s!"@c{j}"
+    | .binder => .var s!"@b{j}"
+    | .payload => .var s!"@p{j}"
+  { query := [nodeAtom L f n, .eq (.var "@a'") (.app f cols'), .ne genVar (.var "@g'"),
+              .eq genVar (.min genVar (.var "@g'"))],
+    actions := [.union va (.var "@a'"), .subsume f (nodeCols L f n)] }
+
+/-! ### The groups and the schedule -/
+
+/-- The free-slot analysis: the leaf fact, `NodeFS_f` per constructor, the merge of `FS` by
+intersection, and transport along equations. `B_i` is the set of binder fields bound in
+child `i`; `g` is the row's generation, which every rule binds as a wildcard. -/
+@[blueprint "def:slotted-fs-rules"
+  (statement := /--
+  \[
+  \begin{aligned}
+   &\$0\Rightarrow\mathtt{FS}(\$0,\{\$0\})
+    \qquad a=\mathtt{Num}(g,k)\Rightarrow\mathtt{FS}(a,\varnothing)\\
+   &a=\SumZeroTen(g,\$i,\rho,b)
+     \Rightarrow\mathtt{FS}(a,\operatorname{img}(\rho)\setminus\{\$i\})\\
+   \textsc{NodeFS}_f&:\ a=f(g,\bar\rho,\bar c,\bar s)
+     \Rightarrow\mathtt{FS}\bigl(a,\textstyle\bigcup_i(\operatorname{img}(\rho_i)\setminus B_i)\bigr)\\
+   \textsc{Intersect}&:\ \mathtt{FS}(a,A)\land\mathtt{FS}(a,B)\land C=A\cap B\land C\ne A
+     \\
+   &\quad\Rightarrow\mathtt{FS}(a,C),\ \kw{subsume}(\mathtt{FS}(a,A))\\
+   \textsc{Transport}&:\ \mathtt{Equated}(a,m,b)\land\mathtt{FS}(a,A)\land\mathtt{FS}(b,B)
+     \\
+   &\quad\Rightarrow\mathtt{FS}(a,m[B]),\ \mathtt{FS}(b,m^{-1}[A])
+     \\
+   \textsc{SymFS}&:\ \mathtt{Sym}(a,\pi)\land\mathtt{FS}(a,A)
+     \Rightarrow\mathtt{FS}(a,\pi[A]),\ \mathtt{FS}(a,\pi^{-1}[A])
+  \end{aligned}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
+def analysisRules (L : Layout) (ctors : List (FnName × Nat)) : List Rule :=
+  leafFSRule :: (ctors.map fun fk => nodeFSRule L fk.1 fk.2) ++
+    [intersectFSRule, transportFSRule, symFSRule]
+
+/-- The leader equations and symmetries: every term starts as its own leader, equations are
+oriented toward the smaller term and composed along leader paths, self-equations become
+symmetries closed under inverse and composition and carried to leaders, narrowed slot sets
+trim the stored renamings, and `G` collects a class's symmetries into one value. An edge a
+union has reversed is not retired: the updates fire only toward the smaller class, and
+`Orient` adds the edge the right way round. -/
+@[blueprint "def:slotted-leader-rules"
+  (statement := /--
+  \[
+  \begin{aligned}
+   \textsc{Identity}&:\ \mathtt{FS}(a,A)\Rightarrow\mathtt{Leader}(a,\mathrm{id}_A,a)
+   \\
+   \textsc{Reverse}&:\ \mathtt{Equated}(a,m,b)\Rightarrow\mathtt{Equated}(b,m^{-1},a)\\
+   \textsc{Orient}&:\ \mathtt{Equated}(a,m,b)\land\mathtt{FS}(a,A)\land\mathtt{FS}(b,B)
+     \land b=\min(a,b)\land b\ne a
+     \\
+   &\quad\Rightarrow\mathtt{Leader}(a,\mathrm{id}_A\circ m\circ\mathrm{id}_B,b)\\
+   \textsc{Edge}&:\ \mathtt{Leader}(a,m,b)\Rightarrow\mathtt{Equated}(a,m,b)\\
+   \textsc{Compress}&:\ \mathtt{Leader}(a,m,b)\land\mathtt{Leader}(b,m',c)\land b\ne c
+     \Rightarrow\mathtt{Equated}(a,m\circ m',c)\\
+   \textsc{Parents}&:\ \mathtt{Leader}(a,m_1,b_1)\land\mathtt{Leader}(a,m_2,b_2)
+     \Rightarrow\mathtt{Equated}(b_1,m_1^{-1}\circ m_2,b_2)\\
+   \textsc{SymIdentity}&:\ \mathtt{FS}(a,A)\Rightarrow\mathtt{Sym}(a,\mathrm{id}_A)
+   \\
+   \textsc{SymEquation}&:\ \mathtt{Sym}(a,\pi)\Rightarrow\mathtt{Equated}(a,\pi,a)\\
+   \textsc{Symmetry}&:\ \mathtt{Equated}(a,m,a)\land\mathtt{FS}(a,A)
+     \land\pi=\mathrm{id}_A\circ m\circ\mathrm{id}_A\land\pi\in\operatorname{Perm}(A)
+     \\
+   &\quad\Rightarrow\mathtt{Sym}(a,\pi)\\
+   \textsc{Group}&:\ \mathtt{Sym}(a,\pi)\land\mathtt{Sym}(a,\tau)\land\mathtt{FS}(a,A)
+     \land\pi,\tau\in\operatorname{Perm}(A)
+     \\
+   &\quad\Rightarrow\mathtt{Sym}(a,\pi^{-1}),\ \mathtt{Sym}(a,\pi\circ\tau)\\
+   \textsc{Inherit}&:\ \mathtt{Leader}(a,m,b)\land\mathtt{Sym}(a,\pi)
+     \Rightarrow\mathtt{Equated}(b,m^{-1}\circ\pi\circ m,b)\\
+   \textsc{TrimLeader}&:\ \mathtt{Leader}(a,m,b)\land\mathtt{FS}(a,A)\land\mathtt{FS}(b,B)
+     \\
+   &\quad\land m'=\mathrm{id}_A\circ m\circ\mathrm{id}_B\land m'\ne m\\
+   &\quad\Rightarrow\mathtt{Equated}(a,m,b),\ \mathtt{Leader}(a,m',b),\
+     \kw{subsume}(\mathtt{Leader}(a,m,b))\\
+   \textsc{TrimSym}&:\ \mathtt{Sym}(a,\pi)\land\mathtt{FS}(a,A)
+     \land\pi'=\mathrm{id}_A\circ\pi\circ\mathrm{id}_A\land\pi'\ne\pi\land\pi'\in\operatorname{Perm}(A)\\
+   &\quad\Rightarrow\mathtt{Equated}(a,\pi,a),\ \mathtt{Sym}(a,\pi'),\ \kw{subsume}(\mathtt{Sym}(a,\pi))\\
+   \textsc{Collect}&:\ \mathtt{Sym}(a,\pi)\Rightarrow\mathtt{G}(a,\{\pi\})
+   \qquad\mathtt{G}(a,\Pi)\ \kw{:merge}\ \Pi\cup\Pi'
+  \end{aligned}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
+def leaderRules (L : Layout) (ctors : List (FnName × Nat)) : List Rule :=
+  [identityRule, reverseRule, orientRule, edgeRule, compressRule, parentsRule,
+   symIdentityRule, symEquationRule, symmetryRule, groupRule, inheritRule,
+   trimLeaderRule, trimSymRule, gCollectRule, gMergeRule] ++
+    ctors.filterMap fun fk => collideRule L fk.1 fk.2
+
+/-- The children that binding position `k` of `f` covers. -/
+def coveredBy (L : Layout) (f : FnName) (k : Nat) : List Nat :=
+  ((L.bind f).filter fun ji => ji.1 = k).map Prod.snd
+
+/-- Binder refresh: a bound name also used outside its scope is renamed, in the binder and
+its covered children's edges, to a name the node does not use. `Refresh_{f,k,u}` fires when
+the name of binding position `k` is in the image of the edge of a child `u` the binder does
+not cover; a binder another binder of the same scope shadows is left to `Shadow`. -/
+def refreshRule (L : Layout) (f : FnName) (n : Nat) (k : Nat) (u : Nat) : Rule :=
+  let covered := coveredBy L f k
+  let cols' := L.targetCols f n nextGen
+    (fun i => if i ∈ covered then .var s!"@e{i}" else .var s!"@m{i}") fun i =>
+      match L.column f i with
+      | .child => .var s!"@c{i}"
+      | .binder => if i = k then .var "@w" else .var s!"@b{i}"
+      | .payload => .var s!"@p{i}"
+  let peers := (L.binderPositions f n).filter fun k' => k' ≠ k && coveredBy L f k' = covered
+  let query := [nodeAtom L f n, isTrue (prim "@elem" [.var s!"@b{k}", pimg (.var s!"@m{u}")])] ++
+    (peers.map fun k' => .ne (.var s!"@b{k}") (.var s!"@b{k'}")) ++
+    [bindP "@L" (localSlots L f n), bindP "@w" (prim "@mint" [.var "@L"])] ++
+    (covered.flatMap fun i =>
+      [bindP s!"@u{i}" (prim "@align" [.app renName [.app pairName [.var s!"@b{k}", .var "@w"]],
+         pid (pdiff (pimg (.var s!"@m{i}")) (pset [.var s!"@b{k}"]))]),
+       bindP s!"@e{i}" (pcomp (.var s!"@u{i}") (.var s!"@m{i}"))])
+  updateRule L f n query va cols'
+
+/-- Shadowed binders: two binding positions of one scope with one name, the earlier of which
+binds nothing, the later shadowing it; the earlier is renamed to a name the node does not
+use. -/
+def shadowRule (L : Layout) (f : FnName) (n : Nat) (k k' : Nat) : Rule :=
+  let cols' := L.targetCols f n nextGen (fun i => .var s!"@m{i}") fun i => match L.column f i with
+    | .child => .var s!"@c{i}"
+    | .binder => if i = k then .var "@w" else .var s!"@b{i}"
+    | .payload => .var s!"@p{i}"
+  let query := [nodeAtom L f n, .eq (.var s!"@b{k}") (.var s!"@b{k'}"),
+    bindP "@L" (localSlots L f n), bindP "@w" (prim "@mint" [.var "@L"])]
+  updateRule L f n query va cols'
+
+/-- The refresh rules of a constructor: for every binding position, each uncovered child,
+and each later binding position of the same scope. -/
+def binderRules (L : Layout) (f : FnName) (n : Nat) : List Rule :=
+  (L.binderPositions f n).flatMap fun k =>
+    let covered := coveredBy L f k
+    ((L.childPositions f n).filter (· ∉ covered)).map (refreshRule L f n k) ++
+      ((L.binderPositions f n).filter fun k' => k < k' && coveredBy L f k' = covered).map
+        (shadowRule L f n k)
+
+/-- The term updates per constructor: Collide discovers equations between two nodes with
+the same children through the children's symmetries and the alignment of the binders,
+Migrate rebuilds a follower's node in its leader's names, Child points a node at its child's
+leader, Restrict drops redundant entries from an edge, Refresh renames a bound name also
+used outside its scope, and Dedup merges two rows with one spelling. Every update subsumes
+the replaced row and writes its replacement at the replaced row's generation plus one, so
+the replacement's key is new. -/
+@[blueprint "def:slotted-term-updates"
+  (statement := /--
+  For sums, write $N_g(s,\rho,c)=\SumZeroTen(g,s,\rho,c)$.
+  Updates write generation $g+1$ and subsume the replaced row in the same firing.
+  \[
+  \begin{aligned}
+   \textsc{Migrate}:\quad
+   &a=N_g(s,\rho,c)\land\mathtt{Leader}(a,m,b)\land\mathtt{FS}(b,B)\\
+   &\land b=\min(a,b)\land b\ne a
+     \land\widehat m=\operatorname{extend}(m^{-1},\{s\}\cup\operatorname{img}(\rho),B)\\
+   &\Rightarrow\kw{union}(b,N_{g+1}(\widehat m(s),\widehat m\circ\rho,c)),\
+     \kw{subsume}(N_g(s,\rho,c))\\[2pt]
+   \textsc{Child}:\quad
+   &a=N_g(s,\rho,c)\land\mathtt{Leader}(c,m,d)\land c\ne d\land d=\min(c,d)\\
+   &\Rightarrow\kw{union}(a,N_{g+1}(s,\rho\circ m,d)),\
+     \kw{subsume}(N_g(s,\rho,c))\\[2pt]
+   \textsc{Restrict}:\quad
+   &a=N_g(s,\rho,c)\land\mathtt{FS}(c,A)\land\rho'=\rho|_A\land\rho'\ne\rho\\
+   &\Rightarrow\kw{union}(a,N_{g+1}(s,\rho',c)),\
+     \kw{subsume}(N_g(s,\rho,c))\\[2pt]
+   \textsc{Dedup}_f:\quad
+   &a=f(g,\bar t)\land a'=f(g',\bar t)\land g<g'\\
+   &\Rightarrow\kw{union}(a,a'),\ \kw{subsume}(f(g,\bar t)).
+  \end{aligned}
+  \]
+  Other constructors update each child similarly. Before collision or migration can align
+  a binder with an outside occurrence, \textsc{Refresh} renames that binder and its covered
+  edge images by $\mathrm{id}_{L\setminus\{s\}}\cup[s\mapsto\operatorname{mint}(L)]$.
+  \textsc{Shadow} refreshes the earlier of two equal binding fields with the same scope;
+  the later field binds the occurrences. Both use the same replacement and subsumption form.
+  -/)
+  (latexEnv := "paperfragment")]
+def updateRulesAll (L : Layout) (ctors : List (FnName × Nat)) : List Rule :=
+  ctors.flatMap fun fk =>
+    binderRules L fk.1 fk.2 ++ [migrateRule L fk.1 fk.2] ++
+      (L.childPositions fk.1 fk.2).flatMap (fun j =>
+        [childRule L fk.1 fk.2 j, restrictRule L fk.1 fk.2 j]) ++
+      [dedupRule L fk.1 fk.2]
+
+/-- The maintenance rules `M`, in their three groups: the analyses, the leaders and
+symmetries, and the term updates. -/
+def maintenanceGroups (L : Layout) (ctors : List (FnName × Nat)) : List (List Rule) :=
+  [analysisRules L ctors, leaderRules L ctors, updateRulesAll L ctors]
+
+/-- The rebuild that follows every compiled run: all maintenance rules saturate together. -/
+@[blueprint "def:slotted-rebuild"
+  (statement := /--
+  \[
+  M_P=M_{\mathrm{FS}}\cup M_{\mathrm{Leader}}\cup M_{\mathrm{Update}},
+  \qquad M_{\mathrm{Leader}}\text{ includes }\textsc{Collide}_f.
+  \]
+  \[
+  \kw{run}\ R\ \leadsto\ \kw{run}\ R';\ \kw{saturate}\ (\kw{run}\ M_P).
+  \]
+  Sequences and saturations compile structurally. Thus every user round is followed by
+  joint maintenance saturation; nonleader rows are subsumed after replacement.
+  -/)
+  (latexEnv := "paperfragment")]
+def rebuild (L : Layout) (ctors : List (FnName × Nat)) : Schedule :=
+  .saturate (.run (maintenanceGroups L ctors).flatten)
+
+end Egglog.Slotted.Encode
