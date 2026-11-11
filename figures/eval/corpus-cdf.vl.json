@@ -5,7 +5,7 @@
     "text": {"expr": "indexof(treatments, 'term') >= 0 ? 'Congruence-only overhead' : indexof(treatments, 'proof-testing') >= 0 ? 'Full proof overhead' : indexof(treatments, 'proof-extraction') >= 0 ? 'Proof recording and extraction' : 'Proof recording only'"},
     "subtitle": {"expr": "indexof(treatments, 'term') >= 0 ? 'Congruence pass only; no proof recording.' : indexof(treatments, 'proof-testing') >= 0 ? 'Recording, extraction and checking; includes congruence pass.' : indexof(treatments, 'proof-extraction') >= 0 ? 'Includes congruence pass and extraction; excludes checking.' : 'Includes congruence pass; excludes extraction and checking.'"}
   },
-  "data": {"url": "../../.reports-grouped.json", "format": {"type": "json"}},
+  "data": {"url": "../../data-cache/reports-grouped.json", "format": {"type": "json"}},
   "params": [
     {"name": "target_label", "value": "figures"},
     {"name": "timeout_sec", "value": 500},

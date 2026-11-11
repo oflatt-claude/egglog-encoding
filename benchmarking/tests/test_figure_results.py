@@ -21,6 +21,11 @@ from .report_fixtures import make_record, make_target, write_report
 from .test_figures import catalog_fixture
 
 
+@pytest.fixture(autouse=True)
+def renderer_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(figures, "renderer_metadata", lambda: {"git_sha": "renderer", "is_dirty": False})
+
+
 @pytest.mark.parametrize("name", ["slotted-runtime", "slotted-multipattern-runtime"])
 def test_export_statistics_match_shared_executed_vega_fixture(name: str) -> None:
     fixture = json.loads(Path(__file__).with_name("figure_statistics.json").read_text())

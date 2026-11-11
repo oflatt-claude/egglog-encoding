@@ -13,6 +13,10 @@ name = "egglog-experimental"
 path = "src/main.rs"
 required-features = ["bin"]
 
+[[example]]
+name = "slotted_ast"
+test = true
+
 [[test]]
 harness = false
 name = "files"

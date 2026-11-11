@@ -96,6 +96,7 @@ def test_inventory_keeps_source_blockers_separate(tmp_path: Path) -> None:
     assert inventory["unavailable_cases"][0]["reason"] == "Source dependency is unavailable"
     assert inventory["workloads"][0]["file_sha256"] == corpus["workloads"][0]["sha256"]
     assert not (tmp_path / ".reports.jsonl").exists()
+    assert not (tmp_path / "data-cache/reports.jsonl").exists()
     assert not (tmp_path / "benchmarks/local/figure-inventory.json").exists()
     corpus["cases"][-1]["reason"] = "New source evidence"
     (tmp_path / "benchmarks/corpus/manifest.json").write_text(json.dumps(corpus))

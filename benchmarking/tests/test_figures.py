@@ -23,6 +23,11 @@ from benchmarking.reports.store import ReportStore
 from .report_fixtures import make_record, make_target, make_timing_summary, write_report
 
 
+@pytest.fixture(autouse=True)
+def renderer_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(figures, "renderer_metadata", lambda: {"git_sha": "renderer", "is_dirty": False})
+
+
 def catalog_fixture(directory: Path, **settings: Any) -> Path:
     spec = directory / "chart.vl.json"
     spec.write_text(
@@ -98,7 +103,7 @@ def test_config_help_does_not_expand_files(tmp_path: Path, capsys: pytest.Captur
     assert error.value.code == 0
     text = capsys.readouterr().out
     assert "runtime:" in text and "memory:" in text
-    assert "--cached" not in text
+    assert "--no-runs" in text
 
 
 def test_default_output_is_checkout_relative_and_explicit_override_is_preserved(
@@ -222,9 +227,9 @@ def test_duplicate_keys_and_treatments_are_rejected(tmp_path: Path) -> None:
         figures.load_config(path)
 
 
-def test_names_require_config_option_and_no_new_cache_flag(tmp_path: Path) -> None:
+def test_names_require_config_option(tmp_path: Path) -> None:
     path = catalog_fixture(tmp_path)
-    for args in ([str(path)], ["runtime", "runtime"], ["--cached"]):
+    for args in ([str(path)], ["runtime", "runtime"]):
         with pytest.raises(SystemExit):
             figures.parse_args(["--config", str(path), *args])
 
@@ -399,14 +404,13 @@ def test_temporary_bindings_render_every_time_and_preserve_images_on_failure(
     assert params["target_label"] == "figures"
     assert params["selected_inputs"][0]["file_sha256"] == "sha256:file"
     assert params["selected_inputs"][0]["selected_row_indices"] == [1, 2]
-    assert bindings[0]["data"]["url"] == grouped_report_path(report).as_uri()
+    assert "url" not in bindings[0]["data"]
+    assert bindings[0]["data"]["values"][0]["groups"][0]["samples"][0]["row_index"] == 1
     assert json.loads((output_dir / "runtime.bound.vl.json").read_bytes()) == bindings[0]
     assert json.loads((output_dir / "memory.bound.vl.json").read_bytes()) == bindings[3]
     assert (tmp_path / "chart.vl.json").read_bytes() == original
     assert set((output_dir).iterdir()) == set(outputs)
-    assert all(
-        command[-2:] == ["--base", str(tmp_path)] or command[-4:-2] == ["--base", str(tmp_path)] for command in calls
-    )
+    assert all(Path(command[command.index("--base") + 1]).parent == output_dir for command in calls)
     figures.render_figures(resolved, config, grouped, report, target, output_argument, console, inventory)
     assert len(calls) == 12
 
@@ -505,7 +509,7 @@ def test_incomplete_later_figure_preserves_entire_previous_bundle(
             Console(file=io.StringIO()),
             inventory,
         )
-    assert len(calls) == 3  # The first figure was staged, never published.
+    assert not calls  # Validate all figure selections before starting rendering.
     assert set(destination.iterdir()) == set(previous)
     assert {path: path.read_bytes() for path in previous} == previous
 
@@ -1018,3 +1022,51 @@ def test_main_rejects_label_only_target_before_resolution(
     monkeypatch.setattr(collection, "resolve_requests", lambda *_args: pytest.fail("label lookup must not resolve"))
     assert figures.main([*main_environment["args"], "--target", "figures="]) == 2
     assert main_environment["rendered"] == []
+
+
+def test_cache_defaults_and_explicit_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from benchmarking.benchmark import parse_benchmark_args, resolve_report_path
+
+    monkeypatch.chdir(tmp_path)
+    pair = parse_benchmark_args([])
+    args, _ = figures.parse_args([])
+    default = tmp_path / "data-cache/reports.jsonl"
+    assert resolve_report_path(pair.report, tmp_path) == default
+    assert args.report.resolve() == default
+    assert grouped_report_path(default) == tmp_path / "data-cache/reports-grouped.json"
+    explicit = "custom[1].jsonl"
+    pair = parse_benchmark_args(["--report", explicit])
+    args, _ = figures.parse_args(["--report", explicit])
+    assert resolve_report_path(pair.report, tmp_path) == args.report.resolve() == tmp_path / explicit
+
+
+def test_no_runs_main_never_resolves_or_collects_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from benchmarking import collection
+    from benchmarking.targets import sha256_file
+
+    config = catalog_fixture(tmp_path)
+    file = tmp_path / "one.egg"
+    file.write_text("(check (= 1 1))")
+    report = tmp_path / "observations.jsonl"
+    write_report(
+        report,
+        *[
+            make_record(
+                i,
+                started_at=f"2026-10-01T00:00:0{i}Z",
+                target_label="figures",
+                file_sha256=sha256_file(file),
+                max_rss_bytes=1048576,
+            )
+            for i in range(2)
+        ],
+    )
+    write_grouped_report(ReportStore(report).grouped_report(), grouped_report_path(report))
+    before = {path: path.read_bytes() for path in (report, grouped_report_path(report))}
+    monkeypatch.setattr(collection, "resolve_requests", lambda *_args: pytest.fail("cached render resolved targets"))
+    monkeypatch.setattr(collection, "collect", lambda *_args, **_kw: pytest.fail("cached render collected timings"))
+    snapshots = []
+    monkeypatch.setattr(figures, "render_figures", lambda *args: snapshots.append(args[4]))
+    assert figures.main(["--config", str(config), "--report", str(report), "--no-runs"]) == 0
+    assert len(snapshots) == 1 and snapshots[0].binary_path is None
+    assert all(path.read_bytes() == content for path, content in before.items())

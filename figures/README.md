@@ -40,7 +40,7 @@ before copying it, and remove obsolete artifacts explicitly when needed.
 
 | Figure | Comparison |
 | --- | --- |
-| `disequality-runtime` | Runtime/RSS boxplots with outliers for native DE, native NEE and relation-based Egglog NEE; proofs off |
+| `disequality-runtime` | Runtime/RSS boxplots with outliers for the original DE implementation in Disegg and extlog; proofs off |
 | `math-runtime` | Twelve-round Math; Egg/Egglog off/checked proofs; time, peak RSS and within-engine overhead |
 | `corpus-congruence-cdf` | Congruence-only time and peak-RSS overhead across the application replays |
 | `corpus-proof-recording-cdf` | Recording-only proof time and peak-RSS overhead across the same replays; strict correctness coverage retained |
@@ -167,13 +167,13 @@ Each figure reports `Rendering NAME` before rendering and prints all output path
 
 ## Selection and statistics
 
-The runner refreshes the shared typed `.reports-grouped.json`, including current
+The runner refreshes the shared typed `data-cache/reports-grouped.json`, including current
 label-to-engine identities when every observation is already cached. This binding
 belongs to the current grouped artifact; raw label-only lookup remains based on
-recorded observations. Source targets are checked and rebound on each figure
-invocation. An ordinary comparison that assigns the same label/engine to two
+recorded observations. Source-target invocations check and rebind their targets;
+exported-data replay retains its recorded bindings. An ordinary comparison that assigns the same label/engine to two
 different binaries is rejected before launch. The raw
-`.reports.jsonl` remains append-only. The shared selector matches the current
+`data-cache/reports.jsonl` remains append-only. The shared selector matches the current
 executable, physical input file hash, and treatment. Resource failures
 are selected under the shared retry rule; successes remain reusable when guards
 change. It binds their original row
@@ -308,3 +308,68 @@ the ordinary pre-command graph; strict alternatives use checked source proofs.
 Variant order, costs and actual proof
 right-hand sides remain exact. See [the root workflow](../README.md) for the fixtures
 and filters. The Python suite also checks the public comparison CLI.
+
+### Reuse exported figures
+
+A figure directory is portable data and configuration: each `.results.json`
+contains selected raw observations and measured engine/input identities; each
+`.bound.vl.json` contains the saved drawing and settings. Gzip versions of either
+file are accepted. The Slotted AST table has its own `.ast.json` snapshot.
+Only selected observations are exported; unused per-ruleset profiling and the
+whole local benchmark history are not copied.
+
+```sh
+./bench.py figures --reuse-from /path/to/exported/eval --no-runs
+./bench.py figures disequality-runtime --reuse-from /path/to/exported/eval --no-runs
+```
+
+Without names, directory reuse discovers exported figures, including historical
+names absent from the current catalog. Complete replay needs no original
+workload files, checkout, executable, global report, or AST compiler. `--no-runs`
+forbids measurement, builds, and AST compilation and leaves measurement caches
+untouched; it still renders images and tables. Each figure retains its recorded
+sample count, guards, selection, and measured versions. The renderer's revision
+is recorded separately. Explicit CLI settings override recorded settings.
+Exports use `figure_data_version: 2` and the current report schema. Older
+exports are rejected before grouping or collection; regenerate their data and
+exports with the current runtime.
+
+Edit the saved bound specification to change a drawing directly. Alternatively,
+use `--config PATH` to take drawing specifications from an authored catalog
+while retaining the saved samples/settings; its workload globs are not read.
+To fill missing observations, omit `--no-runs`: matching imported/local data is
+reused first, then only the deficit is collected. Historical collection requires
+the original input bytes and an available executable with the recorded hash;
+unavailable or changed artifacts are explicit blockers. `--target SOURCE`
+intentionally retargets current inputs to a new endpoint instead of silently
+substituting current main for a historical measurement.
+
+### Slotted input list and program sizes
+
+The ignored `data-cache/` directory holds `reports.jsonl` (append-only timing
+history), `reports-grouped.json` (derived timing data), and `slotted-ast.jsonl`
+(compact compiler/input/pipeline measurements). Explicit cache paths remain
+relative to the invocation. These local caches need not accompany portable
+per-figure exports.
+
+`slotted-runtime` exports its selected `.egg`/`.ref` file list and AST counts in
+JSON, CSV, Markdown, and LaTeX. Imported tables retain recorded compiler identity
+and unsupported outcomes, without storing or compiling desugared programs.
+To redraw or explicitly collect AST measurements alone:
+
+```sh
+uv run --locked python -m benchmarking.slotted_ast_cli
+uv run --locked python -m benchmarking.slotted_ast_cli --collect
+```
+
+The first command uses the latest recorded compiler cohort; the second resolves
+the current compiler and collects only missing identities. `--compiler PATH`
+selects an exact existing compiler. Ordinary fresh figure collection also uses
+the current compiler; `--no-runs` never builds it. Build failures and interruptions
+are not stored as unsupported programs.
+
+Counts give one S-expression node per list, atom, or literal, excluding comments
+and whitespace. The stages are input, restricted-aliasing Slotted output, and
+public `ProofMode::Prove` followed by core congruence/proof lowering. Diagnostic
+`Check` counts do not replace the Proofs stage, and AST input/compiler identities
+must be compared separately with those of the timing figure.
