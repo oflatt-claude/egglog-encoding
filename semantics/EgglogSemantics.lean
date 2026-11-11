@@ -145,6 +145,9 @@ import EgglogSemantics.Slotted.Spec.Congruence
 import EgglogSemantics.Slotted.Spec.Match
 import EgglogSemantics.Slotted.Spec.Eval
 import EgglogSemantics.Slotted.Spec.Step
+import EgglogSemantics.Slotted.Tests.Parse
+import EgglogSemantics.Slotted.Tests.Bounded
+import EgglogSemantics.Slotted.Tests.Examples
 
 -- Tests
 import EgglogSemantics.Tests.Checks
