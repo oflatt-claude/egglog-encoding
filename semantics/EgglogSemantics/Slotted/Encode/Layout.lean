@@ -6,10 +6,10 @@ import EgglogSemantics.Slotted.Spec.Eval
 # Names, layouts and the representation of ground terms
 
 The slotted pass's generated tables carry the paper's names under the `@` prefix:
-`@Leader(a, m, b)` directs `a` toward its leader `b` with `a = m * b`, `@Equated(a, m, b)` is
-the same equation unoriented, `@FS(a, A)` estimates the free slots of `a`, `@Sym(a, π)`
-records a symmetry, and `@G(a, Π)` collects the symmetries into one value. The slot leaf is
-the term `$0`.
+`@RenamesTo(a, m, b)` records `a = m * b`, without ordering its endpoints;
+`@FS(a, A)` estimates the free slots of `a`. Self-equations are symmetries.
+`@Orbit(a, π)` is a finite membership witness used by disequality: it is unioned
+with `@Orbit(a, id)` exactly for symmetries. The slot leaf is the term `$0`.
 
 A **layout** says what each argument position of a constructor holds in the target: a
 binding position holds its slot (`bind`), a payload column holds a literal (inferred: some
@@ -32,11 +32,9 @@ open Target
 
 /-! ### Names -/
 
-def leaderName : FnName := "@Leader"
-def equatedName : FnName := "@Equated"
+def renamesToName : FnName := "@RenamesTo"
 def fsName : FnName := "@FS"
-def symName : FnName := "@Sym"
-def gName : FnName := "@G"
+def orbitName : FnName := "@Orbit"
 /-- The goal relation a disjunctive check writes. -/
 def goalName : FnName := "@Goal"
 /-- The slot leaf. -/

@@ -22,7 +22,7 @@ under `G`, `!=` its negation as a disjunction, `renaming-=` class equality.
 
 Actions are built bottom-up in the anchored frame with their edges bound in the query; a
 `rewrite` unions the built right-hand side with the root class, a bare-variable right-hand
-side inserts `Equated(root, μ_v, c_v)`. A matched row's generation is a wildcard; a built row
+side inserts `RenamesTo(root, μ_v, c_v)`. A matched row's generation is a wildcard; a built row
 has generation `0`.
 -/
 
@@ -336,7 +336,10 @@ def occur (v : Var) (here : Occ) : EmitM Unit := do
   let st ← get
   if (st.firstOcc.lookup v).isSome then
     let π ← fresh "pi"
-    push (sym (.var v) (.var π))
+    push (renamesTo (.var v) (.var π) (.var v))
+    let A ← fresh "symSlots"
+    push (fs (.var v) (.var A))
+    push (isTrue (pisPerm (.var π) (.var A)))
     let hereMap : Expr := match here with
       | .root i => pcomp (nuAtom i) (.var π)
       | .child i e => pcomp (pcomp (nuAtom i) (.var e)) (.var π)
@@ -458,14 +461,21 @@ def cmpPatterns (k : Cmp) (a b : Expr) (payload : Bool) : EmitM (List (List Patt
     | .var x, .var y, .renEq => pure [[.eq a b]]
     | .var x, .var y, .renNe => pure [[.ne a b]]
     | .var x, .var y, .eq =>
-      let g ← fresh "gr"
-      pure [[.eq a b, row gName [a, .var g],
-             isTrue (prim "@cosetSame" [muVar x, muVar y, .var g])]]
+      let π ← fresh "cmpSym"
+      pure [[.eq a b, renamesTo a (.var π) a,
+             .eq (muVar x) (pcomp (muVar y) (.var π))]]
     | .var x, .var y, .ne =>
-      let g ← fresh "gr"
+      let m ← fresh "relative"
+      let I ← fresh "identity"
+      let o ← fresh "orbit"
+      let z ← fresh "neutral"
+      let A := pdom (muVar x)
       pure [[.ne a b],
-            [.eq a b, row gName [a, .var g],
-             isFalse (prim "@cosetSame" [muVar x, muVar y, .var g])]]
+            [.eq a b, .ne (pimg (muVar x)) (pimg (muVar y))],
+            [.eq a b, .eq (pimg (muVar x)) (pimg (muVar y)),
+             bindP m (pcomp (pinv (muVar y)) (muVar x)), bindP I (pid A),
+             .eq (.var o) (.app orbitName [a, .var m]),
+             .eq (.var z) (.app orbitName [a, .var I]), .ne (.var o) (.var z)]]
     | _, _, _ => throw "a comparison of non-variables"
 
 /-- The guards and comparisons, as alternatives (the product over the `!=` disjunctions). -/
@@ -583,7 +593,7 @@ def termOf (e : Expr) : EmitM (Expr × Option Var) := do
       pure (b.child, none)
 
 /-- Compile one action. A union with the anchored root, whose renaming is the identity, is a
-plain union; a union with another variable's invocation is an `Equated` fact. -/
+plain union; a union with another variable's invocation is an `RenamesTo` fact. -/
 def compileAction (anchorVar : Var) : Action → EmitM (List Action)
   | .expr (.var _) => pure []
   | .expr e => do pure [.expr (← build e).child]
@@ -593,22 +603,22 @@ def compileAction (anchorVar : Var) : Action → EmitM (List Action)
     match va, vb with
     | some x, some y =>
       if x = y then pure []
-      else if x = anchorVar then pure [wEquated ta (muVar y) tb]
-      else if y = anchorVar then pure [wEquated tb (muVar x) ta]
-      else pure [wEquated ta (pcomp (pinv (muVar x)) (muVar y)) tb]
-    | none, some y => if y = anchorVar then pure [.union ta tb] else pure [wEquated ta (muVar y) tb]
-    | some x, none => if x = anchorVar then pure [.union ta tb] else pure [wEquated tb (muVar x) ta]
+      else if x = anchorVar then pure [wRenamesTo ta (muVar y) tb]
+      else if y = anchorVar then pure [wRenamesTo tb (muVar x) ta]
+      else pure [wRenamesTo ta (pcomp (pinv (muVar x)) (muVar y)) tb]
+    | none, some y => if y = anchorVar then pure [.union ta tb] else pure [wRenamesTo ta (muVar y) tb]
+    | some x, none => if x = anchorVar then pure [.union ta tb] else pure [wRenamesTo tb (muVar x) ta]
     | none, none => pure [.union ta tb]
   | .subsume _ _ => throw "subsume in a slotted program"
 
-/-- `Equated` with a computed renaming: bind it first, since actions are plain. -/
+/-- `RenamesTo` with a computed renaming: bind it first, since actions are plain. -/
 def plainActions (as : List Action) : EmitM (List Action) := as.mapM fun a =>
   match a with
   | .expr (.app f [x, m, y]) =>
-    if f = equatedName then do
+    if f = renamesToName then do
       match m with
       | .var _ => pure a
-      | _ => do let mv ← compute "eqm" m; pure (write equatedName [x, mv, y])
+      | _ => do let mv ← compute "eqm" m; pure (write renamesToName [x, mv, y])
     else pure a
   | a => pure a
 
@@ -680,7 +690,7 @@ rows bound as wildcards and the built rows at generation `0`; the flattened sour
        \{\$r\}\cup\operatorname{img}(\rho_b),\{\$v\})\\
    &\land C=\operatorname{distinct}(\operatorname{img}(\nu_0))
        \cup\operatorname{distinct}(\operatorname{img}(\nu_1))\\
-   &\land\mathtt{Sym}(\mathit{sum},\pi)\land\mathtt{FS}(\mathit{prod},A)\\
+   &\land\mathtt{RenamesTo}(\mathit{sum},\pi,\mathit{sum})\land\mathtt{FS}(\mathit{prod},A)\\
    &\land D=\operatorname{img}(\nu_0\circ\rho_x)\cup\operatorname{img}(\nu_1\circ\rho_b)\\
    &\land F_0=\operatorname{identity}(\nu_0,\nu_1,q_v)\\
    &\land F_1=\operatorname{unify}(F_0,\nu_0\circ\rho_s,\nu_1\circ\pi,C)\\
@@ -699,7 +709,7 @@ rows bound as wildcards and the built rows at generation `0`; the flattened sour
   \texttt{distinct} cliques are stored by \texttt{cliques}. The generated refinement also
   lists intermediate roots, whose live slots are already reached by $x,b$ in this example.
   A bare-variable right-hand side $y$ writes
-  $\mathtt{Equated}(\mathit{prod},\mu_y,c_y)$.
+  $\mathtt{RenamesTo}(\mathit{prod},\mu_y,c_y)$.
   Action-only slots receive separate blocks and fresh names at anchoring.
   -/)
   (latexEnv := "paperfragment")]

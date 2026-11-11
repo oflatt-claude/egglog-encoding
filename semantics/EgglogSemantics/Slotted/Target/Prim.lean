@@ -1,4 +1,5 @@
 import EgglogSemantics.Slotted.Target.Values
+import Mathlib.Data.List.Defs
 
 /-!
 # The primitive catalogue
@@ -6,8 +7,7 @@ import EgglogSemantics.Slotted.Target.Values
 The computations the paper's slotted rules use, as functions on the canonical values of
 `Values.lean`: the renaming algebra (`img`, `dom`, `⁻¹`, `∘`, `|_A`, `id_A`, application),
 the slot set algebra, `Perm`, the Collide union `align`, the Migrate extension `extend`, the
-binder name `mint`, the successor `succ` of a row generation, the group operations behind
-`G`, and the e-matching operations `fresh`, `distinct`/`cliques`, `identity`, `unify`,
+binder name `mint`, the successor `succ` of a row generation, finite permutations for membership witnesses, and the e-matching operations `fresh`, `distinct`/`cliques`, `identity`, `unify`,
 `final-refine` and `anchor` over frames. A **frame** is a renaming on
 placeholders that sends each placeholder to the least member of its block; the cliques are a
 list of slot sets whose members must stay in distinct blocks.
@@ -57,9 +57,11 @@ def extend (m : Renaming) (S B : List Slot) : Renaming :=
 /-- `mint(L)`: the least canonical name outside `L`, for a binder refreshed in a node. -/
 def mint (L : List Slot) : Slot := (freshNames 1 L).headD (canonicalName 0)
 
-/-- `∃π ∈ Π. μ′ ∘ π = μ`: the two renamings read one invocation of a class with group `Π`. -/
-def cosetSame (μ μ' : Renaming) (grp : List Renaming) : Bool :=
-  grp.any fun π => renEq (μ'.comp π) μ
+/-- Every permutation of the finite support. The compiler materializes membership
+witnesses for these maps so ordinary target disequality can test symmetry nonmembership. -/
+def permutations (A : List Slot) : List Renaming :=
+  let A := canonSlots A
+  A.permutations.map (A.zip ·)
 
 /-! ### Frames -/
 
@@ -135,8 +137,7 @@ def primNames : List FnName :=
   [setName, renName, pairName, rensName, setsName, trueName, falseName,
    "@img", "@dom", "@inv", "@comp", "@restrict", "@id", "@apply",
    "@union", "@inter", "@diff", "@elem", "@isPerm", "@align", "@extend", "@mint", "@succ",
-   "@gunion",
-   "@cosetSame", "@fresh", "@cliques", "@identity", "@unify", "@unify1", "@refine",
+   "@perms", "@fresh", "@cliques", "@identity", "@unify", "@unify1", "@refine",
    "@anchor"]
 
 /-- Whether a head is a primitive. -/
@@ -180,9 +181,7 @@ def eval (f : FnName) (args : List Term) : Option Term :=
       if m.WF then pure (encodeRen (extend m (← decodeSet S) (← decodeSet B))) else none
   | "@mint", [L] => (decodeSet L).map fun L => Term.slot (mint L)
   | "@succ", [.lit (.int k)] => some (.lit (.int (k + 1)))
-  | "@gunion", [g, g'] => do pure (encodeRens ((← decodeRens g) ++ (← decodeRens g')))
-  | "@cosetSame", [μ, μ', g] => do
-      pure (encodeBool (cosetSame (← decodeRen μ) (← decodeRen μ') (← decodeRens g)))
+  | "@perms", [A] => (decodeSet A).map fun A => encodeRens (permutations A)
   | "@fresh", [S, U] => do
       let S := canonSlots (← decodeSet S)
       pure (encodeRen (S.zip (freshPlaceholders S.length (← decodeSet U))))

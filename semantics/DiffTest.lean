@@ -1215,7 +1215,7 @@ private def runSlottedTrace (file : String) (k : Nat) (ruleSel : Option String) 
       IO.println s!"command {i} ({cmd.rules.length} rules): terms {g.terms.size} classes \
         {g.classes} {g.sizes}"
   for (f, rows) in g.liveRows.toList do
-    if !(Slotted.Target.isPrimName f) && f != Slotted.Encode.equatedName && !Slotted.isSlotName f then
+    if !(Slotted.Target.isPrimName f) && f != Slotted.Encode.renamesToName && !Slotted.isSlotName f then
       for (_, r) in rows.toList.take 40 do
         IO.println s!"  {(g.terms[r]!).toEgg}"
   -- Every row of a source constructor, subsumed ones marked, with its class representative.

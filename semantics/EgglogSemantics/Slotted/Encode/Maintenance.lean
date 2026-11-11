@@ -4,28 +4,17 @@ import Architect
 /-!
 # Slotted maintenance
 
-The rules that keep the compiled e-graph canonical up to renaming, as the paper's
-"Representation and Slotted Maintenance" subsection displays them, in three groups: the
-free-slot analysis (`NodeFS` per constructor, the leaf fact, intersection and transport); the
-leader equations and symmetries (Identity, Reverse, Orient, Edge, Compress, Parents,
-SymIdentity, SymEquation, Symmetry, Group, Inherit, TrimLeader, TrimSym, with `G` collecting
-the symmetries of a class into one value); and the term updates per constructor (Collide,
-Migrate, Child, Restrict, the binder refresh, and Dedup). Every computation is bound in the
-query, so the actions are plain; `set` updates of `FS` and `G` are the rule form of a merge
-annotation (`def:fd-rule`). All maintenance rules saturate together after every compiled
-run, as the paper says.
+The unoriented relation `RenamesTo(a,m,b)` means `a = m * b`: `m` maps `b`'s
+slots to `a`'s names. Reflexivity, inversion and composition include symmetry closure.
+`FS` intersects node estimates and transports them through equations in both directions;
+map restriction retires only strict shortenings. Migration and child update select their
+smaller destination at use sites. All rules saturate together after a user round.
 
-Three points follow from the plain `subsume` being permanent on a row key, in every
-spelling. Every update writes its replacement at the replaced row's generation plus one and
-subsumes the replaced row in the same action, as the reference's `delete` does: the
-replacement is a new key, so a cleanup waiting for it is not needed, and a replaced
-spelling that a later migration recreates arrives at a class that holds a live row for it.
-A leader edge is never retired when a union makes its follower the smaller class: the edge
-stays, the updates fire only toward the smaller class (`b = min(a, b)`, as the reference's
-`ordering-max` guards), so a reversed edge is inert, and the orientation re-derives the
-equation the right way round. And Dedup retires the older of two live rows with one spelling
-and different generations, which a migration into a class that already holds the spelling
-creates, and unions their classes.
+A replacement has the next generation and subsumes the old row. This distinguishes a
+recreated spelling from its permanently subsumed predecessor. Dedup merges identical
+spellings at different generations. No equation is retired merely because a union reverses
+its endpoints. Finite `Orbit` witnesses make symmetry nonmembership an ordinary target
+disequality, without a collected group value or a change to the target semantics.
 -/
 
 namespace Egglog.Slotted.Encode
@@ -44,7 +33,6 @@ private def vA : Expr := .var "@A"
 private def vB : Expr := .var "@B"
 private def vC : Expr := .var "@C"
 private def vp : Expr := .var "@p"
-private def vq : Expr := .var "@q"
 private def vI : Expr := .var "@I"
 
 def pimg (m : Expr) : Expr := prim "@img" [m]
@@ -69,14 +57,10 @@ def unions : List Expr → Expr
   | [e] => e
   | e :: es => punion e (unions es)
 
-def leader (a m b : Expr) : Pattern := row leaderName [a, m, b]
-def equated (a m b : Expr) : Pattern := row equatedName [a, m, b]
+def renamesTo (a m b : Expr) : Pattern := row renamesToName [a, m, b]
 def fs (a A : Expr) : Pattern := row fsName [a, A]
-def sym (a π : Expr) : Pattern := row symName [a, π]
-def wLeader (a m b : Expr) : Action := write leaderName [a, m, b]
-def wEquated (a m b : Expr) : Action := write equatedName [a, m, b]
+def wRenamesTo (a m b : Expr) : Action := write renamesToName [a, m, b]
 def wFS (a A : Expr) : Action := write fsName [a, A]
-def wSym (a π : Expr) : Action := write symName [a, π]
 
 /-! ### Free slots -/
 
@@ -123,78 +107,45 @@ def intersectFSRule : Rule :=
   { query := [fs va vA, fs va vB, bindP "@C" (pinter vA vB), .ne vC vA],
     actions := [wFS va vC, .subsume fsName [va, vA]] }
 
-/-- `Equated(a, m, b) ∧ FS(a, A) ∧ FS(b, B) ⇒ FS(a, m[B]), FS(b, m⁻¹[A])`. -/
+/-- `RenamesTo(a, m, b) ∧ FS(a, A) ∧ FS(b, B) ⇒ FS(a, m[B]), FS(b, m⁻¹[A])`. -/
 def transportFSRule : Rule :=
-  { query := [equated va vm vb, fs va vA, fs vb vB,
+  { query := [renamesTo va vm vb, fs va vA, fs vb vB,
               bindP "@A'" (pimg (prestrict vm vB)), bindP "@B'" (pimg (prestrict (pinv vm) vA))],
     actions := [wFS va (.var "@A'"), wFS vb (.var "@B'")] }
 
-/-- `SymFS`: the self-equation instance of Transport, exposed directly for symmetries.
-Together with intersection this removes the entire symmetry orbit of a redundant slot. -/
-def symFSRule : Rule :=
-  { query := [sym va vp, fs va vA,
-      bindP "@A'" (pimg (prestrict vp vA)),
-      bindP "@B'" (pimg (prestrict (pinv vp) vA))],
-    actions := [wFS va (.var "@A'"), wFS va (.var "@B'")] }
+/-! ### Renaming closure and finite membership witnesses -/
 
-/-! ### Leaders and symmetries -/
+/-- Each support carries its finite identity self-equation. -/
+def reflexiveRule : Rule :=
+  { query := [fs va vA, bindP "@I" (pid vA)], actions := [wRenamesTo va vI va] }
 
-def identityRule : Rule :=
-  { query := [fs va vA, bindP "@I" (pid vA)], actions := [wLeader va vI va] }
+/-- Inversion keeps both directions available, even after a native union. -/
+def inverseRule : Rule :=
+  { query := [renamesTo va vm vb, bindP "@n" (pinv vm)], actions := [wRenamesTo vb vn va] }
 
-def reverseRule : Rule :=
-  { query := [equated va vm vb, bindP "@n" (pinv vm)], actions := [wEquated vb vn va] }
+/-- Composition includes paths, multiple parents and symmetry composition. -/
+def composeRule : Rule :=
+  { query := [renamesTo va vm vb, renamesTo vb vn vc, bindP "@k" (pcomp vm vn)],
+    actions := [wRenamesTo va vk vc] }
 
-def orientRule : Rule :=
-  { query := [equated va vm vb, fs va vA, fs vb vB, .eq vb (.min va vb), .ne vb va,
-              bindP "@n" (trimmed vA vm vB)],
-    actions := [wLeader va vn vb] }
+/-- Retire only a strictly shortened map. Transport reads its original entries in the same
+pre-state. Self-equations use the same rule; symmetry consumers check the current support. -/
+def restrictRenamesRule : Rule :=
+  { query := [renamesTo va vm vb, fs va vA, fs vb vB,
+              bindP "@n" (trimmed vA vm vB), .ne vn vm],
+    actions := [wRenamesTo va vn vb, .subsume renamesToName [va, vm, vb]] }
 
-def edgeRule : Rule := { query := [leader va vm vb], actions := [wEquated va vm vb] }
+/-- Materialize every finite permutation as a membership witness, including nonmembers.
+These ordinary terms let a query test nonmembership without relational negation. -/
+def orbitSeedRule : Rule :=
+  { query := [fs va vA, .expr (.app memName [vp, prim "@perms" [vA]])],
+    actions := [write orbitName [va, vp]] }
 
-def compressRule : Rule :=
-  { query := [leader va vm vb, leader vb vn vc, .ne vb vc, bindP "@k" (pcomp vm vn)],
-    actions := [wEquated va vk vc] }
-
-def parentsRule : Rule :=
-  { query := [leader va vm vb, leader va vn vc, bindP "@k" (pcomp (pinv vm) vn)],
-    actions := [wEquated vb vk vc] }
-
-def symIdentityRule : Rule :=
-  { query := [fs va vA, bindP "@I" (pid vA)], actions := [wSym va vI] }
-
-def symEquationRule : Rule := { query := [sym va vp], actions := [wEquated va vp va] }
-
-def symmetryRule : Rule :=
-  { query := [equated va vm va, fs va vA, bindP "@p" (trimmed vA vm vA), isTrue (pisPerm vp vA)],
-    actions := [wSym va vp] }
-
-def groupRule : Rule :=
-  { query := [sym va vp, sym va vq, fs va vA, isTrue (pisPerm vp vA), isTrue (pisPerm vq vA),
-              bindP "@r" (pinv vp), bindP "@s" (pcomp vp vq)],
-    actions := [wSym va (.var "@r"), wSym va (.var "@s")] }
-
-def inheritRule : Rule :=
-  { query := [leader va vm vb, sym va vp, bindP "@k" (pcomp (pinv vm) (pcomp vp vm))],
-    actions := [wEquated vb vk vb] }
-
-def trimLeaderRule : Rule :=
-  { query := [leader va vm vb, fs va vA, fs vb vB, bindP "@n" (trimmed vA vm vB), .ne vn vm],
-    actions := [wEquated va vm vb, wLeader va vn vb, .subsume leaderName [va, vm, vb]] }
-
-def trimSymRule : Rule :=
-  { query := [sym va vp, fs va vA, bindP "@q" (trimmed vA vp vA), .ne vq vp, isTrue (pisPerm vq vA)],
-    actions := [wEquated va vp va, wSym va vq, .subsume symName [va, vp]] }
-
-/-- `Sym(a, π) ⇒ G(a, {π})`: the symmetries of a class as one value. -/
-def gCollectRule : Rule :=
-  { query := [sym va vp, bindP "@g" (.app rensName [vp])], actions := [write gName [va, .var "@g"]] }
-
-/-- The merge of `G` by union. -/
-def gMergeRule : Rule :=
-  { query := [row gName [va, .var "@g"], row gName [va, .var "@h"],
-              bindP "@u" (prim "@gunion" [.var "@g", .var "@h"]), .ne (.var "@u") (.var "@g")],
-    actions := [write gName [va, .var "@u"], .subsume gName [va, .var "@g"]] }
+/-- A symmetry's witness is equal to the identity witness. The maps themselves are never
+unioned, so primitive values retain structural equality. -/
+def orbitMemberRule : Rule :=
+  { query := [renamesTo va vp va, fs va vA, isTrue (pisPerm vp vA), bindP "@I" (pid vA)],
+    actions := [.union (.app orbitName [va, vp]) (.app orbitName [va, vI])] }
 
 /-! ### Term updates, per constructor -/
 
@@ -208,9 +159,9 @@ alignment of their binders. -/
    \textsc{Collide}:\quad
    &a=\SumZeroTen(g,\$i,\rho,b)\land a'=\SumZeroTen(g',\$j,\eta,b)\\
    &\land\mathtt{FS}(b,B)\land\operatorname{dom}(\rho)=B=\operatorname{dom}(\eta)\\
-   &\land\mathtt{Sym}(b,\pi)\land\pi\in\operatorname{Perm}(B)\\
+   &\land\mathtt{RenamesTo}(b,\pi,b)\land\pi\in\operatorname{Perm}(B)\\
    &\land m=\operatorname{align}(\rho\circ\pi\circ\eta^{-1},[\$j\mapsto\$i])
-     \Rightarrow\mathtt{Equated}(a,m,a').
+     \Rightarrow\mathtt{RenamesTo}(a,m,a').
   \end{aligned}
   \]
   For $f$, combine one correspondence per child and one per binding field;
@@ -229,14 +180,14 @@ def collideRule (L : Layout) (f : FnName) (n : Nat) : Option Rule :=
   let perChild := children.flatMap fun j =>
     [fs (.var s!"@c{j}") (.var s!"@B{j}"),
      .eq (pdom (.var s!"@m{j}")) (.var s!"@B{j}"), .eq (pdom (.var s!"@n{j}")) (.var s!"@B{j}"),
-     sym (.var s!"@c{j}") (.var s!"@pi{j}"), isTrue (pisPerm (.var s!"@pi{j}") (.var s!"@B{j}")),
+     renamesTo (.var s!"@c{j}") (.var s!"@pi{j}") (.var s!"@c{j}"), isTrue (pisPerm (.var s!"@pi{j}") (.var s!"@B{j}")),
      bindP s!"@k{j}" (pcomp (.var s!"@m{j}") (pcomp (.var s!"@pi{j}") (pinv (.var s!"@n{j}"))))]
   let perBinder := binders.map fun k =>
     bindP s!"@k{k}" (.app renName [.app pairName [.var s!"@d{k}", .var s!"@b{k}"]])
   let parts : List Expr := (children ++ binders).map fun j => .var s!"@k{j}"
   let query := [nodeAtom L f n, .eq (.var "@a'") (.app f cols')] ++ perChild ++ perBinder ++
     [bindP "@m" (prim "@align" parts)]
-  some { query := query, actions := [wEquated va vm (.var "@a'")] }
+  some { query := query, actions := [wRenamesTo va vm (.var "@a'")] }
 
 /-- The node's local slots: the images of its edges and its binder fields. -/
 def localSlots (L : Layout) (f : FnName) (n : Nat) : Expr :=
@@ -251,22 +202,23 @@ def updateRule (L : Layout) (f : FnName) (n : Nat) (query : List Pattern) (targe
   { query := query ++ [bindP "@g1" (prim "@succ" [genVar])],
     actions := [.union target (.app f cols'), .subsume f (nodeCols L f n)] }
 
-/-- `Migrate_f`: a follower's node rebuilt in its leader's names and unioned into the leader,
-the inverse leader map extended to the node's slots by `extend`. -/
+/-- `Migrate_f`: a node rebuilt in the smaller endpoint's names and unioned into it,
+the restricted inverse map extended to the node's slots by `extend`. -/
 def migrateRule (L : Layout) (f : FnName) (n : Nat) : Rule :=
   let cols' := L.targetCols f n nextGen (fun j => .var s!"@e{j}") fun j =>
     match L.column f j with
     | .child => .var s!"@c{j}"
     | .binder => .var s!"@w{j}"
     | .payload => .var s!"@p{j}"
-  let query := [leader va vm vb, fs vb vB, .eq vb (.min va vb), .ne vb va, nodeAtom L f n,
-      bindP "@L" (localSlots L f n), bindP "@h" (prim "@extend" [pinv vm, .var "@L", vB])] ++
+  let query := [renamesTo va vm vb, fs va vA, fs vb vB, .eq vb (.min va vb), .ne vb va, nodeAtom L f n,
+      bindP "@n" (trimmed vA vm vB),
+      bindP "@L" (localSlots L f n), bindP "@h" (prim "@extend" [pinv vn, .var "@L", vB])] ++
     ((L.childPositions f n).map fun j => bindP s!"@e{j}" (pcomp (.var "@h") (.var s!"@m{j}"))) ++
     ((L.binderPositions f n).map fun k => bindP s!"@w{k}" (papply (.var "@h") (.var s!"@b{k}")))
   updateRule L f n query vb cols'
 
-/-- `Child_{f,j}`: a node whose child `j` has a smaller leader points at the leader, its edge
-composed with the leader map. -/
+/-- `Child_{f,j}`: a node whose child `j` has a smaller equivalent endpoint points to it,
+its edge composed with the restricted equation map. -/
 def childRule (L : Layout) (f : FnName) (n : Nat) (j : Nat) : Rule :=
   let cols' := L.targetCols f n nextGen (fun i => if i = j then .var "@e" else .var s!"@m{i}")
     fun i => match L.column f i with
@@ -274,8 +226,9 @@ def childRule (L : Layout) (f : FnName) (n : Nat) (j : Nat) : Rule :=
     | .binder => .var s!"@b{i}"
     | .payload => .var s!"@p{i}"
   let c : Expr := .var s!"@c{j}"
-  let query := [nodeAtom L f n, leader c vm (.var "@d"), .ne c (.var "@d"),
-      .eq (.var "@d") (.min c (.var "@d")), bindP "@e" (pcomp (.var s!"@m{j}") vm)]
+  let query := [nodeAtom L f n, renamesTo c vm (.var "@d"), fs c vA, fs (.var "@d") vB, .ne c (.var "@d"),
+      .eq (.var "@d") (.min c (.var "@d")), bindP "@n" (trimmed vA vm vB),
+      bindP "@e" (pcomp (.var s!"@m{j}") vn)]
   updateRule L f n query va cols'
 
 /-- `Restrict_{f,j}`: an edge restricted to the free slots of its child. -/
@@ -319,74 +272,40 @@ child `i`; `g` is the row's generation, which every rule binds as a wildcard. -/
    \textsc{Intersect}&:\ \mathtt{FS}(a,A)\land\mathtt{FS}(a,B)\land C=A\cap B\land C\ne A
      \\
    &\quad\Rightarrow\mathtt{FS}(a,C),\ \kw{subsume}(\mathtt{FS}(a,A))\\
-   \textsc{Transport}&:\ \mathtt{Equated}(a,m,b)\land\mathtt{FS}(a,A)\land\mathtt{FS}(b,B)
+   \textsc{Transport}&:\ \mathtt{RenamesTo}(a,m,b)\land\mathtt{FS}(a,A)\land\mathtt{FS}(b,B)
      \\
    &\quad\Rightarrow\mathtt{FS}(a,m[B]),\ \mathtt{FS}(b,m^{-1}[A])
-     \\
-   \textsc{SymFS}&:\ \mathtt{Sym}(a,\pi)\land\mathtt{FS}(a,A)
-     \Rightarrow\mathtt{FS}(a,\pi[A]),\ \mathtt{FS}(a,\pi^{-1}[A])
+
   \end{aligned}
   \]
   -/)
   (latexEnv := "paperfragment")]
 def analysisRules (L : Layout) (ctors : List (FnName × Nat)) : List Rule :=
   leafFSRule :: (ctors.map fun fk => nodeFSRule L fk.1 fk.2) ++
-    [intersectFSRule, transportFSRule, symFSRule]
+    [intersectFSRule, transportFSRule]
 
-/-- The leader equations and symmetries: every term starts as its own leader, equations are
-oriented toward the smaller term and composed along leader paths, self-equations become
-symmetries closed under inverse and composition and carried to leaders, narrowed slot sets
-trim the stored renamings, and `G` collects a class's symmetries into one value. An edge a
-union has reversed is not retired: the updates fire only toward the smaller class, and
-`Orient` adds the edge the right way round. -/
-@[blueprint "def:slotted-leader-rules"
+/-- The single equation relation: finite identity, inversion, composition, and support
+restriction. Collision discovers equations; finite witnesses support negative comparisons. -/
+@[blueprint "def:slotted-renames-rules"
   (statement := /--
   \[
   \begin{aligned}
-   \textsc{Identity}&:\ \mathtt{FS}(a,A)\Rightarrow\mathtt{Leader}(a,\mathrm{id}_A,a)
-   \\
-   \textsc{Reverse}&:\ \mathtt{Equated}(a,m,b)\Rightarrow\mathtt{Equated}(b,m^{-1},a)\\
-   \textsc{Orient}&:\ \mathtt{Equated}(a,m,b)\land\mathtt{FS}(a,A)\land\mathtt{FS}(b,B)
-     \land b=\min(a,b)\land b\ne a
-     \\
-   &\quad\Rightarrow\mathtt{Leader}(a,\mathrm{id}_A\circ m\circ\mathrm{id}_B,b)\\
-   \textsc{Edge}&:\ \mathtt{Leader}(a,m,b)\Rightarrow\mathtt{Equated}(a,m,b)\\
-   \textsc{Compress}&:\ \mathtt{Leader}(a,m,b)\land\mathtt{Leader}(b,m',c)\land b\ne c
-     \Rightarrow\mathtt{Equated}(a,m\circ m',c)\\
-   \textsc{Parents}&:\ \mathtt{Leader}(a,m_1,b_1)\land\mathtt{Leader}(a,m_2,b_2)
-     \Rightarrow\mathtt{Equated}(b_1,m_1^{-1}\circ m_2,b_2)\\
-   \textsc{SymIdentity}&:\ \mathtt{FS}(a,A)\Rightarrow\mathtt{Sym}(a,\mathrm{id}_A)
-   \\
-   \textsc{SymEquation}&:\ \mathtt{Sym}(a,\pi)\Rightarrow\mathtt{Equated}(a,\pi,a)\\
-   \textsc{Symmetry}&:\ \mathtt{Equated}(a,m,a)\land\mathtt{FS}(a,A)
-     \land\pi=\mathrm{id}_A\circ m\circ\mathrm{id}_A\land\pi\in\operatorname{Perm}(A)
-     \\
-   &\quad\Rightarrow\mathtt{Sym}(a,\pi)\\
-   \textsc{Group}&:\ \mathtt{Sym}(a,\pi)\land\mathtt{Sym}(a,\tau)\land\mathtt{FS}(a,A)
-     \land\pi,\tau\in\operatorname{Perm}(A)
-     \\
-   &\quad\Rightarrow\mathtt{Sym}(a,\pi^{-1}),\ \mathtt{Sym}(a,\pi\circ\tau)\\
-   \textsc{Inherit}&:\ \mathtt{Leader}(a,m,b)\land\mathtt{Sym}(a,\pi)
-     \Rightarrow\mathtt{Equated}(b,m^{-1}\circ\pi\circ m,b)\\
-   \textsc{TrimLeader}&:\ \mathtt{Leader}(a,m,b)\land\mathtt{FS}(a,A)\land\mathtt{FS}(b,B)
-     \\
-   &\quad\land m'=\mathrm{id}_A\circ m\circ\mathrm{id}_B\land m'\ne m\\
-   &\quad\Rightarrow\mathtt{Equated}(a,m,b),\ \mathtt{Leader}(a,m',b),\
-     \kw{subsume}(\mathtt{Leader}(a,m,b))\\
-   \textsc{TrimSym}&:\ \mathtt{Sym}(a,\pi)\land\mathtt{FS}(a,A)
-     \land\pi'=\mathrm{id}_A\circ\pi\circ\mathrm{id}_A\land\pi'\ne\pi\land\pi'\in\operatorname{Perm}(A)\\
-   &\quad\Rightarrow\mathtt{Equated}(a,\pi,a),\ \mathtt{Sym}(a,\pi'),\ \kw{subsume}(\mathtt{Sym}(a,\pi))\\
-   \textsc{Collect}&:\ \mathtt{Sym}(a,\pi)\Rightarrow\mathtt{G}(a,\{\pi\})
-   \qquad\mathtt{G}(a,\Pi)\ \kw{:merge}\ \Pi\cup\Pi'
+   &\mathtt{FS}(a,A)\Rightarrow\mathtt{RenamesTo}(a,\mathrm{id}_A,a)\\
+   &\mathtt{RenamesTo}(a,m,b)\Rightarrow\mathtt{RenamesTo}(b,m^{-1},a)\\
+   &\mathtt{RenamesTo}(a,m,b)\land\mathtt{RenamesTo}(b,n,c)
+     \Rightarrow\mathtt{RenamesTo}(a,m\circ n,c)\\
+   &\mathtt{RenamesTo}(a,m,b)\land\mathtt{FS}(a,A)\land\mathtt{FS}(b,B)\\
+   &\quad\land n=\mathrm{id}_A\circ m\circ\mathrm{id}_B\land n\ne m\\
+   &\quad\Rightarrow\mathtt{RenamesTo}(a,n,b),\ \kw{subsume}(\mathtt{RenamesTo}(a,m,b)).
   \end{aligned}
   \]
+  Endpoints are unordered; self-equations are symmetries. Only strict map restriction
+  retires an equation. Migration and child update choose their direction when they fire.
   -/)
   (latexEnv := "paperfragment")]
-def leaderRules (L : Layout) (ctors : List (FnName × Nat)) : List Rule :=
-  [identityRule, reverseRule, orientRule, edgeRule, compressRule, parentsRule,
-   symIdentityRule, symEquationRule, symmetryRule, groupRule, inheritRule,
-   trimLeaderRule, trimSymRule, gCollectRule, gMergeRule] ++
-    ctors.filterMap fun fk => collideRule L fk.1 fk.2
+def renamingRules (L : Layout) (ctors : List (FnName × Nat)) : List Rule :=
+  [reflexiveRule, inverseRule, composeRule, restrictRenamesRule,
+   orbitSeedRule, orbitMemberRule] ++ ctors.filterMap fun fk => collideRule L fk.1 fk.2
 
 /-- The children that binding position `k` of `f` covers. -/
 def coveredBy (L : Layout) (f : FnName) (k : Nat) : List Nat :=
@@ -446,16 +365,17 @@ the replacement's key is new. -/
   (statement := /--
   For sums, write $N_g(s,\rho,c)=\SumZeroTen(g,s,\rho,c)$.
   Updates write generation $g+1$ and subsume the replaced row in the same firing.
+  At each use, $m$ is restricted to the current supports of its two endpoints.
   \[
   \begin{aligned}
    \textsc{Migrate}:\quad
-   &a=N_g(s,\rho,c)\land\mathtt{Leader}(a,m,b)\land\mathtt{FS}(b,B)\\
+   &a=N_g(s,\rho,c)\land\mathtt{RenamesTo}(a,m,b)\land\mathtt{FS}(b,B)\\
    &\land b=\min(a,b)\land b\ne a
      \land\widehat m=\operatorname{extend}(m^{-1},\{s\}\cup\operatorname{img}(\rho),B)\\
    &\Rightarrow\kw{union}(b,N_{g+1}(\widehat m(s),\widehat m\circ\rho,c)),\
      \kw{subsume}(N_g(s,\rho,c))\\[2pt]
    \textsc{Child}:\quad
-   &a=N_g(s,\rho,c)\land\mathtt{Leader}(c,m,d)\land c\ne d\land d=\min(c,d)\\
+   &a=N_g(s,\rho,c)\land\mathtt{RenamesTo}(c,m,d)\land c\ne d\land d=\min(c,d)\\
    &\Rightarrow\kw{union}(a,N_{g+1}(s,\rho\circ m,d)),\
      \kw{subsume}(N_g(s,\rho,c))\\[2pt]
    \textsc{Restrict}:\quad
@@ -481,17 +401,16 @@ def updateRulesAll (L : Layout) (ctors : List (FnName × Nat)) : List Rule :=
         [childRule L fk.1 fk.2 j, restrictRule L fk.1 fk.2 j]) ++
       [dedupRule L fk.1 fk.2]
 
-/-- The maintenance rules `M`, in their three groups: the analyses, the leaders and
-symmetries, and the term updates. -/
+/-- The maintenance rules `M`, in their three groups: the analyses, renaming closure, and the term updates. -/
 def maintenanceGroups (L : Layout) (ctors : List (FnName × Nat)) : List (List Rule) :=
-  [analysisRules L ctors, leaderRules L ctors, updateRulesAll L ctors]
+  [analysisRules L ctors, renamingRules L ctors, updateRulesAll L ctors]
 
 /-- The rebuild that follows every compiled run: all maintenance rules saturate together. -/
 @[blueprint "def:slotted-rebuild"
   (statement := /--
   \[
-  M_P=M_{\mathrm{FS}}\cup M_{\mathrm{Leader}}\cup M_{\mathrm{Update}},
-  \qquad M_{\mathrm{Leader}}\text{ includes }\textsc{Collide}_f.
+  M_P=M_{\mathrm{FS}}\cup M_{\mathrm{Rename}}\cup M_{\mathrm{Update}},
+  \qquad M_{\mathrm{Rename}}\text{ includes }\textsc{Collide}_f.
   \]
   \[
   \kw{run}\ R\ \leadsto\ \kw{run}\ R';\ \kw{saturate}\ (\kw{run}\ M_P).

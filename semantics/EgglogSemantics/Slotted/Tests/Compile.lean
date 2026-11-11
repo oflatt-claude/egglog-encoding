@@ -64,8 +64,8 @@ private def C1 : Term := encodeSets [["$@0", "$@1"]]
   some [ren [("$@0", "$@0"), ("$@1", "$@1"), ("$@2", "$@0")], F0]
 #guard ev "@anchor" [F0, ren [("$i", "$@1")]] =
   some (ren [("$@0", "$0"), ("$@1", "$i"), ("$@2", "$1")])
-#guard ev "@cosetSame" [ren [("$a", "$y"), ("$b", "$x")], ren [("$a", "$x"), ("$b", "$y")],
-  encodeRens [Renaming.id ["$a", "$b"], [("$a", "$b"), ("$b", "$a")]]] = some (encodeBool true)
+#guard (ev "@perms" [set ["$a", "$b"]]).bind Prim.elements =
+  some (canonTerms [ren (Renaming.id ["$a", "$b"]), ren [("$a", "$b"), ("$b", "$a")]])
 
 -- Inversion requires an injection; frames can share a value but cannot be inverted.
 #guard ev "@inv" [ren [("$a", "$c"), ("$b", "$c")]] = none
