@@ -8,6 +8,7 @@ import EgglogSemantics.Tests.Parse
 import EgglogSemantics.Tests.Render
 import EgglogSemantics.Tests.PaperTex
 import EgglogSemantics.Slotted.Tests.Parse
+import EgglogSemantics.Slotted.Tests.Bounded
 
 /-!
 # Differential tests
@@ -658,6 +659,79 @@ private def runSlottedParse (dirs : List String) : IO UInt32 := do
     {skipped} skipped"
   return if accepted > 0 && paperSkipped == 0 then 0 else 1
 
+/-! ### The slotted corpus, evaluated
+
+`difftest slotted-bounded <file>…` parses each file and runs every check with the bounded
+evaluator (`Slotted/Tests/Bounded.lean`) over the slot universe of the program's concrete
+slots plus enough fresh names for its pattern slots and α-variants, comparing the outcome
+with the one the file asserts, which `slotted-difftest.sh` first confirms against the Rust
+reference. A check the evaluator cannot decide within its fuel is reported, not failed. -/
+
+/-- The concrete slots an expression mentions and its slot variables. -/
+private partial def exprSlots : Expr → List Slotted.Slot × List Var
+  | .app f [] => if Slotted.isSlotName f then ([f], []) else ([], [])
+  | .app _ args =>
+    args.foldl (fun acc e => let (cs, vs) := exprSlots e; (acc.1 ++ cs, acc.2 ++ vs)) ([], [])
+  | .var v => if Slotted.isSlotVar v then ([], [v]) else ([], [])
+  | .min a b => let (c₁, v₁) := exprSlots a; let (c₂, v₂) := exprSlots b; (c₁ ++ c₂, v₁ ++ v₂)
+  | .lit _ => ([], [])
+
+private def patternSlots : Pattern → List Slotted.Slot × List Var
+  | .expr e => exprSlots e
+  | .eq a b | .ne a b => let (c₁, v₁) := exprSlots a; let (c₂, v₂) := exprSlots b; (c₁ ++ c₂, v₁ ++ v₂)
+
+private def actionSlots : Action → List Slotted.Slot × List Var
+  | .expr e => exprSlots e
+  | .union a b => let (c₁, v₁) := exprSlots a; let (c₂, v₂) := exprSlots b; (c₁ ++ c₂, v₁ ++ v₂)
+  | .subsume _ es =>
+    es.foldl (fun acc e => let (cs, vs) := exprSlots e; (acc.1 ++ cs, acc.2 ++ vs)) ([], [])
+
+/-- The slot universe for a slotted program: its concrete slots, and as many fresh names as
+the largest number of slot variables of a rule or the check plus two, for α-variants. -/
+private def slotUniverse (P : Egglog.Program) : List Slotted.Slot :=
+  let ruleSlots := P.rules.map fun r =>
+    let qs := r.query.map patternSlots
+    let as := r.actions.map actionSlots
+    ((qs ++ as).flatMap Prod.fst, ((qs ++ as).flatMap Prod.snd).dedup.length)
+  let checkSlots := ((P.check.map patternSlots).flatMap Prod.fst,
+    ((P.check.map patternSlots).flatMap Prod.snd).dedup.length)
+  let all := checkSlots :: ruleSlots
+  let concrete := (all.flatMap Prod.fst).dedup
+  let extra := (all.map Prod.snd).foldl max 0 + 2
+  concrete ++ ((List.range extra).map fun i => s!"$fresh{i}").filter (· ∉ concrete)
+
+private def runSlottedBounded (files : List String) : IO UInt32 := do
+  let mut agree := 0
+  let mut disagree := 0
+  let mut undecided := 0
+  let mut skipped := 0
+  for f in files do
+    let src ← IO.FS.readFile f
+    match Slotted.parseFile src with
+    | .error e => skipped := skipped + 1; IO.println s!"SKIP {f}: {e}"
+    | .ok cases =>
+      for c in cases do
+        let S := slotUniverse c.program.plain
+        let t0 ← IO.monoMsNow
+        let outcome := Slotted.Bounded.observe S c.program 8
+        let asserted := c.expected == .ok
+        let t1 ← IO.monoMsNow
+        match outcome with
+        | none =>
+          undecided := undecided + 1
+          IO.println s!"UNDECIDED {f}#{c.index}: fuel exhausted ({t1 - t0} ms, {S.length} slots)"
+        | some b =>
+          if b == asserted then
+            agree := agree + 1
+            IO.println s!"AGREE {f}#{c.index}: {b} ({t1 - t0} ms, {S.length} slots)"
+          else
+            disagree := disagree + 1
+            IO.println s!"DISAGREE {f}#{c.index}: bounded {b}, asserted {asserted} \
+              ({t1 - t0} ms, {S.length} slots)"
+  IO.println s!"slotted-bounded: {agree} agree, {disagree} disagree, {undecided} undecided, \
+    {skipped} files skipped"
+  return if disagree == 0 && agree > 0 then 0 else 1
+
 /-! ### Entry point -/
 
 
@@ -1074,6 +1148,7 @@ itself. -/
 def main (args : List String) : IO UInt32 := do
   match args with
   | "slotted-parse" :: dirs => runSlottedParse dirs
+  | "slotted-bounded" :: files => runSlottedBounded files
   | "resugar" :: fuel :: names =>
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
@@ -1175,4 +1250,5 @@ def main (args : List String) : IO UInt32 := do
     IO.eprintln "       difftest export-fixtures <path>"
     IO.eprintln "       difftest export-certificates <fuel> <path> [case…]"
     IO.eprintln "       difftest slotted-parse <dir>…"
+    IO.eprintln "       difftest slotted-bounded <file>…"
     return 1
