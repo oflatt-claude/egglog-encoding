@@ -52,11 +52,8 @@ theorem encodeSchedule_fst (P : Program) : ∀ (S : Schedule) (i : Nat),
       simp only [encodeScheduleWith, h₁, h₂, encS, ih₁, ih₂]
 
 theorem encode_schedule (P : Program) : (encode P).schedule = encS P P.schedule := by
-  unfold encode compile compileWith
-  rcases h : encodeScheduleWith {} P P.schedule 0 with ⟨S, os, n⟩
-  have := encodeSchedule_fst P P.schedule 0
-  rw [h] at this
-  simpa using this
+  change (encodeScheduleWith {} P P.schedule 0).1 = encS P P.schedule
+  exact encodeSchedule_fst P P.schedule 0
 
 theorem encode_check (P : Program) : (encode P).check = (encodeQueryWith {} P.check 0).1 := by
   unfold encode compile compileWith
@@ -75,15 +72,21 @@ theorem partners_sameMeaning {x y d e : Database} (hx : SrcInv P x) (hy : SrcInv
   have hterms := h.terms_eq_of_diag hd.diag he.diag
   have hrow : ∀ k p, Row d k p ↔ Row e k p := by
     intro k p
-    rw [← uf_mem_terms_iff hd.ufOnly hd.endsFree, ← uf_mem_terms_iff he.ufOnly he.endsFree,
-      hterms]
-  apply Database.SameMeaning.of_congr_empty hx.subsumed hy.subsumed
-  intro a b
-  rw [hd.cong, he.cong]
-  have : (view d).eqs = (view e).eqs := by
-    ext q
-    exact hrow q.1 q.2
-  exact Cong.iff_of_eqs_eq this
+    rw [← hd.shape.uf_mem_terms_iff, ← he.shape.uf_mem_terms_iff, hterms]
+  apply Database.SameMeaning.of_congr_app_marks
+  · intro a b
+    rw [hd.cong, he.cong]
+    have hv : (view d).eqs = (view e).eqs := by
+      ext q
+      exact hrow q.1 q.2
+    exact Cong.iff_of_eqs_eq hv
+  · intro f as
+    rw [← hd.marker, ← he.marker]
+    constructor
+    · intro hm
+      exact marker_atom_inv he.shape (hterms ▸ hm.mem_terms)
+    · intro hm
+      exact marker_atom_inv hd.shape (hterms.symm ▸ hm.mem_terms)
 
 /-- A source pass that changes the meaning changes the compiled state too. -/
 theorem not_sameMeaning_of_source {src e x y d d' : Database} (hx : SrcInv P x) (hy : SrcInv P y)
@@ -152,7 +155,7 @@ theorem extra_passes (hP : P.Fragment) (hO : P.schedule.OrderingFree) {S : Sched
         Canon d' ∧ Rounds P x₀ x' := by
   obtain ⟨U, hU, hmem⟩ := bounded_universe hP hO hx₀
   intro d x hr hm hd hc
-  induction hn : rank U d using Nat.strong_induction_on generalizing d x with
+  induction hn : rank (rowSpace U) d using Nat.strong_induction_on generalizing d x with
   | _ n ihn =>
   have hx : SrcInv P x := hx₀.rounds hP hr
   obtain ⟨y, hy⟩ := hpass x hx hm
@@ -163,21 +166,14 @@ theorem extra_passes (hP : P.Fragment) (hO : P.schedule.OrderingFree) {S : Sched
   have hr₁' : Rounds P x₀ x₁ := hr.trans hr₁
   by_cases hsame : d.SameMeaning d₁
   · exact ⟨d₁, x₁, .fixpoint hd₁ hsame, hx₁, hex₁, hrel₁, hc₁, hr₁'⟩
-  · have hkeys : ∀ k p, Row d₁ k p → k ∈ U ∧ p ∈ U := by
-      intro k p hrow
-      have hk : k ∈ x₁.terms := hrel₁.key_mem_src hrow.mem_keys
-      have hp : p ∈ x₁.terms := hrel₁.key_mem_src (hrel₁.parent_mem_keys hrow)
-      have hm₁ : x₁.SameMeaning x₀ := hex₁.symm.trans hm₀
-      exact ⟨hmem x₁ hr₁' hm₁ k hk, hmem x₁ hr₁' hm₁ p hp⟩
-    have hmarks : ∀ t ∈ d₁.subsumed, ∃ k p, t = ufRowT k p ∧ Row d₁ k p := by
-      intro t ht
-      obtain ⟨k, p, q, rfl, hrow, _⟩ := hrel₁.marks t ht
-      exact ⟨k, p, rfl, hrow⟩
+  · have hm₁ : x₁.SameMeaning x₀ := hex₁.symm.trans hm₀
+    obtain ⟨hrows, hmarks⟩ := rows_subset_rowSpace hrel₁ (hmem x₁ hr₁' hm₁)
     have hcont := Reach.contained hd₁
-    have hlt : rank U d₁ < rank U d :=
-      rank_lt hU hd.ufOnly hrel₁.ufOnly hkeys hmarks hcont.eqs hcont.subsumed hsame
+    have hlt : rank (rowSpace U) d₁ < rank (rowSpace U) d :=
+      rank_lt (rowSpace_finite hU) hd.diag hrel₁.diag hrows hmarks
+        hcont.eqs hcont.subsumed hsame
     obtain ⟨d', x', hd', hx', hex', hrel', hc', hr'⟩ :=
-      ihn (rank U d₁) (hn ▸ hlt) d₁ x₁ hr₁' hex₁ hrel₁ hc₁ rfl
+      ihn (rank (rowSpace U) d₁) (hn ▸ hlt) d₁ x₁ hr₁' hex₁ hrel₁ hc₁ rfl
     exact ⟨d', x', .again hd₁ hsame hd', hx', hex', hrel', hc', hr'⟩
 
 /-- The compiled passes after a source fixpoint stay related to its meaning. -/

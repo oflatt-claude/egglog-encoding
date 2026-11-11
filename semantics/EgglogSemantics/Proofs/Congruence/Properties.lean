@@ -25,7 +25,7 @@ theorem encodeBuildWith_unionFree (o : Options) :
       actions_unionFree_append
         (actions_unionFree_append (encodeBuildArgsWith_unionFree o es)
           (by split <;> first | exact ⟨trivial, trivial⟩ | trivial))
-        ⟨trivial, trivial⟩
+        ⟨trivial, trivial, trivial⟩
 
 theorem encodeBuildArgsWith_unionFree (o : Options) :
     ∀ es : List Expr, Actions.UnionFree (encodeBuildArgsWith o es)
@@ -44,7 +44,9 @@ theorem encodeActionWith_unionFree (o : Options) (a : Action) :
     exact actions_unionFree_append
       (actions_unionFree_append (encodeBuildWith_unionFree o a) (encodeBuildWith_unionFree o b))
       ⟨trivial, trivial, trivial⟩
-  | subsume _ => trivial
+  | subsume f es =>
+    exact actions_unionFree_append (encodeBuildWith_unionFree o (.app f es))
+      ⟨trivial, trivial, trivial⟩
 
 theorem encodeActionsWith_unionFree (o : Options) (as : List Action) :
     Actions.UnionFree (encodeActionsWith o as) := by
@@ -60,11 +62,14 @@ private theorem rebuildRules_unionFree (f : FnName) (k : Nat) :
     ∀ ro ∈ rebuildRules f k, ro.1.UnionFree := by
   intro ro hro
   unfold rebuildRules at hro
-  split at hro
-  · simp at hro
-  · rw [List.mem_singleton] at hro
-    subst hro
-    exact ⟨trivial, trivial⟩
+  rw [List.mem_append, List.mem_singleton] at hro
+  rcases hro with hro | rfl
+  · split at hro
+    · simp at hro
+    · rw [List.mem_singleton] at hro
+      subst hro
+      exact ⟨trivial, trivial⟩
+  · exact ⟨trivial, trivial⟩
 
 private theorem exprs_unionFree (f : Expr → Action) (hf : ∀ e, (f e).UnionFree) :
     ∀ es : List Expr, Actions.UnionFree (es.map f)
@@ -180,7 +185,7 @@ private theorem scheduleWith_unionFree (o : Options) (P : Program) :
 
 /-- No source union survives in a compiled rule, under any options. -/
 theorem encodeWith_unionFree (o : Options) (P : Program) : Program.UnionFree (encodeWith o P) :=
-  fun r hr => scheduleWith_unionFree o P P.schedule 0 r hr
+  fun r hr => scheduleWith_unionFree (o.forProgram P) P P.schedule 0 r hr
 
 /-- No source union survives in a compiled rule. -/
 theorem encode_unionFree (P : Program) : Program.UnionFree (encode P) :=

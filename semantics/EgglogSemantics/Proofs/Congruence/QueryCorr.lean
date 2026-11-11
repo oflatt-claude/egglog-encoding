@@ -344,7 +344,7 @@ theorem fire_sound (h : Rel src d) (hc : Canon d) (hw : src.WF) {q : Query} (hq 
     ⟨hw, fun k p he => ((h.edge_iff_rep hc hw (h.key_of_edge he)).mp he).1,
       fun v t hvt => hval (v, t) (Env.mem_of_lookup hvt),
       fun v t hvt => (hm.1.2 (v, t) (Env.mem_of_lookup hvt)).1⟩
-  apply sound_query h.reads h.srcSubsumed 0 hq.minOverVars hq.shape hq.names (Or.inr hne)
+  apply sound_query (h.reads hc hw) 0 hq.minOverVars hq.shape hq.names (Or.inr hne)
     (σ := restrict (Query.vars q) σ') (fun v hv => (hlook v hv).symm)
     (fun v t hvt => (hval (v, t) (Env.mem_of_lookup hvt)).1) hm.2
 

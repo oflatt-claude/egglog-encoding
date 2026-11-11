@@ -1,7 +1,7 @@
 import EgglogSemantics.Proofs.Congruence.Vocab
 import EgglogSemantics.Proofs.Congruence.Round
 import EgglogSemantics.Proofs.Schedule
-import EgglogSemantics.Proofs.SourceModel
+import EgglogSemantics.Proofs.SourceSubsume
 
 /-! The source side of the simulation: the invariants of a state reached by rounds of the
 program, the rule conditions the fragment supplies, and that source heads never get
@@ -12,7 +12,7 @@ namespace Egglog.Congruence
 /-- The invariants of a source state reached by rounds of `P`. -/
 structure SrcInv (P : Program) (x : Database) : Prop where
   wf : x.WF
-  subsumed : x.subsumed = ∅
+  marksExist : x.MarksExist
   finite : x.eqs.Finite
   ctors : x.CtorsIn P
   vocab : ∀ t ∈ x.terms, Term.VocabIn P t
@@ -22,7 +22,7 @@ variable {P : Program}
 
 theorem SrcInv.empty (P : Program) : SrcInv P Database.empty where
   wf := Database.WF.empty
-  subsumed := rfl
+  marksExist := by intro t ht; cases ht
   finite := Set.finite_empty
   ctors := Database.empty_ctorsIn
   vocab := by intro _ ht; simp at ht
@@ -32,8 +32,8 @@ theorem SrcInv.hasReps {x : Database} (h : SrcInv P x) : x.HasReps :=
   Database.hasReps_of_finite h.finite
 
 theorem SrcInv.avoids (hP : P.Fragment) {x : Database} (h : SrcInv P x) :
-    ∀ t ∈ x.terms, ¬ Term.Mentions ufName t :=
-  fun _ ht => not_mentions_uf_of_ctorsIn hP (h.ctors.term h.wf ht)
+    ∀ t ∈ x.terms, t.SourceShaped :=
+  fun _ ht => sourceShaped_of_ctorsIn hP (h.ctors.term h.wf ht)
 
 /-! ### Rounds of the program -/
 
@@ -75,15 +75,10 @@ theorem Reach.rounds {S : Schedule} (hS : S.rules ⊆ P.rules) {x y : Database}
 
 /-! ### Preservation -/
 
-theorem subsumeFree_of_mem (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : r.SubsumeFree :=
-  Schedule.subsumeFree_of_subsumeFreeB hP.subsumeFree r hr
-
 theorem SrcInv.runRules (hP : P.Fragment) {x : Database} (h : SrcInv P x) {R : List Rule}
     (hR : ∀ r ∈ R, r ∈ P.rules) : SrcInv P (RunRules R x) where
   wf := RunRules.wf h.wf
-  subsumed := by
-    rw [RunRules.subsumed_eq (fun r hr => subsumeFree_of_mem hP (hR r hr))]
-    exact h.subsumed
+  marksExist := RunRules.marksExist h.marksExist
   finite := RunRules.finite_eqs h.finite R
   ctors := (Database.CtorsInState.runRules h.wf ⟨h.ctors⟩
     (Schedule.CtorsIn.of_domain hP (c := .run R) hR)).terms
@@ -109,9 +104,7 @@ theorem srcNames_of_ctors (hP : P.Fragment) {e : Expr} (hc : ∀ fk ∈ e.ctors,
     SrcNames e := by
   intro g hg heq
   obtain ⟨k, hk⟩ := Expr.exists_ctor_of_mem_fns hg
-  have := noAt_of_mem_ctors hP (hc _ hk)
-  subst heq
-  exact this atPrefix_ufName
+  exact noAt_of_mem_ctors hP (hc _ hk) heq
 
 theorem notFresh_of_mem_vars (hP : P.Fragment) {v : Var} (hv : v ∈ P.vars) : NotFresh v :=
   notFresh_of_not_at (hP.noAt v (List.mem_append_right _ hv))
@@ -157,7 +150,7 @@ theorem ruleOk_of_fragment (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : R
   have henc : r.query.Encodable := hP.queryEncodable.1 r hr
   obtain ⟨hoq, hoa⟩ := rule_minOverVars hP hr
   refine ⟨⟨hoq, fun p hp => (henc.1 p hp).2, pattern_names ?_ hP, fun v hv => ?_⟩, henc.2,
-    hP.headsScoped r hr, hoa, subsumeFree_of_mem hP hr⟩
+    hP.headsScoped r hr, hoa, ?_⟩
   · intro fk hk
     apply mem_program_ctors (S := P.schedule) (fun r hr => hr)
     exact List.mem_flatMap.mpr ⟨r, hr, List.mem_append_left _ hk⟩
@@ -167,6 +160,12 @@ theorem ruleOk_of_fragment (hP : P.Fragment) {r : Rule} (hr : r ∈ P.rules) : R
     apply List.mem_append_left
     unfold Schedule.vars
     exact List.mem_flatMap.mpr ⟨r, hr, List.mem_union_iff.mpr (Or.inl hv)⟩
+  · intro a ha f es heq
+    subst a
+    apply noAt_of_mem_ctors hP (fk := (f, es.length))
+    apply mem_program_ctors (S := P.schedule) (fun _ h => h)
+    exact List.mem_flatMap.mpr ⟨r, hr, List.mem_append_right _
+      (List.mem_flatMap.mpr ⟨.subsume f es, ha, List.mem_cons_self⟩)⟩
 
 /-- The final check satisfies the query conditions. -/
 theorem queryOk_check (hP : P.Fragment) : QueryOk P.check where
@@ -228,8 +227,10 @@ minimum compares representatives, which two states of one meaning need not share
 theorem round_sameMeaning (hP : P.Fragment) (hO : P.schedule.OrderingFree) {x y : Database}
     (hx : SrcInv P x) (hy : SrcInv P y) (hm : x.SameMeaning y) {R : List Rule}
     (hR : ∀ r ∈ R, r ∈ P.rules) : (RunRules R x).SameMeaning (RunRules R y) :=
-  SourceMeaning.round_sameMeaning hx.wf hy.wf hm (hx.subsumed.trans hy.subsumed.symm) hx.hasReps
-    hy.hasReps (fun r hr => subsumeFree_of_mem hP (hR r hr)) (fun r hr => hO r (hR r hr))
+  SourceMeaning.round_sameMeaning_subsume hx.wf hy.wf hm hx.marksExist hy.marksExist
+    hx.hasReps hy.hasReps (fun r hr => hO r (hR r hr))
+    (fun r hr σ hσ => source_writes_some hP hx (hR r hr) hσ)
+    (fun r hr σ hσ => source_writes_some hP hy (hR r hr) hσ)
 
 /-- A finite source run from a state of the same meaning reaches a state of the same
 meaning. -/
@@ -241,15 +242,29 @@ theorem reach_transport (hP : P.Fragment) (hO : P.schedule.OrderingFree) {S : Sc
     (fun _ _ _ hg hd he hm => round_sameMeaning hP hO hd he hm hg)
     hr (fun _ hr => hS hr) hx hy hm
 
-/-- Rounds only grow the congruence, so a state between two states of one meaning has
-that meaning. -/
+/-- Stored marks only grow along rounds. -/
+theorem Rounds.marks_subset {x y : Database} (h : Rounds P x y) : x.subsumed ⊆ y.subsumed := by
+  induction h with
+  | refl => exact subset_rfl
+  | tail _ hbc ih =>
+    obtain ⟨R, _, rfl⟩ := hbc
+    exact ih.trans (SourceMeaning.round_contains _ _).subsumed
+
+/-- A state between two equivalent states has the same congruence and live rows. -/
 theorem sameMeaning_of_between {x z y : Database} (hxz : Rounds P x z) (hzy : Rounds P z y)
-    (hxy : x.SameMeaning y) (hX : x.subsumed = z.subsumed) : x.SameMeaning z := by
-  apply Database.SameMeaning.of_congr _ hX
-  intro a b
+    (hxy : x.SameMeaning y) : x.SameMeaning z := by
+  have hc : ∀ a b, Cong x a b ↔ Cong z a b := fun a b =>
+    ⟨hxz.cong, fun h => (hxy.congr a b).mpr (hzy.cong h)⟩
+  refine ⟨hc, fun t => ?_⟩
   constructor
-  · exact hxz.cong
-  · exact fun h => (hxy.congr a b).mpr (hzy.cong h)
+  · intro ht
+    refine ⟨(hc _ _).mp ht.1, ?_⟩
+    rintro ⟨u, hu, hs⟩
+    exact ((hxy.live t).mp ht).2 ⟨u, hzy.marks_subset hu, hs.mono (fun _ _ h => hzy.cong h)⟩
+  · intro ht
+    refine ⟨(hc _ _).mpr ht.1, ?_⟩
+    rintro ⟨u, hu, hs⟩
+    exact ht.2 ⟨u, hxz.marks_subset hu, hs.mono (fun _ _ h => hxz.cong h)⟩
 
 /-! ### Bounded terms around a stable state -/
 
@@ -269,9 +284,8 @@ theorem terms_bounded (hP : P.Fragment) (hO : P.schedule.OrderingFree) {x₀ : D
     obtain ⟨R, hR, rfl⟩ := hzy
     have hz : z.SameMeaning x₀ := by
       refine (sameMeaning_of_between (x := x₀) (z := z) (y := RunRules R z) ?_ (Rounds.single hR)
-        hm.symm ?_).symm
-      · assumption
-      · rw [hx₀.subsumed, (hx₀.rounds hP (by assumption)).subsumed]
+        hm.symm).symm
+      assumption
     have hz' : SrcInv P z := hx₀.rounds hP (by assumption)
     apply RunRules.nodeSize_le hR (fun r hr => (hO r (hR r hr)).2)
       (reps_nodeSize_le hx₀.hasReps hz (Rounds.terms_subset (by assumption)) hN')

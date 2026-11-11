@@ -89,8 +89,8 @@ private def least : Rule :=
 -- whether or not it is chosen.
 #guard !(Program.Fragment ⟨.seq base (.run [⟨[.expr (.app "F" [.var "x"])],
   [.expr (.app "H" [.min (.app "F" [.var "x"]) (.var "x")])]⟩]), joined⟩)
--- Subsumption stays outside both fragments.
-#guard !(Program.Fragment ⟨.seq base (.run [⟨[.expr (.app "F" [.var "x"])],
+-- Source rules may subsume rows.
+#guard (Program.Fragment ⟨.seq base (.run [⟨[.expr (.app "F" [.var "x"])],
   [.subsume "F" [.var "x"]]⟩]), joined⟩)
 
 -- Query compilation and provenance instrumentation keep the check.

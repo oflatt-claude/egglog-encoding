@@ -384,7 +384,8 @@ theorem complete_expr (h : Rel src d) (hc : Canon d) (hw : src.WF) :
           exact evalList_freshArgs fun i hi => by rw [hbsLen] at hi; exact hchild i hi
         have hmatchArgs : Expr.MatchesList d (σ ++ (ρ₁ ++ ρ₂)) (freshArgs next args.length) :=
           matchesList_freshArgs fun i hi => by rw [hchild i hi]; rfl
-        have hliveB : Term.app f bs ∈ d.live := (h.app_live_iff hf).mpr hbs
+        have hliveB : Term.app f bs ∈ d.live :=
+          h.live_of_src_live hbs (Database.live_app_congr hlive hcl)
         -- The earlier atoms and ids read the same through the extended substitution.
         have hagree₁ : ∀ v, NotFresh v ∨ FreshIn n next v →
             Env.lookup v (σ ++ (ρ₁ ++ ρ₂)) = Env.lookup v (σ ++ ρ₁) :=
@@ -454,7 +455,7 @@ theorem complete_expr (h : Rel src d) (hc : Canon d) (hw : src.WF) :
 
 theorem complete_args (h : Rel src d) (hc : Canon d) (hw : src.WF) :
     ∀ (es : List Expr) (n : Nat) {σ : Env}, Expr.MinOverVarsList es →
-    (∀ g ∈ Expr.fnsList es, g ≠ ufName) → (∀ v ∈ Expr.varsList es, NotFresh v) → NoFreshDom σ →
+    (∀ g ∈ Expr.fnsList es, SourceName g) → (∀ v ∈ Expr.varsList es, NotFresh v) → NoFreshDom σ →
     (∀ b ∈ σ, b.2 ∈ src.reps) → Expr.MatchesList src σ es → ArgsComplete src d es n σ
   | [], n, σ, _, _, _, _, _, _ => by
       refine ⟨[], Fresh.nil n, by simp, by rw [flatArgs_nil]; simp, [], rfl, by simp, ?_⟩

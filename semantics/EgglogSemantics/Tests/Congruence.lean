@@ -112,16 +112,17 @@ example : encodeQuery orderedQuery 0 =
 #guard (compile missingPremise).origins.length == (encode missingPremise).rules.length
 #guard (compile missingPremise).origins.contains (.source 2)
 #guard ((maintenanceRules missingPremise).map Prod.snd).count (.rebuild .compress) == 1
-#guard ((rebuildRules "F" 2).map Prod.snd) == [.rebuild (.congruence "F")]
+#guard ((rebuildRules "F" 2).map Prod.snd) == [.rebuild (.congruence "F"), .rebuild (.subsume "F")]
 
 -- The optimizations: with a view, an application is one row; the indexed view's rows
 -- are built with the node; the phased rebuild keeps one origin per rule in schedule order.
 #guard (encodeQueryWith { views := .indexed } [.expr (.app "F" [.app "G" [.var "x"]])] 0).1.map
     Pattern.toEgg == ["(@GView x @v0)", "(@FView @v0 @v1)"]
 #guard (encodeBuildWith { views := .indexed } (.app "F" [atom "A"])).map Action.toEgg ==
-  ["(@AView (A))", "(@UF (A) (A))", "(@FView (A) (F (A)))", "(@UF (F (A)) (F (A)))"]
+  ["(@AView (A))", "(@NodeA (A))", "(@UF (A) (A))", "(@FView (A) (F (A)))",
+   "(@NodeF (A) (F (A)))", "(@UF (F (A)) (F (A)))"]
 #guard (encodeBuildWith { views := .naive } (.app "F" [atom "A"])).map Action.toEgg ==
-  ["(@UF (A) (A))", "(@UF (F (A)) (F (A)))"]
+  ["(@NodeA (A))", "(@UF (A) (A))", "(@NodeF (A) (F (A)))", "(@UF (F (A)) (F (A)))"]
 #guard ((rekeyRules { views := .naive } "F" 1).map Prod.snd) ==
   [.rebuild (.view "F"), .rebuild (.stale "F"), .rebuild (.stale "F")]
 #guard ((rekeyRules { views := .indexed } "F" 1).map Prod.snd) ==
@@ -146,13 +147,26 @@ example : encodeQuery orderedQuery 0 =
 #guard match (rebuildWith { views := .indexed, phased := true } nestedUnion).1 with
   | .saturate (.seq (.saturate (.run _)) (.seq (.saturate (.run _)) (.run _))) => true
   | _ => false
-#guard (rebuildRules "A" 0).isEmpty
--- The congruence rule of a binary constructor: both applications, the shared parents of
+-- A nullary constructor has no congruence rule, but a subsumption rule.
+#guard ((rebuildRules "A" 0).map Prod.snd) == [.rebuild (.subsume "A")]
+-- The congruence rule of a binary constructor: both node rows, the shared parents of
 -- their children, both roots, and the orientation guard.
 #guard (congruenceRule "F" 2).query.map Pattern.toEgg ==
-  ["(F @a0 @a1)", "(F @b0 @b1)", "(@UF @a0 @r0)", "(@UF @b0 @r0)", "(@UF @a1 @r1)",
-   "(@UF @b1 @r1)", "(@UF (F @a0 @a1) @y)", "(@UF (F @b0 @b1) @z)", "(= @y (min @y @z))",
+  ["(@NodeF @a0 @a1 @k)", "(@NodeF @b0 @b1 @l)", "(@UF @a0 @r0)", "(@UF @b0 @r0)",
+   "(@UF @a1 @r1)", "(@UF @b1 @r1)", "(@UF @k @y)", "(@UF @l @z)", "(= @y (min @y @z))",
    "(!= @y @z)"]
+-- The subsumption rule: a marker, a live application, and the shared parents of their
+-- children; it subsumes the application.
+#guard (subsumeRule "F" 2).query.map Pattern.toEgg ==
+  ["(@SubF @a0 @a1)", "(F @b0 @b1)", "(@UF @a0 @r0)", "(@UF @b0 @r0)", "(@UF @a1 @r1)",
+   "(@UF @b1 @r1)"]
+#guard (subsumeRule "F" 2).actions.map Action.toEgg == ["(subsume (F @b0 @b1))"]
+-- A build writes the node row with the self-loop; a subsume builds, subsumes the spelling
+-- it built, and marks it.
+#guard (encodeBuildWith {} (.app "F" [atom "A"])).map Action.toEgg ==
+  ["(@NodeA (A))", "(@UF (A) (A))", "(@NodeF (A) (F (A)))", "(@UF (F (A)) (F (A)))"]
+#guard (encodeActionWith {} (.subsume "F" [.var "x"])).map Action.toEgg ==
+  ["(@UF x x)", "(@NodeF x (F x))", "(@UF (F x) (F x))", "(subsume (F x))", "(@SubF x)"]
 
 -- Every source schedule compiles to one schedule: each run followed by a rebuild, so a
 -- source saturation's passes each rebuild as they go.
@@ -167,5 +181,19 @@ example : encodeQuery orderedQuery 0 =
 #guard (encode ⟨.run [⟨[], [.expr (.app "F" [atom "A"])]⟩],
     [.expr (.app "F" [atom "A"])]⟩).check.map Pattern.toEgg ==
   ["(A)", "(@UF (A) @v0)", "(F @v1)", "(@UF @v1 @v0)", "(@UF (F @v1) @v2)"]
+
+-- A subsumed node still participates in congruence, while every congruent spelling is
+-- hidden from queries. View requests use the explicit encoding for these programs.
+private def subsumedUnion : Program :=
+  ⟨.seqAll [global (.expr (.app "F" [atom "A"])),
+    global (.expr (.app "F" [atom "B"])), global (.subsume "F" [atom "A"]),
+    global (.union (atom "A") (atom "B"))], [.expr (.app "F" [atom "B"])]⟩
+#guard decide subsumedUnion.Fragment
+#guard [({} : Options), { views := .naive }, { views := .indexed }, { phased := true },
+    { views := .indexed, phased := true }].all fun o =>
+  (exec (encodeWith o subsumedUnion)).any fun d =>
+    sameClassF d (.app "F" [term "A"]) (.app "F" [term "B"]) &&
+      d.subsumed.contains (.app "F" [term "A"]) && d.subsumed.contains (.app "F" [term "B"]) &&
+      !d.holds (encodeWith o subsumedUnion).check && liveRows d "F" 1 == 0
 
 end Egglog.Congruence

@@ -143,6 +143,7 @@ def ruleComment : RuleOrigin → String
   | .rebuild .compress => "path compression"
   | .rebuild .collide => "two parents: keep the smaller"
   | .rebuild (.congruence f) => "congruence of $" ++ name f ++ "$"
+  | .rebuild (.subsume f) => "subsumed spellings of $" ++ name f ++ "$"
   | .rebuild (.view f) => "view of $" ++ name f ++ "$"
   | .rebuild (.stale f) => "stale view row of $" ++ name f ++ "$"
   | .rebuild (.index f) => "index of $" ++ name f ++ "$'s view"
