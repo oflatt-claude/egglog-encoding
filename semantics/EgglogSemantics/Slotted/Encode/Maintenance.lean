@@ -292,15 +292,18 @@ restriction. Collision discovers equations; finite witnesses support negative co
 @[blueprint "def:slotted-renames-rules"
   (statement := /--
   \[
-  \begin{aligned}
-   &\mathtt{FS}(a,A)\Rightarrow\mathtt{RenamesTo}(a,\mathrm{id}_A,a)\\
-   &\mathtt{RenamesTo}(a,m,b)\Rightarrow\mathtt{RenamesTo}(b,m^{-1},a)\\
-   &\mathtt{RenamesTo}(a,m,b)\land\mathtt{RenamesTo}(b,n,c)
+  \begin{gathered}
+   \textsc{Identity}:\ \mathtt{FS}(a,A)\Rightarrow\mathtt{RenamesTo}(a,\mathrm{id}_A,a)
+   \qquad
+   \textsc{Reverse}:\ \mathtt{RenamesTo}(a,m,b)\Rightarrow\mathtt{RenamesTo}(b,m^{-1},a)\\
+   \begin{aligned}
+   \textsc{Compose}&:\ \mathtt{RenamesTo}(a,m,b)\land\mathtt{RenamesTo}(b,n,c)
      \Rightarrow\mathtt{RenamesTo}(a,m\circ n,c)\\
-   &\mathtt{RenamesTo}(a,m,b)\land\mathtt{FS}(a,A)\land\mathtt{FS}(b,B)\\
-   &\quad\land n=\mathrm{id}_A\circ m\circ\mathrm{id}_B\land n\ne m\\
-   &\quad\Rightarrow\mathtt{RenamesTo}(a,n,b),\ \kw{subsume}(\mathtt{RenamesTo}(a,m,b)).
-  \end{aligned}
+   \textsc{Trim}&:\ \mathtt{RenamesTo}(a,m,b)\land\mathtt{FS}(a,A)\land\mathtt{FS}(b,B)
+     \land n=\mathrm{id}_A\circ m\circ\mathrm{id}_B\land n\ne m\\
+   &\quad\Rightarrow\mathtt{RenamesTo}(a,n,b),\ \kw{subsume}(\mathtt{RenamesTo}(a,m,b))
+   \end{aligned}
+  \end{gathered}
   \]
   Endpoints are unordered; self-equations are symmetries. Only strict map restriction
   retires an equation. Migration and child update choose their direction when they fire.
