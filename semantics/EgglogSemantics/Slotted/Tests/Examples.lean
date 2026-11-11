@@ -30,8 +30,15 @@ def outcomes (S : List Slot) (src : String) : List (Option Bool) :=
 def expected (src : String) : List (Option Bool) :=
   ((parseFile src).toOption.getD []).map fun c => some (c.expected == .ok)
 
+/-! Literal pattern slots have no assignment choice. Distinct literals cannot collapse,
+and a literal cannot be changed even to a fresh name. -/
+
+#guard (Closure.unify [] (.var "$x") (Term.slot "$x")).isSome
+#guard (Closure.unify [] (.var "$x") (Term.slot "$y")).isNone
+
 /-! ### The paper's example
 
+The literal `$v` in the rule stays fixed; renamed representatives supply its matches.
 The distribution rule moves the factor `5` under two sums whose binder it does not mention.
 Positive: the distributed form, with fresh bound names `$k`, `$l`, is reached. Bounded: the
 form with the body `Mul($l, $l)` is not. -/
@@ -44,7 +51,7 @@ def paper : String :=
    (check (= t (Sum $k (Sum $l (Mul (Num 5) (Mul $k $l))))))\n\
    (fail (check (= t (Sum $k (Sum $l (Mul (Num 5) (Mul $l $l)))))))\n"
 
-#guard outcomes ["$i", "$j", "$k", "$l"] paper = [some true, some false]
+#guard outcomes ["$i", "$j", "$k", "$l", "$v"] paper = [some true, some false]
 #guard expected paper = [some true, some false]
 
 /-! ### α-equivalence of bound names
@@ -140,7 +147,7 @@ def capture : String :=
    (fail (check (= u (Sum $k (Mul $k (Num 5))))))\n\
    (check (= u (Mul $i (Sum $k (Num 5)))))\n"
 
-#guard outcomes ["$i", "$k", "$l"] capture = [some false, some true]
+#guard outcomes ["$i", "$k", "$l", "$v"] capture = [some false, some true]
 #guard expected capture = [some false, some true]
 
 /-! ### Equality modulo renaming (`paper/fgh-transitive-symmetry.egg`)

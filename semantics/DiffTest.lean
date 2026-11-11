@@ -662,17 +662,17 @@ private def runSlottedParse (dirs : List String) : IO UInt32 := do
 /-! ### The slotted corpus, evaluated
 
 `difftest slotted-bounded <file>…` parses each file and runs every check with the bounded
-evaluator (`Slotted/Tests/Bounded.lean`) over the slot universe of the program's concrete
-slots plus enough fresh names for its pattern slots and α-variants, comparing the outcome
+evaluator (`Slotted/Tests/Bounded.lean`) over the slot universe of the program's literal
+slots plus enough fresh names for action-only slots and α-variants, comparing the outcome
 with the one the file asserts, which `slotted-difftest.sh` first confirms against the Rust
 reference. A check the evaluator cannot decide within its fuel is reported, not failed. -/
 
-/-- The concrete slots an expression mentions and its slot variables. -/
+/-- The literal names an expression mentions and its slot identifiers. -/
 private partial def exprSlots : Expr → List Slotted.Slot × List Var
   | .app f [] => if Slotted.isSlotName f then ([f], []) else ([], [])
   | .app _ args =>
     args.foldl (fun acc e => let (cs, vs) := exprSlots e; (acc.1 ++ cs, acc.2 ++ vs)) ([], [])
-  | .var v => if Slotted.isSlotVar v then ([], [v]) else ([], [])
+  | .var v => if Slotted.isSlotVar v then ([v], [v]) else ([], [])
   | .min a b => let (c₁, v₁) := exprSlots a; let (c₂, v₂) := exprSlots b; (c₁ ++ c₂, v₁ ++ v₂)
   | .lit _ => ([], [])
 
@@ -686,8 +686,8 @@ private def actionSlots : Action → List Slotted.Slot × List Var
   | .subsume _ es =>
     es.foldl (fun acc e => let (cs, vs) := exprSlots e; (acc.1 ++ cs, acc.2 ++ vs)) ([], [])
 
-/-- The slot universe for a slotted program: its concrete slots, and as many fresh names as
-the largest number of slot variables of a rule or the check plus two, for α-variants. -/
+/-- The slot universe: all written names, plus fresh names for action-only slots and
+α-variants. Query literals must occur by their actual names in this universe. -/
 private def slotUniverse (P : Egglog.Program) : List Slotted.Slot :=
   let ruleSlots := P.rules.map fun r =>
     let qs := r.query.map patternSlots

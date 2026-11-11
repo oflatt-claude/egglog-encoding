@@ -381,7 +381,7 @@ the congruence `SCong` adds the `Rename` rule, closing every known equation unde
 partial injection of slots defined on both sides, with fresh bound names, so α-equivalent
 spellings of an existing term are congruent and a slot an equation does not mention becomes
 redundant. Matching binds variables to `reps'`, the representatives closed under renaming,
-looks applications up in `live'`, assigns the pattern slots of a query injectively, and
+looks applications up in `live'`, interprets pattern slots as fixed names, and
 interprets the free-name and renaming guards. A round fires every slotted match under every
 choice of fresh names for the slots used only in actions.
 

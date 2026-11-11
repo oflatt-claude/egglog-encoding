@@ -13,7 +13,8 @@ variants of `(datatype …)` record, for each binder column `j` among the non-pa
 the pair `(j, i)` with `i` the term child the binders precede. `(let x e)` builds `e` and
 substitutes it for later uses of `x`; a `let` of a slot binds the concrete slot. Slots written
 in ground commands are concrete slot terms; slots written in a rewrite, a `rule`, a `:when`
-fact or a check are slot variables, local to that query. `(run N)` is `N` rounds of the
+fact or a check use `Expr.var`; the query fixes these slot identifiers to their own names,
+while identifiers used only in actions receive fresh names. `(run N)` is `N` rounds of the
 rewrites registered so far. `(push)` and `(pop)` save and restore the whole state.
 
 Unsupported forms make the whole file fail with the form's name: `subst` (a representative
@@ -84,7 +85,8 @@ def sortNames : List Sexp → Except String (List String)
   | _ => .error "a column is a sort name"
 
 /-- A ground expression (`ground`), where a slot is the concrete slot term, or a query or
-action expression, where a slot is a slot variable and a free identifier a variable. Globals
+action expression, where a slot uses `Expr.var` (fixed in a query, fresh only in actions)
+and a free identifier is a variable. Globals
 are substituted in both. -/
 partial def expr (globals : List (String × Expr)) (ground : Bool) : Sexp → Except String Expr
   | .atom s =>

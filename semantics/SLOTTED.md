@@ -21,8 +21,8 @@ plain `Eval` of the compiled program.
 
 Slots are ordinary terms: the slot `$s` is `Term.app "$s" []`, recognised by its head
 (`Term.isSlot`); its name is spelled with the `$`. In queries and actions a written slot `$v`
-is a *slot variable*, `Expr.var "$v"`: local to the rule or check, and a match assigns slot
-variables injectively to slot names. A concrete slot, such as one a `let` binds, is the term
+is stored as `Expr.var "$v"`, with a deterministic query binding to the name `$v`.
+Ordinary variables range over renamed representatives. A concrete slot, such as one a `let` binds, is the term
 `Expr.app "$s" []`. No core type changes; the plain `Cong`, `Matches`, `Reach` and `Eval` are
 untouched, and the slotted definitions live beside them in namespace `Egglog.Slotted`.
 
@@ -41,10 +41,10 @@ A binding position is a field of the head: congruence replaces term children onl
 | the action `m * t` with fresh bound names | `Renames bind m t t'` (a relation: every fresh choice is a result), `RenamesList`, `plans`, `childMap`, `Fresh` | `def:slotted-action` |
 | α-equivalence | `AlphaStep`, `AlphaEq` | — |
 | `Rename` rule; `∼_E` closed under renaming; slot terms reflexive; congruence on term children only | `SCong bind db`, `SCongArgs` | `def:slotted-congruence` |
-| redundant slot; live free slots `FS(E, t)` | `Redundant`, `liveSlots` | `def:slotted-live-slots` |
+| redundant slot; live free slots `FS(E, t)` | `Redundant`, `liveSlots` | — (defined in prose) |
 | `reps'(E)`, `live'(E, X)` | `sreps` (least stored spelling under `SCong`), `reps'`, `subsumed'`, `SameRow'`, `live'` | `def:slotted-reps` |
 | slotted `G ≡ G'` | `SameMeaning'` | — |
-| `Query'`, `App'`, injective pattern slots `θ`; `Free`, `NotFree`, `free-names-are`, `renaming-=` | `SExpr.Matches`, `SMatches`, `ValidEnv'`, `SQueryMatches`, `SQueryHolds`, `Builtin`, `RenamingEq` | `def:slotted-query` |
+| `Query'`, `App'`, fixed literal pattern slots; `Free`, `NotFree`, `free-names-are`, `renaming-=` | `SExpr.Matches`, `SMatches`, `ValidEnv'`, `SQueryMatches`, `SQueryHolds`, `Builtin`, `RenamingEq` | `def:slotted-query` |
 | slots used only in actions receive fresh names; the slotted round `Run'` | `freshVars`, `FreshSlots`, `evalActions'`, `SRunRules` | `def:slotted-round` |
 | slotted schedules and outcomes | `SReach`, `SEval`, `Slotted.Program`, `Program.Eval` | — |
 
@@ -63,17 +63,18 @@ states.
 
 A free slot `s` of `t` is redundant in `E` when renaming it alone to a name fresh for `t`
 gives a term congruent to `t`: `$x·0 ∼ 0` makes `$x` redundant. `liveSlots E t` is
-`slots t` without its redundant slots: the paper's `FS`, which `free`, `not-free` and
-`free-names-are` inspect.
+`slots t` without its redundant slots: a slot is free in a term when renaming it changes
+the term's class. This is the paper's `FS`, which `free`, `not-free` and `free-names-are`
+inspect. The definition stays in Lean; the displayed congruence node shows only `Rename`,
+while `Slot` and `Cong'` remain constructors of `SCong`.
 
 ### Pattern slots and fresh action slots
 
-The paper assigns the written pattern slots injectively, `θ : PS(Q) ↣ Slot`, before the
-rules apply. Here `θ` is the part of the match `σ` on the slot variables: `ValidEnv'` binds
-each slot variable to a slot, distinct slot variables to distinct slots, and every other
-variable to a member of `reps'`. A slot variable of the actions that the query does not
-bind receives, in `SRunRules`, a slot that no value of the match mentions; every such choice
-is a result of the round, and the choices differ by a renaming of fresh slots.
+A literal pattern slot `$x` denotes the slot named `x`; no name-assignment step precedes
+matching. `ValidEnv'` stores these constants as deterministic environment entries and
+ranges ordinary variables over `reps'`. Thus the only branching is over renamed
+representatives. A slot used only in actions receives, in `SRunRules`, a name absent
+from every value of the match; every fresh choice is a result of the round.
 
 ## Executable checking (bounded)
 
@@ -92,7 +93,7 @@ universe `U`, the subterm closure of the stored terms closed under renaming over
 - from a closure: `sreps`, `reps'`, `live'`, `redundant` and `liveSlots`, `renamingEq`, the
   reference evaluators `exprB`/`patternB`/`validEnvB` of the match judgement, and a
   join-driven candidate generator (an application pattern is unified against the live terms,
-  a bare variable ranges over `reps'`, a slot variable over `S`) whose output is filtered by
+  a bare variable ranges over `reps'`, a literal slot denotes itself) whose output is filtered by
   the reference evaluators;
 - `round`, `exec`, `observe`: the slotted round under every fresh choice from `S`, schedules
   with fuel, and the outcome of a slotted program. A check is decided on the universe seeded
@@ -100,8 +101,9 @@ universe `U`, the subterm closure of the stored terms closed under renaming over
 
 What is bounded: a pair the closure does not relate, a slot it does not find redundant, and a
 check it finds to fail are statements about the universe. `Examples.lean` says for each
-assertion which kind it is. The paper's example needs four slot names: two for the stored
-binders and two fresh ones for their α-variants.
+assertion which kind it is. The distribution example uses five slot names: the two stored binders, the fixed literal
+`$v` of the rule, and two names for the checked α-variant. The capture example includes its
+fixed rule literal as well.
 
 ## Conservative extension
 
@@ -132,9 +134,9 @@ program per check.
 Skipped forms, with the reason: `subst` (a representative choice outside the semantics),
 `extract` (output, not a check), `include` (external files), `__internal-*` checks,
 `datatype*`, `function`, `relation`, `run-schedule`, `:ruleset`. On
-`egglog-experimental/tests/slotted` the parser accepts 29 of 44 files with 189 checks,
-including all six `paper/` files; the 15 skipped files are 8 `include`, 3 `subst`, 2
-`__internal-holds`, 1 `datatype*`, and 1 `extract`.
+`egglog-experimental/tests/slotted` the parser accepts 35 of 50 files with 205 checks,
+including all six `paper/` files; the 15 skipped files are 9 `include`, 3 `subst`, 2
+`__internal-holds`, and 1 `datatype*`. Three accepted files contain declarations only.
 
 ## What phase 2 needs from phase 1
 

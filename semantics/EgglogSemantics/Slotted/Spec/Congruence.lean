@@ -23,16 +23,9 @@ congruent. -/
 @[blueprint "def:slotted-congruence"
   (statement := /--
   \begin{mathpar}
-  \ir{Slot}{}{\$s\sim_E\$s}
-  \and
   \ir{Rename}{t\sim_E u\\
     \operatorname{slots}(t)\cup\operatorname{slots}(u)\subseteq\operatorname{dom}(m)}
     {m*t\sim_E m*u}
-  \and
-  \ir{Cong'}{f(\bar s)\sim_E f(\bar s)\\
-    s_i\sim_E t_i\ \text{ for the term children}\\
-    s_j=t_j\ \text{ for the binding positions}}
-    {f(\bar s)\sim_E f(\bar t)}
   \end{mathpar}
   -/)
   (latexEnv := "paperfragment")]
@@ -72,15 +65,6 @@ def Redundant (bind : Binders) (db : Database) (t : Term) (s : Slot) : Prop :=
 
 /-- `FS(E, t)`: the free slots of `t` that are not redundant, the slots its class depends
 on. The free-name guards read it. -/
-@[blueprint "def:slotted-live-slots"
-  (statement := /--
-  \[
-  \operatorname{FS}(E,t)\triangleq
-    \{\,\$s\in\operatorname{slots}(t)\mid
-      t\not\sim_E(\mathrm{id}_{\operatorname{slots}(t)})_s^r*t\ \text{ for a fresh }\$r\,\}
-  \]
-  -/)
-  (latexEnv := "paperfragment")]
 def liveSlots (bind : Binders) (db : Database) (t : Term) : Set Slot :=
   {s | s ∈ slots bind t ∧ ¬ Redundant bind db t s}
 

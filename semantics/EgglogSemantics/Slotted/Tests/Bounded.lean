@@ -599,18 +599,16 @@ def patternB (c : Closure) (σ : Env) : Pattern → Bool
     | some ta, some tb => c.exprB σ a && c.exprB σ b && !c.cong ta tb
     | _, _ => false
 
-/-- `ValidEnv'`, evaluated: slot variables to distinct slots, the others to `reps'`. -/
+/-- `ValidEnv'`, evaluated: literal slots to themselves, ordinary variables to `reps'`. -/
 def validEnvB (c : Closure) (vars : List Var) (σ : Env) : Bool :=
   (Env.dom σ).isPerm vars &&
-  σ.all (fun b => if isSlotVar b.1 then b.2.isSlot else decide (b.2 ∈ c.reps')) &&
-  σ.all fun b => σ.all fun d =>
-    !(isSlotVar b.1 && isSlotVar d.1 && b.2 == d.2) || b.1 == d.1
+  σ.all (fun b => if isSlotVar b.1 then b.2 == Term.slot b.1 else decide (b.2 ∈ c.reps'))
 
 /-! #### Candidate substitutions
 
 Enumerating every assignment of the variables is far too slow even here, so candidates are
 read off the universe: an application pattern is unified against every live term, a bare
-variable ranges over `reps'`, a slot variable over `S`. The candidates are then filtered by
+variable ranges over `reps'`, a literal slot denotes itself. The candidates are then filtered by
 `validEnvB` and `patternB`, so what is found is exactly what the reference evaluator accepts
 among the candidates, and the soundness of a match rests on the evaluator alone. -/
 
@@ -620,7 +618,7 @@ def unify (σ : Env) : Expr → Term → Option Env
     match Env.lookup v σ with
     | some t' => if t' = t then some σ else none
     | none =>
-      if isSlotVar v && !t.isSlot then none else some ((v, t) :: σ)
+      if isSlotVar v && t != Term.slot v then none else some ((v, t) :: σ)
   | .lit l, .lit l' => if l = l' then some σ else none
   | .app f args, .app g ts => if f = g then unifyList σ args ts else none
   | _, _ => none
@@ -636,7 +634,7 @@ def domain (c : Closure) (σ : Env) : Expr → List Term
   | .var v =>
     match Env.lookup v σ with
     | some t => [t]
-    | none => if isSlotVar v then c.S.map Term.slot else c.reps'
+    | none => if isSlotVar v then [Term.slot v] else c.reps'
   | .lit l => [.lit l]
   | .app _ _ => c.liveTerms
   | .min _ _ => []
@@ -669,13 +667,13 @@ def candidates (c : Closure) (q : Query) : List Env :=
 def matchQuery (c : Closure) (q : Query) : List Env :=
   (c.candidates q).filter fun σ => c.validEnvB q.vars σ && q.all (c.patternB σ)
 
-/-- Every assignment of the variables: slot variables to distinct slots of `S`, the others to
-`reps'`. Exhaustive, so only used to seed the universe. -/
+/-- Every assignment of ordinary variables to `reps'`, with fixed literal slots.
+Exhaustive, so only used to seed the universe. -/
 def assignments (c : Closure) (vars : List Var) : List Env :=
   let svars := vars.filter isSlotVar
   let tvars := vars.filter fun v => !isSlotVar v
-  (injections svars c.S).flatMap fun θ =>
-    (Egglog.assignments c.reps' tvars).map fun σ => (θ.map fun p => (p.1, Term.slot p.2)) ++ σ
+  (Egglog.assignments c.reps' tvars).map fun σ =>
+    (svars.map fun v => (v, Term.slot v)) ++ σ
 
 /-- The terms a query's expressions evaluate to under every assignment: what the universe
 must hold for the query to be decided. -/

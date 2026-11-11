@@ -5,16 +5,16 @@ import EgglogSemantics.Slotted.Spec.Congruence
 
 The plain matching judgement with the slotted closure: query variables range over the
 representatives closed under renaming, `reps'`, an application is looked up in `live'`, and
-equalities compare through `SCong`. A slot written in a query, `$v`, is a *slot variable*:
-`Expr.var "$v"`, local to the query, and a match assigns slot variables injectively to slot
-names, so distinct pattern slots match distinct names. The free-name guards `free`, `not-free`
+equalities compare through `SCong`. A slot written in a query, `$v`, denotes the fixed name
+`$v`. The parser stores it as `Expr.var "$v"`; its environment entry is determined by its
+spelling, not chosen by a match. The free-name guards `free`, `not-free`
 and `free-names-are`, and the comparisons modulo renaming `renaming-=` and `renaming-!=`, are
 built-in predicate heads interpreted here rather than looked up.
 -/
 
 namespace Egglog.Slotted
 
-/-- A slot variable: a pattern slot `$v`, local to its query. -/
+/-- A slot identifier: fixed in a query, fresh when used only in actions. -/
 def isSlotVar (v : Var) : Bool := v.startsWith "$"
 
 /-- The built-in predicates of the slotted query language. -/
@@ -104,23 +104,21 @@ inductive SMatches (bind : Binders) (db : Database) : Pattern → Env → Prop w
       a.eval σ = some ta → b.eval σ = some tb → ¬ RenamingEq bind db ta tb →
       SMatches bind db (.expr (.app "renaming-!=" [a, b])) σ
 
-/-- `σ` binds exactly `vars`: each slot variable to a slot, distinct slot variables to
-distinct slots, and every other variable to a member of `reps'`. The paper's injective slot
-assignment `θ` is the restriction of `σ` to the slot variables. -/
+/-- `σ` binds exactly `vars`: a pattern slot denotes its own name, and every ordinary
+variable ranges over `reps'`. Slot entries are a deterministic representation of constants;
+there is no separate assignment of pattern names. -/
 def ValidEnv' (bind : Binders) (db : Database) (vars : List Var) (σ : Env) : Prop :=
   (Env.dom σ).Perm vars ∧
-  (∀ b ∈ σ, isSlotVar b.1 = true → ∃ s, isSlotName s = true ∧ b.2 = Term.slot s) ∧
-  (∀ b ∈ σ, isSlotVar b.1 = false → b.2 ∈ reps' bind db) ∧
-  (∀ b ∈ σ, ∀ c ∈ σ, isSlotVar b.1 = true → isSlotVar c.1 = true → b.2 = c.2 → b.1 = c.1)
+  (∀ b ∈ σ, isSlotVar b.1 = true → b.2 = Term.slot b.1) ∧
+  (∀ b ∈ σ, isSlotVar b.1 = false → b.2 ∈ reps' bind db)
 
-/-- `Query'`: one substitution assigns the pattern slots injectively and the variables to
-`reps'`, and satisfies every conjunct under `App'` and the guards. -/
+/-- `Query'`: variables range over renamed representatives, literal slots keep their
+names, and every conjunct satisfies `App'` and the guards. -/
 @[blueprint "def:slotted-query"
   (statement := /--
   \begin{mathpar}
-  \ir{Query'}{\theta:\operatorname{PS}(Q)\rightarrowtail\mathit{Slot}\\
-    \sigma:\operatorname{FV}(Q)\to\operatorname{reps}'(E)\\
-    \forall p\in Q.\ G,\sigma\models\theta(p)}
+  \ir{Query'}{\sigma:\operatorname{FV}(Q)\to\operatorname{reps}'(E)\\
+    \forall p\in Q.\ G,\sigma\models p}
     {G,\sigma\models Q}
   \and
   \ir{App'}{G,\sigma\models e_i\ (\forall i)\\
