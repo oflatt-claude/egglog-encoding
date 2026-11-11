@@ -11,19 +11,30 @@ lists lexicographically. The public order compares node counts first, then uses 
 strict total structural order. The list comparison is only total at equal lengths. -/
 namespace Lit
 
-/-- Asymmetry, totality and transitivity of the base-value order, each the integer law
-under `decide`. `Term.blt`'s literal case is this one. -/
+/-- The literal order is asymmetric; integers precede strings. -/
 theorem blt_asymm {l m : Lit} (h : Lit.blt l m = true) : Lit.blt m l = false := by
-  cases l; cases m; simp_all [Lit.blt]
-  omega
+  cases l <;> cases m <;>
+    simp_all only [Lit.blt, decide_eq_true_eq, decide_eq_false_iff_not, Bool.false_eq_true]
+  · exact lt_asymm h
+  · exact String.lt_asymm h
 
 theorem blt_total {l m : Lit} (h : l ≠ m) : Lit.blt l m = true ∨ Lit.blt m l = true := by
-  cases l; cases m; simp_all [Lit.blt]
+  cases l <;> cases m <;>
+    simp_all only [Lit.blt, decide_eq_true_eq, ne_eq, Lit.int.injEq, Lit.str.injEq,
+      true_or, or_true]
+  · exact lt_or_gt_of_ne h
+  · rename_i a b
+    rcases Std.lt_trichotomy a b with hlt | heq | hgt
+    · exact Or.inl hlt
+    · exact False.elim (h heq)
+    · exact Or.inr hgt
 
 theorem blt_trans {l m n : Lit} (h₁ : Lit.blt l m = true) (h₂ : Lit.blt m n = true) :
     Lit.blt l n = true := by
-  cases l; cases m; cases n; simp_all [Lit.blt]
-  omega
+  cases l <;> cases m <;> cases n <;>
+    simp_all only [Lit.blt, decide_eq_true_eq, Bool.false_eq_true]
+  · exact lt_trans h₁ h₂
+  · exact String.lt_trans h₁ h₂
 
 end Lit
 
@@ -304,30 +315,6 @@ theorem blt_iff {s t : Term} : blt s t = true ↔
 @[simp] theorem blt_lit_lit {l m : Lit} : Term.blt (.lit l) (.lit m) = Lit.blt l m := by
   simp [blt]
 
-@[simp] theorem blt_lit_app {l : Lit} {f : FnName} {as : List Term} :
-    Term.blt (.lit l) (.app f as) = true := by
-  rw [blt_iff]
-  by_cases h : nodeSizeList as = 0
-  · exact Or.inr ⟨by simp [h], rfl⟩
-  · exact Or.inl (by simp; omega)
-
-@[simp] theorem blt_app_lit {f : FnName} {as : List Term} {l : Lit} :
-    Term.blt (.app f as) (.lit l) = false := by
-  apply Bool.eq_false_iff.mpr
-  intro h
-  rcases blt_iff.mp h with hs | ⟨_, hs⟩
-  · simp only [nodeSize_app, nodeSize_lit] at hs
-    omega
-  · simp at hs
-
-theorem blt_app_app {f g : FnName} {as bs : List Term} :
-    Term.blt (.app f as) (.app g bs) =
-      (if nodeSizeList as ≠ nodeSizeList bs then
-        decide (nodeSizeList as < nodeSizeList bs)
-       else if as.length ≠ bs.length then decide (as.length < bs.length)
-       else if f ≠ g then decide (f < g) else structuralBltList as bs) := by
-  simp [blt, structuralBlt_app_app]
-
 theorem blt_asymm (s t : Term) (h : Term.blt s t = true) : Term.blt t s = false := by
   apply Bool.eq_false_iff.mpr
   intro hrev
@@ -372,13 +359,6 @@ theorem IsSubterm.blt {s t : Term} (h : IsSubterm s t) (hne : s ≠ t) :
     blt s t = true := blt_of_nodeSize_lt (h.nodeSize_lt hne)
 
 end Term
-
-/-- `Term.blt` is a strict linear order. Needed for `min` to be a deterministic choice, and
-for "keep the smaller side" to descend. -/
-theorem Term.blt_linear : (∀ s t : Term, Term.blt s t = true → Term.blt t s = false) ∧
-    (∀ s t : Term, s ≠ t → Term.blt s t = true ∨ Term.blt t s = true) ∧
-    (∀ s t u : Term, Term.blt s t = true → Term.blt t u = true → Term.blt s u = true) :=
-  ⟨Term.blt_asymm, Term.blt_total, Term.blt_trans⟩
 
 /-! ### `min`, against what it replaces
 

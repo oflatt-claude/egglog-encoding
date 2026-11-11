@@ -25,7 +25,7 @@ jobs:
       - uses: leanprover/lean-action@24581d74d674803a25a81b10b059c5c0cdd344c6 # v1
         with:
           lake-package-directory: semantics
-          build-args: EgglogPaper
+          build-args: ExtlogTheorems
           test: false
           lint: false
       - run: make -C semantics paper-check

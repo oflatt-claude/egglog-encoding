@@ -1,36 +1,9 @@
-import EgglogSemantics.Spec.Sequential
+import EgglogSemantics.Spec.Facts
 import EgglogSemantics.Proofs.Match
 
 /-! Single-substitution queries agree with the join representation. -/
 
 namespace Egglog
-
-/-- Atom and equality matching read the single semantic relation. -/
-theorem Matches.expr_iff_cong {db : Database} {e : Expr} {σ : Env} :
-    Matches db (.expr e) σ ↔ ∃ t, e.eval σ = some t ∧ Cong db t t := by
-  constructor
-  · rintro h
-    cases h with | atom he hc => exact ⟨_, he, hc⟩
-  · rintro ⟨t, he, hc⟩
-    exact .atom he hc
-
-theorem Matches.eq_iff_cong {db : Database} {a b : Expr} {σ : Env} :
-    Matches db (.eq a b) σ ↔
-      ∃ s t, a.eval σ = some s ∧ b.eval σ = some t ∧ Cong db s t := by
-  constructor
-  · rintro h
-    cases h with | equal ha hb hc => exact ⟨_, _, ha, hb, hc⟩
-  · rintro ⟨s, t, ha, hb, hc⟩
-    exact .equal ha hb hc
-
-theorem Matches.expr_iff_infers {db : Database} {e : Expr} {σ : Env} :
-    Matches db (.expr e) σ ↔ ∃ t, e.eval σ = some t ∧ db.Infers t t := by
-  simp only [expr_iff_cong, InferredFacts.congr_iff_infers]
-
-theorem Matches.eq_iff_infers {db : Database} {a b : Expr} {σ : Env} :
-    Matches db (.eq a b) σ ↔
-      ∃ s t, a.eval σ = some s ∧ b.eval σ = some t ∧ db.Infers s t := by
-  simp only [eq_iff_cong, InferredFacts.congr_iff_infers]
 
 private def selectEnv (vars : List Var) (σ : Env) : Env :=
   vars.filterMap fun v => (Env.lookup v σ).map (v, ·)
@@ -85,7 +58,7 @@ private theorem lookup_selectEnv {vars : List Var} {σ : Env} (hnd : vars.Nodup)
       · rw [if_neg (fun hc : v = w => hnd.1 (hc ▸ hv)), ih hnd.2 hv]
 
 theorem querySubst_of_matches_terms {db : Database} {q : Query} {σ : Env}
-    (hdom : (Env.dom σ).Perm q.vars) (hval : ∀ b ∈ σ, b.2 ∈ db.terms)
+    (hdom : (Env.dom σ).Perm q.vars) (hval : ∀ b ∈ σ, b.2 ∈ db.reps)
     (hm : ∀ p ∈ q, Matches db p σ) :
     ∃ τ, ValidQuerySubst db q τ ∧ Env.Agree τ σ := by
   have hpvar : ∀ p ∈ q, ∀ v ∈ p.freeVars [], v ∈ Env.dom σ := by
@@ -113,11 +86,6 @@ theorem querySubst_of_matches_terms {db : Database} {q : Query} {σ : Env}
   refine hu.mem_dom_iff.mpr ⟨selectEnv (p.freeVars []) σ, List.mem_map_of_mem hp, ?_⟩
   rw [hcanon p hp]
   exact p.mem_freeVars.mpr ⟨hvp, by simp [Env.dom]⟩
-theorem querySubst_of_matches {db : Database} {q : Query} {σ : Env}
-    (hdom : (Env.dom σ).Perm q.vars) (hval : ∀ b ∈ σ, b.2 ∈ db.terms)
-    (hm : ∀ p ∈ q, Matches db p σ) :
-    ∃ τ, ValidQuerySubst db q τ ∧ Env.Agree τ σ :=
-  querySubst_of_matches_terms hdom hval hm
 
 /-- Query variables are deduplicated. -/
 theorem Query.vars_nodup (q : Query) : q.vars.Nodup := by
@@ -126,11 +94,6 @@ theorem Query.vars_nodup (q : Query) : q.vars.Nodup := by
   | cons p ps ih => exact List.Nodup.union _ ih
 
 namespace QueryMatches
-
-/-- A whole-query substitution binds each variable once. -/
-theorem nodup {db : Database} {q : Query} {σ : Env}
-    (h : QueryMatches db q σ) : (Env.dom σ).Nodup :=
-  h.1.1.symm.nodup q.vars_nodup
 
 /-- Splitting a whole-query substitution into pattern matches preserves every lookup. -/
 theorem exists_validQuerySubst {db : Database} {q : Query} {σ : Env}
@@ -164,14 +127,11 @@ theorem exists_queryMatches {db : Database} {q : Query} {σ : Env}
   refine ⟨selectEnv q.vars σ, ⟨⟨?_, ?_⟩, ?_⟩, hag⟩
   · rw [hselected]
   · intro b hb
-    exact h.mem_terms b (Env.mem_of_lookup (mem_selectEnv hb).2)
+    exact h.mem_reps b (Env.mem_of_lookup (mem_selectEnv hb).2)
   · intro p hp
     exact (h.matches_of_mem hp).of_agreeOn fun v _ => (hag v).symm
 
 end ValidQuerySubst
-
-theorem queryHolds_iff_queryMatches {db : Database} {q : Query} :
-    QueryHolds db q ↔ ∃ σ, QueryMatches db q σ := Iff.rfl
 
 /-- Checks hold under the join representation of query matches. -/
 theorem queryHolds_iff_validQuerySubst {db : Database} {q : Query} :

@@ -1,4 +1,5 @@
 import EgglogSemantics.Proofs.Step
+import EgglogSemantics.Proofs.Representatives
 
 /-! Structural equality in mathematical union-free states, and syntax inversion for
 ordering-free source expressions. No executable state is involved. -/
@@ -13,10 +14,6 @@ structure Database.NoUnions (db : Database) : Prop where
   diag : db.Diag
 
 namespace Database
-
-/-- A subset of a diagonal is diagonal. -/
-theorem Diag.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (hd : d₂.Diag) : d₁.Diag :=
-  fun p hp => hd p (h.eqs hp)
 
 theorem Diag.addTerm {db : Database} (h : db.Diag) (t : Term) : (db.addTerm t).Diag := by
   rintro p (rfl | hp)
@@ -33,11 +30,7 @@ theorem Diag.addTerms {db : Database} (h : db.Diag) (ts : List Term) :
 theorem Diag.withOperands {db : Database} (h : db.Diag) (ts : List Term) :
     (db.withOperands ts).Diag := h.addTerms ts
 
-theorem Diag.deleteRows {db : Database} (h : db.Diag) (X : Set Term) :
-    (db.deleteRows X).Diag := by
-  rintro p (hp | ⟨t, _, c, _, rfl⟩)
-  · exact h p hp.1
-  · rfl
+theorem Diag.forgetSubsumed {db : Database} (h : db.Diag) : db.forgetSubsumed.Diag := h
 
 end Database
 
@@ -61,7 +54,7 @@ theorem Cong.eq_of_diag {d : Database} (hd : d.Diag) {a b : Term}
     (h : Cong d a b) : a = b := by
   induction h using Cong.rec (motive_2 := fun as bs _ => as = bs) with
   | direct hp => exact hd _ hp
-  | subterm => rfl
+  | child => rfl
   | symm _ ih => exact ih.symm
   | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
   | congr _ _ _ ih => exact congrArg _ ih
@@ -73,6 +66,12 @@ theorem CongList.eq_of_diag {d : Database} (hd : d.Diag) {as bs : List Term}
   match h with
   | .nil => rfl
   | .cons h hs => exact congrArg₂ List.cons (h.eq_of_diag hd) (hs.eq_of_diag hd)
+
+theorem Database.Diag.reps_eq_terms {d : Database} (hd : d.Diag) : d.reps = d.terms := by
+  apply Set.Subset.antisymm d.reps_subset_terms
+  intro t ht
+  refine ⟨ht, fun s _ hc => ?_⟩
+  simp [hc.eq_of_diag hd]
 
 theorem congOn_eq_of_diag {E : Database} (h : E.Diag) {ts : List Term} {a b : Term}
     (hc : StoredCongOn E ts a b) : a = b := StoredCong.eq_of_diag (h.withOperands ts) hc
@@ -89,14 +88,6 @@ theorem Database.SameMeaning.terms_eq_of_diag {d e : Database} (h : d.SameMeanin
   exact Set.Subset.antisymm
     (incl he (fun a b => (h.inferred a b).mp))
     (incl hd (fun a b => (h.inferred a b).mpr))
-
-theorem StoredCongList.eq_of_diag {d : Database} (h : d.Diag) {as bs : List Term}
-    (hc : StoredCongList d as bs) : as = bs := by
-  have hpair := StoredCongList.forall₂.mp hc
-  clear hc
-  induction hpair with
-  | nil => rfl
-  | cons hc _ ih => exact congrArg₂ List.cons (StoredCong.eq_of_diag h hc) ih
 
 /-- `Expr.OrderingFree`, read off an application: its arguments are. -/
 theorem Expr.orderingFree_app {f : FnName} {args : List Expr}

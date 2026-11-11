@@ -52,9 +52,6 @@ theorem Database.toStored {db : Database} {t : Term} (h : t ∈ db.terms) :
   · exact .subterm ((StoredCong.direct hp).trans (.symm (.direct hp))) ht
   · exact .subterm ((StoredCong.direct hp).symm.trans (.direct hp)) ht
 
-theorem Database.mem_terms_iff_storedCong {db : Database} {t : Term} :
-    t ∈ db.terms ↔ StoredCong db t t := ⟨Database.toStored, StoredCong.toHeld⟩
-
 instance {db : Database} {t : Term} : Coe (t ∈ db.terms) (StoredCong db t t) :=
   ⟨Database.toStored⟩
 
@@ -73,6 +70,5 @@ def Database.withOperands (db : Database) (ts : List Term) : Database := db.addT
 represented existence; merely mentioning an absent term does not establish it. -/
 def Database.Infers (db : Database) (a b : Term) : Prop :=
   ∃ w ∈ db.terms, StoredCongOn db [a, b] w a ∧ StoredCongOn db [a, b] a b
-
 
 end Egglog

@@ -105,10 +105,5 @@ theorem IsSubterm.trans {s t u : Term} (hst : IsSubterm s t) (htu : IsSubterm t 
   | refl => exact hst
   | arg hmem _ ih => exact IsSubterm.arg hmem ih
 
-/-- Subterm sets are transitively closed. -/
-theorem subterms_subset_of_mem {s t : Term} (h : s ∈ t.subterms) :
-    s.subterms ⊆ t.subterms :=
-  fun _ hu => hu.trans h
-
 end Term
 end Egglog

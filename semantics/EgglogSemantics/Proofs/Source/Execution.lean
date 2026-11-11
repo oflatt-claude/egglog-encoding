@@ -42,15 +42,12 @@ theorem Expr.exists_ctorList_of_mem_fnsList : ∀ {es : List Expr} {g : FnName},
         exact ⟨k, by rw [Expr.ctorsList]; exact List.mem_append_right _ hk⟩
 end
 
-/-- A `(name, arity)` pair one command applies is one the whole program applies. -/
-theorem mem_program_ctors {Q : Program} {c : Cmd} (hc : c ∈ Q.commands) {p : FnName × Nat}
-    (hp : p ∈ c.ctors) : p ∈ Q.ctors := by
+/-- Constructor uses of a schedule whose rules occur in the program occur in the program. -/
+theorem mem_program_ctors {Q : Program} {S : Schedule} (hs : S.rules ⊆ Q.rules)
+    {p : FnName × Nat} (hp : p ∈ S.ctors) : p ∈ Q.ctors := by
   rw [Program.ctors, List.mem_dedup]
-  exact List.mem_append_left _ (List.mem_flatMap.mpr ⟨c, hc, hp⟩)
-
-/-- `Program.OrderingFree` at a member command. -/
-theorem Program.OrderingFree.of_mem {P : Program} (h : Program.OrderingFree P)
-    {c : Cmd} (hc : c ∈ P.commands) : c.OrderingFree := h.1 c hc
+  obtain ⟨r, hr, hp⟩ := List.mem_flatMap.mp hp
+  exact List.mem_append_left _ (List.mem_flatMap.mpr ⟨r, hs hr, hp⟩)
 
 /-- No literal occurs in `t`. -/
 def Term.LitFree (t : Term) : Prop := ∀ s ∈ t.subterms, ¬ s.isLit
@@ -120,7 +117,6 @@ theorem Expr.evalList_litFree {σ : Env}
 
 end
 
-
 theorem Term.LitFree.subterm {t s : Term} (h : t.LitFree) (hs : s ∈ t.subterms) : s.LitFree :=
   fun u hu => h u (hu.trans hs)
 
@@ -131,44 +127,20 @@ theorem Database.LitFree.lookup {db : Database} (hw : db.WF) (h : db.LitFree)
 
 def Action.NoLits (a : Action) : Prop := a.litFreeB = true
 
-def Cmd.NoLits (c : Cmd) : Prop := ∀ r ∈ c.rules, ∀ a ∈ r.actions, a.NoLits
+def Schedule.NoLits (c : Schedule) : Prop := ∀ r ∈ c.rules, ∀ a ∈ r.actions, a.NoLits
 
 theorem Action.evalTerms_litFree {σ : Env} {a : Action} (hl : a.NoLits)
     (hs : ∀ v t, Env.lookup v σ = some t → t.LitFree) : a.EvalTerms σ Term.LitFree := by
   cases a with
-  | expr e | delete e => exact fun t ht => Expr.eval_litFree hs e hl ht
+  | expr e => exact fun t ht => Expr.eval_litFree hs e hl ht
+  | subsume f es => exact fun t ht => Expr.eval_litFree hs (.app f es) hl ht
   | union a b =>
     have hl' := Bool.and_eq_true_iff.mp hl
     exact ⟨fun t ht => Expr.eval_litFree hs a hl'.1 ht,
       fun t ht => Expr.eval_litFree hs b hl'.2 ht⟩
 
-theorem evalAction_litFree {σ : Env} {db db' : Database} (hw : db.WF) (h : db.LitFree)
-    (hs : ∀ v t, Env.lookup v σ = some t → t.LitFree)
-    {a : Action} (hl : a.litFreeB = true) (hv : evalAction σ db a = some db') : db'.LitFree := by
-  have hh := evalAction_preserves (P := Term.LitFree)
-    (fun _ ht _ hsub => ht.subterm hsub) (fun _ ht => h.term hw ht)
-    (Action.evalTerms_litFree hl hs) hv
-  exact fun t ht => hh t ht t (.refl _)
-
-theorem evalActions_litFree {σ : Env} {db db' : Database} (hw : db.WF) (h : db.LitFree)
-    (hs : ∀ v t, Env.lookup v σ = some t → t.LitFree)
-    {as : List Action} (hl : ∀ a ∈ as, a.NoLits) (hv : evalActions σ db as = some db') :
-    db'.LitFree := by
-  have hh := evalActions_preserves (P := Term.LitFree)
-    (fun _ ht _ hsub => ht.subterm hsub) (fun _ ht => h.term hw ht)
-    (fun a ha => Action.evalTerms_litFree (hl a ha) hs) hv
-  exact fun t ht => hh t ht t (.refl _)
-
-theorem evalLocalActions_litFree {db db' : Database} (hw : db.WF) (h : db.LitFree)
-    {as : List Action} (hl : ∀ a ∈ as, a.NoLits) {σ : Env}
-    (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) (hv : evalActions σ db as = some db') : db'.LitFree :=
-  evalActions_litFree hw h (h.lookup hw hσ) hl hv
-
 structure Database.NoLits (db : Database) : Prop where
   terms : db.LitFree
-
-theorem Database.empty_noLits : Database.empty.NoLits :=
-  ⟨Database.empty_litFree⟩
 
 theorem Database.NoLits.runRules {R : List Rule} {db : Database} (hw : db.WF)
     (h : db.NoLits) (hn : ∀ r ∈ R, ∀ a ∈ r.actions, a.NoLits) : (RunRules R db).NoLits := by
@@ -176,100 +148,13 @@ theorem Database.NoLits.runRules {R : List Rule} {db : Database} (hw : db.WF)
   have hh := RunRules.preserves_evalTerms (R := R) (P := Term.LitFree)
     (fun _ ht _ hsub => ht.subterm hsub) (fun _ ht => h.terms.term hw ht)
     (fun r hr σ hσ a ha => Action.evalTerms_litFree (hn r hr a ha)
-      (h.terms.lookup hw hσ.1.2))
+      (h.terms.lookup hw hσ.1.mem_terms))
   exact fun t ht => hh t ht t (.refl _)
 
-theorem cmdStep_noLits {db db' : Database} (hw : db.WF) (h : db.NoLits)
-    {c : Cmd} (hn : c.NoLits) (hs : CmdStep db c db') : db'.NoLits := by
-  cases c with
-  | run R => subst db'; exact h.runRules hw hn
-  | saturate R =>
-    induction hs with
-    | fixpoint => exact h.runRules hw hn
-    | again _ _ ih => exact ih (RunRules.wf hw) (h.runRules hw hn)
-
-theorem programStep_noLits {db db' : Database} (hw : db.WF) (h : db.NoLits)
-    {p : List Cmd} (hn : ∀ c ∈ p, c.NoLits) (hs : ProgramStep db p db') : db'.NoLits := by
-  induction hs with
-  | nil => exact h
-  | cons hc _ ih =>
-    exact ih (hc.wf hw) (cmdStep_noLits hw h (hn _ (by simp)) hc)
-      (fun c hc => hn c (by simp [hc]))
-
-def Actions.UnionRunnable (as : List Action) (db : Database) : Prop :=
-  Actions.UnionFree as ∨ (db.LitFree ∧ ∀ a ∈ as, a.NoLits)
-
-theorem evalActions_isSome_of_builds {σ : Env} {db : Database} {Γ : Scope}
-    (hm : Γ.Models σ) (hw : db.WF) (hσ : ∀ b ∈ σ, b.2 ∈ db.terms)
-    {as : List Action} (hsc : Actions.Scoped as Γ) (hr : Actions.UnionRunnable as db) :
-    ∃ db', evalActions σ db as = some db' := by
-  apply evalActions_isSome_of_scoped hm hsc
-  intro a ha e₁ e₂ he t₁ t₂ h₁ h₂
-  subst a
-  rcases hr with hu | ⟨hl, he⟩
-  · have ha' : ∀ a ∈ as, a.UnionFree := by
-      clear ha hsc
-      induction as with
-      | nil => simp
-      | cons a as ih =>
-        exact List.forall_mem_cons.mpr ⟨hu.1, ih hu.2⟩
-    exact (ha' _ ha).elim
-  · have hs := Action.evalTerms_litFree (he _ ha) (hl.lookup hw hσ)
-    exact fun hn => hn.elim (hs.1 _ h₁ _ (.refl _)) (hs.2 _ h₂ _ (.refl _))
-
-theorem evalAction_isSome_of_builds {σ : Env} {db : Database} {Γ : Scope}
-    (hm : Γ.Models σ) (hw : db.WF) (hσ : ∀ b ∈ σ, b.2 ∈ db.terms)
-    {a : Action} (hsc : a.Scoped Γ) (hr : Actions.UnionRunnable [a] db) :
-    ∃ db', evalAction σ db a = some db' := by
-  obtain ⟨d, hd⟩ := evalActions_isSome_of_builds (as := [a]) hm hw hσ ⟨hsc, trivial⟩ hr
-  refine ⟨d, ?_⟩
-  simpa [evalActions] using hd
-
-theorem evalLocalActions_isSome_of_builds {db : Database} (hw : db.WF) {r : Rule}
-    (hsc : Actions.Scoped r.actions (Query.bind r.query []))
-    (hr : Actions.UnionRunnable r.actions db) {σ : Env}
-    (hq : ValidQuerySubst db r.query σ) : ∃ d, evalActions σ db r.actions = some d := by
-  have hm : (Query.bind r.query []).Models σ := by
-    simpa using Query.bind_models Scope.Models.empty hq
-  exact evalActions_isSome_of_builds hm hw hq.mem_terms hsc hr
-
-theorem Cmd.NoLits.of_domain {P : Program} (_hdom : P.Fragment)
-    (hlit : ∀ c ∈ P.commands, c.litFreeB = true) {c : Cmd} (hc : c ∈ P.commands) : c.NoLits := by
+theorem Schedule.NoLits.of_domain {P : Program} (_hdom : P.Fragment)
+    (hlit : P.schedule.litFreeB = true) {S : Schedule} (hs : S.rules ⊆ P.rules) :
+    S.NoLits := by
   intro r hr a ha
-  exact List.all_eq_true.mp (List.all_eq_true.mp (hlit c hc) r hr) a ha
-
-/-- **`Database.NoLits` at every state the source run reaches**, under `noLitUnion`'s second
-arm. Applied to a *prefix* of the program it is the invariant at the state a firing command
-starts from. -/
-theorem noLits_of_programStep {P : Program} (hdom : P.Fragment)
-    (hlit : ∀ c ∈ P.commands, c.litFreeB = true) {p : List Cmd} (hp : ∀ c ∈ p, c ∈ P.commands)
-    {sd : Database} (hstep : ProgramStep Database.empty p sd) : sd.NoLits :=
-  programStep_noLits Database.WF.empty Database.empty_noLits
-    (fun c hc => Cmd.NoLits.of_domain hdom hlit (hp c hc))
-    hstep
-
-/-- `Expr.Scoped` in the scope. -/
-theorem Expr.Scoped.mono {e : Expr} {Γ Γ' : Scope} (hsub : ∀ v ∈ Γ, v ∈ Γ')
-    (h : e.Scoped Γ) : e.Scoped Γ' := fun v hv => hsub v (h v hv)
-
-@[inherit_doc Expr.Scoped.mono]
-theorem Action.Scoped.mono {a : Action} {Γ Γ' : Scope} (hsub : ∀ v ∈ Γ, v ∈ Γ')
-    (h : a.Scoped Γ) : a.Scoped Γ' := by
-  cases a with
-  | expr e | delete e => exact ⟨h.1, Expr.Scoped.mono hsub h.2⟩
-  | union e₁ e₂ => exact ⟨Expr.Scoped.mono hsub h.1, Expr.Scoped.mono hsub h.2⟩
-
-@[inherit_doc Expr.Scoped.mono]
-theorem Actions.Scoped.mono : ∀ (as : List Action) {Γ Γ' : Scope}, (∀ v ∈ Γ, v ∈ Γ') →
-    Actions.Scoped as Γ → Actions.Scoped as Γ' := by
-  intro as
-  induction as with
-  | nil => intro _ _ _ _; trivial
-  | cons a as ih =>
-    intro Γ Γ' hsub h
-    exact ⟨Action.Scoped.mono hsub h.1, ih hsub h.2⟩
-
-/-- An environment models its own domain. -/
-theorem Scope.Models.dom (σ : Env) : Scope.Models (Env.dom σ) σ := fun _ => Iff.rfl
+  exact List.all_eq_true.mp (List.all_eq_true.mp hlit r (hs hr)) a ha
 
 end Egglog

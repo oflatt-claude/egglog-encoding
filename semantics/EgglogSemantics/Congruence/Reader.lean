@@ -4,48 +4,54 @@ import EgglogSemantics.Impl.Interp
 /-!
 # Reading the congruence target, computed
 
-A source term is represented by recursively joining view rows on its children's ids. Two
-terms are equivalent when they have a common resulting id. The link to `ViewRepr` belongs
-with the compiler proofs.
+Compute the ids assigned to source terms by live union-find edges, corresponding to `Repr`.
+Two terms are equivalent when each reads to exactly one id and the ids agree.
 -/
 
 namespace Egglog.Congruence
 
-/-- Pointwise membership: `ks` picks, per column, one of the ids that column's child was
-given. `false` at unequal lengths, which is what makes a view row of the wrong width no
-row at all. -/
-def memAll : List (List Term) → List Term → Bool
-  | [], [] => true
-  | r :: rs, k :: ks => decide (k ∈ r) && memAll rs ks
-  | _, _ => false
+/-- The parents the live union-find edges give a key. -/
+def parentsF (d : FDatabase) (k : Term) : List Term :=
+  d.terms.filterMap fun t => match t with
+    | .app g [k', p] => if g == ufName && k' == k && !d.subsumed.contains t then some p else none
+    | _ => none
 
-/-- The id a view row gives the source application `f a…`, or `none` where the term is
-not one: the head has to be `f`'s view, the width the key plus the single id column, and
-the key columns ids of the children, which `rs` carries. -/
-def viewIdOf (rs : List (List Term)) (f : FnName) (n : Nat) : Term → Option Term
-  | .app g cs =>
-      if g = viewName f ∧ cs.length = n + 1 ∧ memAll rs (cs.take n) = true then
-        (cs.drop n).head?
-      else none
-  | .lit _ => none
+/-- Pointwise: each child has a live edge to one of the ids its column was given. `false`
+at unequal lengths, which is what makes an application of the wrong width no match. -/
+def edgesInto (d : FDatabase) : List (List Term) → List Term → Bool
+  | [], [] => true
+  | r :: rs, b :: bs => (parentsF d b).any (fun p => decide (p ∈ r)) && edgesInto d rs bs
+  | _, _ => false
 
 mutual
 
-/-- The ids the target gives a source term. A literal is its own id and nothing else's:
-`encodeBuild` emits no view for a literal, so a literal never keys a view row. -/
-def viewReprsF (d : FDatabase) : Term → List Term
+/-- The ids the target gives a source term. A literal is its own id and nothing else's. -/
+def reprsF (d : FDatabase) : Term → List Term
   | .lit l => [Term.lit l]
-  | .app f as => d.terms.filterMap (viewIdOf (viewReprsListF d as) f as.length)
+  | .app f as =>
+      let rs := reprsListF d as
+      d.terms.flatMap fun t => match t with
+        | .app g bs => if g == f && edgesInto d rs bs then parentsF d t else []
+        | .lit _ => []
 
-/-- `viewReprsF` over an argument list, one id list per column. -/
-def viewReprsListF (d : FDatabase) : List Term → List (List Term)
+/-- `reprsF` over an argument list, one id list per column. -/
+def reprsListF (d : FDatabase) : List Term → List (List Term)
   | [] => []
-  | t :: ts => viewReprsF d t :: viewReprsListF d ts
+  | t :: ts => reprsF d t :: reprsListF d ts
 
 end
 
-/-- `SameClass`, computed: one id the target gives both terms. -/
+/-- The id of a source term, or `none` if there are zero or multiple readings. At a rebuild
+fixpoint every held source term has exactly one id. -/
+def idF (d : FDatabase) (t : Term) : Option Term :=
+  match (reprsF d t).dedup with
+  | [e] => some e
+  | _ => none
+
+/-- Both terms have an id, and it is the same one. -/
 def sameClassF (d : FDatabase) (a b : Term) : Bool :=
-  (viewReprsF d a).any fun e => decide (e ∈ viewReprsF d b)
+  match idF d a, idF d b with
+  | some x, some y => x == y
+  | _, _ => false
 
 end Egglog.Congruence

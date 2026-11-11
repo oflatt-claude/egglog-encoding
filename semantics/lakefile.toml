@@ -24,7 +24,7 @@ rev = "v4.32.2"
 name = "EgglogSemantics"
 
 [[lean_lib]]
-name = "EgglogPaper"
+name = "ExtlogTheorems"
 
 # Writes the differential-test cases; see semantics/difftest.sh.
 [[lean_exe]]

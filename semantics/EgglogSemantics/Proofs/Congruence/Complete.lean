@@ -1,253 +1,543 @@
-import EgglogSemantics.Proofs.Congruence.Relational
-import EgglogSemantics.Proofs.Congruence.SourceSetup
-import EgglogSemantics.Proofs.Congruence.Globals
-import EgglogSemantics.Proofs.Congruence.Prelude
+import EgglogSemantics.Proofs.Congruence.Flatten
+import EgglogSemantics.Proofs.Congruence.Invariant
+import EgglogSemantics.Proofs.Congruence.Atoms
+import EgglogSemantics.Proofs.Congruence.Sound
+import EgglogSemantics.Proofs.InterpBase
 
-/-! Command simulation and completeness of congruence compilation. -/
+/-! Completeness of the compiled queries at a canonical state: a source match extends, on
+the fresh variables, to a match of the flattened pattern, and every id evaluates to the
+representative of the source class. -/
 
 namespace Egglog.Congruence
 
-/-- Source and compiled command registration preserve exact rule correspondence. -/
-theorem RulesEncoded.step {P : Program} {src post : Database} {d e : FDatabase}
-    (h : RulesEncoded P src d) {c : Cmd} (hs : CmdStep src c post) {i : Nat}
-    (run : d.execProgramM ((encodeCmd i c).map Command.command) = some e) :
-    RulesEncoded P post e := by
-  intro r
-  rw [Egglog.FDatabase.execProgramM_mem_rules_iff run, rule_mem_encodeCmd, h r]
-  simp only [hs.mem_rules_iff, or_and_right, exists_or, or_assoc]
+/-! ### Source representatives -/
 
-/-- Prelude table metadata survives every subsequent compiled command. -/
-theorem RebuildTables.step {P : Program} {d e : FDatabase} (h : RebuildTables P d)
-    {c : Cmd} {i : Nat}
-    (run : d.execProgramM ((encodeCmd i c).map Command.command) = some e) :
-    RebuildTables P e := by
-  have hsig : e.sig = d.sig := execProgram_sig_of_noDecl (by
-    intro cmd hcmd
-    apply cmds_noDecl [c] i cmd
-    simpa only [encodeCmds, List.append_nil] using hcmd) run
-  exact ⟨fun f k hk => hsig ▸ h.view f k hk,
-    fun f k hk => Egglog.FDatabase.execProgramM_rules_mono run _ (h.output f k hk),
-    fun f k hk j hj => Egglog.FDatabase.execProgramM_rules_mono run _ (h.child f k hk j hj)⟩
+/-- The representative of a term's source class. -/
+noncomputable def srep (src : Database) (t : Term) : Term :=
+  open Classical in
+  if h : ∃ r ∈ src.reps, Cong src t r then h.choose else t
 
-/-- The state carried between original commands. -/
-structure Simulation (P : Program) (src : Database) (d : FDatabase) : Prop where
-  rebuilt : Rebuilt d
-  sound : SoundTerms d src
-  reads : SourceReads d.toDatabase src
-  tables : RebuildTables P d
-  rules : RulesEncoded P src d
-  sig : d.sig = encodeSig P
-  env : d.env = []
+theorem srep_spec {src : Database} (hr : src.HasReps) {t : Term} (ht : Cong src t t) :
+    srep src t ∈ src.reps ∧ Cong src t (srep src t) := by
+  have hex : ∃ r ∈ src.reps, Cong src t r := hr t ht
+  unfold srep
+  rw [dif_pos hex]
+  exact hex.choose_spec
 
-theorem Simulation.state {P : Program} {src : Database} {d : FDatabase}
-    (h : Simulation P src d) : RunState src d :=
-  ⟨h.rebuilt.inv, h.rebuilt.noUnions, h.rebuilt.shape, h.rebuilt.uf, h.sound,
-    h.rebuilt.history, h.rebuilt.descend⟩
+theorem srep_eq_of_mem_reps {src : Database} (hr : src.HasReps) {t : Term} (ht : t ∈ src.reps) :
+    srep src t = t := by
+  have hc : Cong src t t := Database.toCong ht.1
+  obtain ⟨h₁, h₂⟩ := srep_spec hr hc
+  exact Database.reps_eq_of_cong h₁ ht h₂.symm
 
-theorem simulation_prelude {P : Program} (hdom : P.Fragment) {d : FDatabase}
-    (run : FDatabase.empty.execProgramM ((encodePrelude P).map Command.command) = some d) :
-    Simulation P Database.empty d := by
-  obtain ⟨hs, hr, hreads, ht, hstore, hsig⟩ := prelude_state hdom run
-  exact ⟨hr, hs.sound, hreads, ht, hstore, hsig, Egglog.FDatabase.execProgramM_env run⟩
+theorem srep_eq_of_cong {src : Database} (hr : src.HasReps) {a b : Term} (hab : Cong src a b) :
+    srep src a = srep src b := by
+  obtain ⟨h₁, h₂⟩ := srep_spec hr (hab.trans hab.symm)
+  obtain ⟨h₃, h₄⟩ := srep_spec hr (hab.symm.trans hab)
+  exact Database.reps_eq_of_cong h₁ h₃ (h₂.symm.trans (hab.trans h₄))
 
-/-- Data simulation and generic metadata preservation compose to a full command step. -/
-theorem Simulation.step_of_data {P : Program} {src post : Database} {d e : FDatabase}
-    (h : Simulation P src d) {c : Cmd} (hs : CmdStep src c post) {i : Nat}
-    (run : d.execProgramM ((encodeCmd i c).map Command.command) = some e)
-    (hr : Rebuilt e) (hsound : SoundTerms e post) (hreads : SourceReads e.toDatabase post) :
-    Simulation P post e := by
-  have hsig : e.sig = d.sig := execProgram_sig_of_noDecl (by
-    intro cmd hcmd
-    apply cmds_noDecl [c] i cmd
-    simpa only [encodeCmds, List.append_nil] using hcmd) run
-  exact ⟨hr, hsound, hreads, h.tables.step run, h.rules.step hs run, hsig.trans h.sig,
-    (Egglog.FDatabase.execProgramM_env run).trans h.env⟩
+theorem srep_mem_terms {src : Database} (hr : src.HasReps) {t : Term} (ht : Cong src t t) :
+    srep src t ∈ src.terms := (srep_spec hr ht).1.1
 
-/-- Source declarations require no target commands because the prelude declared all tables. -/
-theorem Simulation.decl {P : Program} {src post : Database} {d e : FDatabase}
-    (h : Simulation P src d) (hcs : src.sig.AllConstructors) {f : FnName} {dc : FnDecl}
-    (hdecl : (Cmd.decl f dc).CtorDecl) (hs : CmdStep src (.decl f dc) post) {i : Nat}
-    (run : d.execProgramM ((encodeCmd i (.decl f dc)).map Command.command) = some e) :
-    Simulation P post e := by
-  have hde : d = e := Option.some.inj run
-  subst e
-  have heq := source_setup_eqs hcs (c := .decl f dc) trivial hdecl hs
-  exact h.step_of_data hs run h.rebuilt (h.sound.mono_src hs.contained.eqs)
-    (h.reads.restrict (src' := post) ⟨by rw [heq]⟩)
+/-- A literal the source holds is its own representative. -/
+theorem lit_mem_reps {src : Database} (hw : src.WF) {l : Lit} (ht : Term.lit l ∈ src.terms) :
+    Term.lit l ∈ src.reps := by
+  refine ⟨ht, fun s _ hs hlt => ?_⟩
+  rw [InferredFacts.infers_eq_of_isLit hw (InferredFacts.congr_iff_infers.mp hs) (Or.inr rfl)]
+    at hlt
+  simp at hlt
 
-/-- Registering an unrelated union-free rule preserves rebuilding closure. -/
-theorem Rebuilt.addRule {d : FDatabase} (h : Rebuilt d) {r : Rule}
-    (hu : Actions.UnionFree r.actions) (hR : r.ruleset ≠ rebuildRuleset) :
-    Rebuilt { d with rules := r :: d.rules } := by
-  refine ⟨h.inv.setEnvRules h.inv.wf.envInTerms,
-    ⟨h.noUnions.eqs, h.noUnions.sig, ?_⟩, h.shape, h.uf, h.descend, h.history, ?_, ?_⟩
-  · intro s hs
-    rcases List.mem_cons.mp hs with rfl | hs
-    · exact hu
-    · exact h.noUnions.rules s hs
-  · rw [Egglog.FDatabase.settled_setRules]; exact h.settled
-  · apply h.closed.setRules
-    intro s hs hsR
-    rcases List.mem_cons.mp hs with rfl | hs
-    · exact (hR hsR).elim
-    · exact hs
+theorem Rel.root_eq_srep {src d : Database} (h : Rel src d) (hc : Canon d) (hw : src.WF)
+    {k : Term} (hk : k ∈ Keys d) : root d k = srep src k := by
+  obtain ⟨h₁, h₂⟩ := (h.edge_iff_rep hc hw hk).mp (h.edge_root hk)
+  obtain ⟨h₃, h₄⟩ := srep_spec h.src_hasReps (h.cong_self_of_key hk)
+  exact Database.reps_eq_of_cong h₁ h₃ (h₂.symm.trans h₄)
 
-/-- Source rule registration adds the compiled rule without changing represented data. -/
-theorem Simulation.rule {P : Program} {src post : Database} {d e : FDatabase}
-    (h : Simulation P src d) (hcs : src.sig.AllConstructors) {r : Rule}
-    (hR : r.ruleset ≠ rebuildRuleset) (hs : CmdStep src (.rule r) post) {i : Nat}
-    (run : d.execProgramM ((encodeCmd i (.rule r)).map Command.command) = some e) :
-    Simulation P post e := by
-  have hde : { d with rules := encodeRule r :: d.rules } = e := Option.some.inj run
-  subst e
-  have heq := source_setup_eqs hcs (c := .rule r) trivial trivial hs
-  apply h.step_of_data hs run (h.rebuilt.addRule (encodeActions_unionFree r.actions) hR)
-    (h.sound.mono_src hs.contained.eqs)
-  exact (h.reads.restrict (src' := post) ⟨by rw [heq]⟩).mono
-    (Egglog.FDatabase.toDatabase_contained_of_lists (fun _ ht => ht) (fun _ he => he))
+/-! ### Fresh bindings -/
 
-/-- A source round followed by target rebuilding preserves the command invariant. -/
-theorem Simulation.run {P pre rest : Program} (hdom : P.Fragment)
-    (hP : P = pre ++ Cmd.run R :: rest) {src post : Database}
-    (hpre : ProgramStep Database.empty pre src) (hs : CmdStep src (.run R) post)
-    {d e : FDatabase} (h : Simulation P src d) {i : Nat}
-    (run : d.execProgramM ((encodeCmd i (.run R)).map Command.command) = some e) :
-    Simulation P post e := by
-  have hsub : ∀ c ∈ pre, c ∈ P := fun c hc => hP ▸ List.mem_append_left _ hc
-  have hstep : RunStep R src post := by
-    obtain ⟨m, hm, hcl⟩ := hs
-    obtain rfl := hm
-    exact hcl
-  obtain ⟨m, hm, hrb⟩ := Option.bind_eq_some_iff.mp run
-  have hm' : d.runRoundM R = some m := hm
-  have hrb' : m.runSaturateM rebuildRuleset runFuel = some e := by
-    simpa only [List.map_cons, List.map_nil, Egglog.FDatabase.execProgramM,
-      Egglog.FDatabase.execCmdM, Option.bind_some, Option.bind_fun_some] using hrb
-  obtain ⟨hmstate, hmreads⟩ := round_simulation hdom hP hpre hstep h.rebuilt
-    h.tables h.sound h.sig h.rules h.reads hm'
-  have hmaint : ∀ r ∈ m.rules, r.ruleset = rebuildRuleset →
-      ∃ c ∈ allMaintenanceRules P, c.command = .rule r := by
-    rw [(Egglog.FDatabase.runRoundM_fields hm').2.2]
-    exact h.rules.rebuild_only hdom hpre hsub
-  obtain ⟨hre, hse⟩ := hmstate.rebuilt hmaint hrb'
-  exact h.step_of_data hs run hre hse
-    (hmreads.mono (Egglog.FDatabase.runSaturateM_toDatabase_contained hrb'))
+/-- Bindings of exactly the fresh variables of an interval. -/
+structure Fresh (n m : Nat) (ρ : Env) : Prop where
+  fresh : ∀ b ∈ ρ, FreshIn n m b.1
+  nodup : (Env.dom ρ).Nodup
+  complete : ∀ k, n ≤ k → k < m → freshVar k ∈ Env.dom ρ
 
-/-- Saturation is simulated against its final source state, then explicitly rebuilt. -/
-theorem Simulation.saturate {P pre rest : Program} (hdom : P.Fragment)
-    (hP : P = pre ++ Cmd.saturate R :: rest) {src post : Database}
-    (hpre : ProgramStep Database.empty pre src) (hs : CmdStep src (.saturate R) post)
-    {d e : FDatabase} (h : Simulation P src d) {i : Nat}
-    (run : d.execProgramM ((encodeCmd i (.saturate R)).map Command.command) = some e) :
-    Simulation P post e := by
-  have hsub : ∀ c ∈ pre, c ∈ P := fun c hc => hP ▸ List.mem_append_left _ hc
-  have hPpost : P = (pre ++ [Cmd.saturate R]) ++ rest := by
-    simpa only [List.append_assoc, List.singleton_append] using hP
-  have hnext : ProgramStep Database.empty (pre ++ [Cmd.saturate R]) post :=
-    hpre.append (.cons hs .nil)
-  have hreach := cmdStep_saturate_iff.mp hs
-  have hstore : RulesEncoded P post d := by
-    simpa only [RulesEncoded, cmdStep_rules_of_saturate hs] using h.rules
-  have hR : R ∈ P.saturateRulesets := by
-    rw [hP]
-    simp [Program.saturateRulesets]
-  obtain ⟨m, hm, hrb⟩ := Option.bind_eq_some_iff.mp run
-  have hm' : d.runSaturateM R runFuel = some m := hm
-  have hrb' : m.runSaturateM rebuildRuleset runFuel = some e := by
-    simpa only [List.map_cons, List.map_nil, Egglog.FDatabase.execProgramM,
-      Egglog.FDatabase.execCmdM, Option.bind_some, Option.bind_fun_some] using hrb
-  obtain ⟨hmstate, _, hmreads⟩ := saturation_simulation hdom hPpost hnext hreach hpre.env
-    (h.state.mono_src hs.contained) h.tables h.sig hstore h.reads hR hm'
-  have hmaint : ∀ r ∈ m.rules, r.ruleset = rebuildRuleset →
-      ∃ c ∈ allMaintenanceRules P, c.command = .rule r := by
-    rw [(Egglog.FDatabase.runSaturateM_fields runFuel hm').2.2]
-    exact h.rules.rebuild_only hdom hpre hsub
-  obtain ⟨hre, hse⟩ := hmstate.rebuilt hmaint hrb'
-  exact h.step_of_data hs run hre hse
-    (hmreads.mono (Egglog.FDatabase.runSaturateM_toDatabase_contained hrb'))
+theorem Fresh.nil (n : Nat) : Fresh n n [] :=
+  ⟨by simp, by simp [Env.dom], fun k h₁ h₂ => by omega⟩
 
-/-- Each original command preserves the simulation invariant. -/
-theorem Simulation.step {P pre rest : Program} (hdom : P.Fragment) {c : Cmd}
-    (hP : P = pre ++ c :: rest) {src post : Database}
-    (hpre : ProgramStep Database.empty pre src) (hs : CmdStep src c post)
-    {d e : FDatabase} (h : Simulation P src d) {i : Nat}
-    (run : d.execProgramM ((encodeCmd i c).map Command.command) = some e) :
-    Simulation P post e := by
-  have hsub : ∀ c ∈ pre, c ∈ P := fun c hc => hP ▸ List.mem_append_left _ hc
-  have hmem : c ∈ P := hP ▸ List.mem_append_right _ List.mem_cons_self
-  have hcs := (hpre.ctorState Database.CtorState.empty
-    (fun c hc => hdom.ctorsOnly c (hsub c hc))).sig
-  cases c with
-  | decl f dc => exact h.decl hcs (hdom.ctorsOnly _ hmem) hs run
-  | rule r => exact h.rule hcs (ruleset_ne_rebuild hdom hmem) hs run
-  | action a =>
-      obtain ⟨hr, hs', hreads⟩ := global_cmd_simulation hdom hsub hpre hmem hs
-        h.state h.tables h.sig h.env h.rules h.reads run
-      exact h.step_of_data hs run hr hs' hreads
-  | run R => exact Simulation.run hdom hP hpre hs h run
-  | saturate R => exact Simulation.saturate hdom hP hpre hs h run
-  | check q =>
-      obtain ⟨_, rfl⟩ := hs
-      have he : d.execCmdM (.check (encodeQuery q 0).1) = some e := by
-        simpa only [encodeCmd, List.map_cons, List.map_nil,
-          Egglog.FDatabase.execProgramM, Option.bind_fun_some] using run
-      rw [Egglog.FDatabase.execCheck_eq he]
-      exact h
+theorem Fresh.not_mem_dom {n m : Nat} {ρ : Env} (h : Fresh n m ρ) {v : Var}
+    (hv : ∀ j, n ≤ j → j < m → v ≠ freshVar j) : v ∉ Env.dom ρ := by
+  intro hmem
+  obtain ⟨t, ht⟩ := Env.mem_dom_iff.mp hmem
+  obtain ⟨j, hj₁, hj₂, hj⟩ := h.fresh _ ht
+  exact hv j hj₁ hj₂ hj
 
-/-- Compose command simulations along the original program. -/
-theorem Simulation.program {P pre rest : Program} (hdom : P.Fragment)
-    (hP : P = pre ++ rest) {src post : Database}
-    (hpre : ProgramStep Database.empty pre src) (hs : ProgramStep src rest post)
-    {d e : FDatabase} (h : Simulation P src d) {i : Nat}
-    (run : d.execProgramM ((encodeCmds rest i).map Command.command) = some e) :
-    Simulation P post e := by
-  induction rest generalizing pre src d i with
-  | nil =>
-      obtain rfl := hs.nil_inv
-      obtain rfl := Option.some.inj run
-      exact h
-  | cons c cs ih =>
-      obtain ⟨mid, hcmd, hrest⟩ := hs.cons_inv
-      have run' : d.execProgramM ((encodeCmd i c).map Command.command ++
-          (encodeCmds cs (i + 1)).map Command.command) = some e := by
-        simpa only [encodeCmds, List.map_append] using run
-      obtain ⟨m, hm, he⟩ := Egglog.FDatabase.execProgramM_append run'
-      have hmid := Simulation.step hdom hP hpre hcmd h hm
-      have hP' : P = (pre ++ [c]) ++ cs := by
-        simpa only [List.append_assoc, List.singleton_append] using hP
-      exact ih hP' (hpre.append (.cons hcmd .nil)) hrest hmid he
+theorem Fresh.lookup_none {n m : Nat} {ρ : Env} (h : Fresh n m ρ) {v : Var}
+    (hv : ∀ j, n ≤ j → j < m → v ≠ freshVar j) : Env.lookup v ρ = none :=
+  Env.lookup_eq_none_iff.mpr (h.not_mem_dom hv)
 
-/-- Successful source and compiled executions satisfy the full simulation invariant. -/
-theorem execM_encode_simulation {P : Program} (hdom : P.Fragment)
-    {src : Database} (hsrc : ProgramStep Database.empty P src)
-    {d : FDatabase} (run : execM (encode P) = some d) : Simulation P src d := by
-  change FDatabase.empty.execProgramM _ = some d at run
-  rw [encode, compile, List.map_append] at run
-  obtain ⟨m, hm, he⟩ := Egglog.FDatabase.execProgramM_append run
-  exact Simulation.program hdom (pre := []) (by simp) .nil hsrc
-    (simulation_prelude hdom hm) he
+theorem Fresh.lookup_none_of_notFresh {n m : Nat} {ρ : Env} (h : Fresh n m ρ) {v : Var}
+    (hv : NotFresh v) : Env.lookup v ρ = none :=
+  h.lookup_none fun j _ _ => hv j
 
-/-- Source congruence agrees with the explicit table reading after congruence compilation. -/
-theorem encode_corresponds {P : Program} (hdom : P.Fragment)
-    {src : Database} (hsrc : ProgramStep Database.empty P src)
-    {d : FDatabase} (run : execM (encode P) = some d)
-    (a b : Term) (ha : a ∈ src.terms) (hb : b ∈ src.terms) :
-    Cong src a b ↔ SameClass d.toDatabase a b := by
-  have h := execM_encode_simulation hdom hsrc run
-  have hbuild := termsBuild_of_programStep hdom.ctorsOnly hsrc
-  have hctors := ctorsIn_of_prefixStep hdom (fun _ hm => hm) hsrc
-  have hcoverage := sourceConstructors_of_programStep hdom (fun _ hm => hm) hsrc h.sig
-  have hw := hsrc.wf Database.WF.empty
-  have hlead := h.rebuilt.viewLeader h.tables h.sound hbuild hctors hcoverage hw
-  exact h.rebuilt.corresponds h.tables h.sound hbuild hctors hcoverage hw h.reads.terms
-    (unionsRead_of_unionsJoined hlead h.reads.unions) a b ha hb
+theorem Fresh.append {n m k : Nat} {ρ₁ ρ₂ : Env} (h₁ : Fresh n m ρ₁) (h₂ : Fresh m k ρ₂)
+    (hnm : n ≤ m) (hmk : m ≤ k) : Fresh n k (ρ₁ ++ ρ₂) where
+  fresh := by
+    intro b hb
+    rcases List.mem_append.mp hb with hb | hb
+    · exact (h₁.fresh b hb).mono (Nat.le_refl _) hmk
+    · exact (h₂.fresh b hb).mono hnm (Nat.le_refl _)
+  nodup := by
+    rw [Env.dom_append]
+    refine List.Nodup.append h₁.nodup h₂.nodup ?_
+    intro v hv₁ hv₂
+    obtain ⟨t₁, ht₁⟩ := Env.mem_dom_iff.mp hv₁
+    obtain ⟨t₂, ht₂⟩ := Env.mem_dom_iff.mp hv₂
+    obtain ⟨j₁, -, hj₁, he₁⟩ := h₁.fresh _ ht₁
+    obtain ⟨j₂, hj₂, -, he₂⟩ := h₂.fresh _ ht₂
+    have := freshVar_inj (he₁.symm.trans he₂)
+    omega
+  complete := by
+    intro j hj₁ hj₂
+    rw [Env.dom_append, List.mem_append]
+    by_cases hlt : j < m
+    · exact Or.inl (h₁.complete j hj₁ hlt)
+    · exact Or.inr (h₂.complete j (by omega) hj₂)
 
-/-- Completeness with structural matching and table operations only in the target. -/
-theorem encode_corresponds_relational {P : Program} (hdom : P.Fragment)
-    {src : Database} (hsrc : ProgramStep Database.empty P src)
-    {d : FDatabase} (run : Relational.exec (encode P) (encode_unionFree P) = some d)
-    (a b : Term) (ha : a ∈ src.terms) (hb : b ∈ src.terms) :
-    Cong src a b ↔ SameClass d.toDatabase a b :=
-  encode_corresponds hdom hsrc ((encode_relational P).symm.trans run) a b ha hb
+/-- The source substitution binds no generated variable. -/
+def NoFreshDom (σ : Env) : Prop := ∀ k, freshVar k ∉ Env.dom σ
+
+theorem noFreshDom_of_notFresh {σ : Env} (h : ∀ v ∈ Env.dom σ, NotFresh v) : NoFreshDom σ :=
+  fun k hk => h _ hk k rfl
+
+/-- A lookup through the source bindings and a fresh block ignores a later fresh block. -/
+theorem lookup_left {σ ρ₁ ρ₂ : Env} {m k : Nat} (h₂ : Fresh m k ρ₂) {v : Var}
+    (hv : ∀ j, m ≤ j → j < k → v ≠ freshVar j) :
+    Env.lookup v (σ ++ (ρ₁ ++ ρ₂)) = Env.lookup v (σ ++ ρ₁) := by
+  by_cases hσ : v ∈ Env.dom σ
+  · rw [Env.lookup_append_of_mem hσ, Env.lookup_append_of_mem hσ]
+  · rw [Env.lookup_append_of_not_mem hσ, Env.lookup_append_of_not_mem hσ]
+    by_cases h₁ : v ∈ Env.dom ρ₁
+    · rw [Env.lookup_append_of_mem h₁]
+    · rw [Env.lookup_append_of_not_mem h₁, h₂.lookup_none hv, Env.lookup_eq_none_iff.mpr h₁]
+
+/-- A lookup through the source bindings and a later fresh block ignores an earlier one. -/
+theorem lookup_right {σ ρ₁ ρ₂ : Env} {n m : Nat} (h₁ : Fresh n m ρ₁) {v : Var}
+    (hv : ∀ j, n ≤ j → j < m → v ≠ freshVar j) :
+    Env.lookup v (σ ++ (ρ₁ ++ ρ₂)) = Env.lookup v (σ ++ ρ₂) := by
+  by_cases hσ : v ∈ Env.dom σ
+  · rw [Env.lookup_append_of_mem hσ, Env.lookup_append_of_mem hσ]
+  · rw [Env.lookup_append_of_not_mem hσ, Env.lookup_append_of_not_mem hσ,
+      Env.lookup_append_of_not_mem (h₁.not_mem_dom hv)]
+
+/-- A source variable reads through the source bindings. -/
+theorem lookup_src {σ ρ : Env} {n m : Nat} (h : Fresh n m ρ) {v : Var} (hv : NotFresh v) :
+    Env.lookup v (σ ++ ρ) = Env.lookup v σ := by
+  by_cases hσ : v ∈ Env.dom σ
+  · rw [Env.lookup_append_of_mem hσ]
+  · rw [Env.lookup_append_of_not_mem hσ, h.lookup_none_of_notFresh hv,
+      Env.lookup_eq_none_iff.mpr hσ]
+
+/-- A variable that is a source variable or fresh in `[n, m)` is not fresh in `[m, k)`. -/
+theorem not_freshIn_right {n m k : Nat} {v : Var} (h : NotFresh v ∨ FreshIn n m v) :
+    ∀ j, m ≤ j → j < k → v ≠ freshVar j := by
+  intro j hj _ hv
+  rcases h with h | ⟨i, _, hi, rfl⟩
+  · exact h j hv
+  · have := freshVar_inj hv
+    omega
+
+theorem not_freshIn_left {n m k : Nat} {v : Var} (h : NotFresh v ∨ FreshIn m k v) :
+    ∀ j, n ≤ j → j < m → v ≠ freshVar j := by
+  intro j _ hj hv
+  rcases h with h | ⟨i, hi, _, rfl⟩
+  · exact h j hv
+  · have := freshVar_inj hv
+    omega
+
+/-! ### The fresh block of an application -/
+
+/-- The names of the fresh child variables. -/
+def freshNames (next k : Nat) : List Var := (List.range k).map fun i => freshVar (next + i)
+
+theorem freshArgs_eq_map (next k : Nat) : freshArgs next k = (freshNames next k).map Expr.var := by
+  simp [freshArgs, freshNames]
+
+theorem freshNames_length (next k : Nat) : (freshNames next k).length = k := by simp [freshNames]
+
+theorem freshNames_getElem {next k i : Nat} (hi : i < k) :
+    (freshNames next k)[i]'(by rw [freshNames_length]; exact hi) = freshVar (next + i) := by
+  simp [freshNames]
+
+theorem mem_freshNames {next k : Nat} {v : Var} :
+    v ∈ freshNames next k ↔ ∃ i, i < k ∧ v = freshVar (next + i) := by
+  simp only [freshNames, List.mem_map, List.mem_range]
+  constructor
+  · rintro ⟨i, hi, rfl⟩; exact ⟨i, hi, rfl⟩
+  · rintro ⟨i, hi, rfl⟩; exact ⟨i, hi, rfl⟩
+
+theorem freshNames_nodup (next k : Nat) : (freshNames next k).Nodup := by
+  refine (List.nodup_map_iff_inj_on List.nodup_range).mpr fun i _ j _ h => ?_
+  have := freshVar_inj h
+  omega
+
+/-- The bindings of an application's fresh variables: the children of the held row and the
+row's live parent. -/
+def appBlock (next : Nat) (bs : List Term) (r : Term) : Env :=
+  (freshNames next bs.length).zip bs ++ [(freshVar (next + bs.length), r)]
+
+theorem appBlock_lookup_child {next : Nat} {bs : List Term} {r : Term} {i : Nat}
+    (hi : i < bs.length) :
+    Env.lookup (freshVar (next + i)) (appBlock next bs r) = some bs[i] := by
+  unfold appBlock
+  apply Env.lookup_append_of_some
+  have := Env.lookup_zip (freshNames next bs.length) bs (by rw [freshNames_length])
+    (freshNames_nodup _ _) i (by rw [freshNames_length]; exact hi) hi
+  rwa [freshNames_getElem hi] at this
+
+theorem appBlock_lookup_root {next : Nat} {bs : List Term} {r : Term} :
+    Env.lookup (freshVar (next + bs.length)) (appBlock next bs r) = some r := by
+  unfold appBlock
+  rw [Env.lookup_append_of_not_mem]
+  · simp
+  · intro hmem
+    have hsub := Env.dom_zip_subset (freshNames next bs.length) bs hmem
+    obtain ⟨i, hi, he⟩ := mem_freshNames.mp hsub
+    have := freshVar_inj he
+    omega
+
+theorem appBlock_fresh (next : Nat) (bs : List Term) (r : Term) :
+    Fresh next (next + bs.length + 1) (appBlock next bs r) where
+  fresh := by
+    intro b hb
+    unfold appBlock at hb
+    rcases List.mem_append.mp hb with hb | hb
+    · have := Env.mem_dom_of_mem hb
+      obtain ⟨i, hi, he⟩ := mem_freshNames.mp (Env.dom_zip_subset _ _ this)
+      exact ⟨next + i, by omega, by omega, he⟩
+    · simp only [List.mem_singleton] at hb
+      subst hb
+      exact ⟨next + bs.length, by omega, by omega, rfl⟩
+  nodup := by
+    unfold appBlock Env.dom
+    rw [List.map_append, List.map_fst_zip (by rw [freshNames_length])]
+    refine List.Nodup.append (freshNames_nodup _ _) (by simp) ?_
+    intro v hv hv'
+    simp only [List.map_cons, List.map_nil, List.mem_singleton] at hv'
+    subst hv'
+    obtain ⟨i, hi, he⟩ := mem_freshNames.mp hv
+    have := freshVar_inj he
+    omega
+  complete := by
+    intro j hj₁ hj₂
+    unfold appBlock Env.dom
+    rw [List.map_append, List.map_fst_zip (by rw [freshNames_length]), List.mem_append]
+    by_cases hlt : j < next + bs.length
+    · exact Or.inl (mem_freshNames.mpr ⟨j - next, by omega, by congr 1; omega⟩)
+    · right
+      simp only [List.map_cons, List.map_nil, List.mem_singleton]
+      congr 1
+      omega
+
+theorem appBlock_values {next : Nat} {bs : List Term} {r : Term} {b : Var × Term}
+    (hb : b ∈ appBlock next bs r) : b.2 ∈ bs ∨ b.2 = r := by
+  unfold appBlock at hb
+  rcases List.mem_append.mp hb with hb | hb
+  · exact Or.inl (List.of_mem_zip hb).2
+  · simp only [List.mem_singleton] at hb
+    subst hb
+    exact Or.inr rfl
+
+/-! ### Completeness -/
+
+variable {src d : Database}
+
+theorem matchesList_freshArgs {σ : Env} {next k : Nat}
+    (h : ∀ i, i < k → (Env.lookup (freshVar (next + i)) σ).isSome) :
+    Expr.MatchesList d σ (freshArgs next k) := by
+  rw [freshArgs_eq_map]
+  apply matchesList_map_var
+  intro v hv
+  obtain ⟨i, hi, rfl⟩ := mem_freshNames.mp hv
+  exact h i hi
+
+theorem evalList_freshArgs {σ : Env} {next : Nat} {bs : List Term}
+    (h : ∀ i (hi : i < bs.length), Env.lookup (freshVar (next + i)) σ = some bs[i]) :
+    Expr.evalList (freshArgs next bs.length) σ = some bs := by
+  rw [freshArgs_eq_map]
+  apply Expr.evalList_map_var _ _ _ (by rw [freshNames_length])
+  intro i hi hi'
+  rw [freshNames_length] at hi
+  rw [freshNames_getElem hi]
+  exact h i hi'
+
+/-- The conclusion of expression completeness. -/
+def ExprComplete (src d : Database) (e : Expr) (n : Nat) (σ : Env) : Prop :=
+  ∃ ρ, Fresh n (encodeQueryExprWith {} e n).2.2 ρ ∧ (∀ b ∈ ρ, b.2 ∈ d.terms) ∧
+    (∀ p ∈ (encodeQueryExprWith {} e n).2.1, Matches d p (σ ++ ρ)) ∧
+    Expr.Matches d (σ ++ ρ) (encodeQueryExprWith {} e n).1 ∧
+    ∃ t, e.eval σ = some t ∧ Cong src t t ∧
+      (encodeQueryExprWith {} e n).1.eval (σ ++ ρ) = some (srep src t)
+
+/-- The conclusion of argument-list completeness. -/
+def ArgsComplete (src d : Database) (es : List Expr) (n : Nat) (σ : Env) : Prop :=
+  ∃ ρ, Fresh n (encodeQueryArgsWith {} es n).2.2 ρ ∧ (∀ b ∈ ρ, b.2 ∈ d.terms) ∧
+    (∀ p ∈ (encodeQueryArgsWith {} es n).2.1, Matches d p (σ ++ ρ)) ∧
+    ∃ ts, Expr.evalList es σ = some ts ∧ (∀ t ∈ ts, Cong src t t) ∧
+      List.Forall₂ (fun x t => Expr.Matches d (σ ++ ρ) x ∧
+        x.eval (σ ++ ρ) = some (srep src t)) (encodeQueryArgsWith {} es n).1 ts
+
+mutual
+
+theorem complete_expr (h : Rel src d) (hc : Canon d) (hw : src.WF) :
+    ∀ (e : Expr) (n : Nat) {σ : Env}, e.OrderingFree → SrcNames e →
+    (∀ v ∈ e.vars, NotFresh v) → NoFreshDom σ → (∀ b ∈ σ, b.2 ∈ src.reps) →
+    Expr.Matches src σ e → ExprComplete src d e n σ
+  | .lit l, n, σ, _, _, _, _, _, hm => by
+      cases hm with
+      | lit hl =>
+        have hmem : Term.lit l ∈ src.terms := by
+          obtain ⟨w, hw', hwc⟩ := represented_witness hl.1
+          have := InferredFacts.infers_eq_of_isLit hw (InferredFacts.congr_iff_infers.mp hwc)
+            (Or.inr rfl)
+          rw [this] at hw'
+          exact hw'
+        refine ⟨[], Fresh.nil n, by simp, by rw [flat_lit]; simp, ?_, .lit l, rfl,
+          Database.toCong hmem, ?_⟩
+        · rw [flat_lit, List.append_nil]
+          exact .lit (h.lit_live_iff.mpr hmem)
+        · rw [flat_lit, List.append_nil, Expr.eval_lit,
+            srep_eq_of_mem_reps h.src_hasReps (lit_mem_reps hw hmem)]
+  | .var v, n, σ, _, _, _, _, hreps, hm => by
+      cases hm with
+      | @var _ t hv =>
+        have ht : t ∈ src.reps := hreps _ (Env.mem_of_lookup hv)
+        refine ⟨[], Fresh.nil n, by simp, by rw [flat_var]; simp, ?_, t, hv,
+          Database.toCong ht.1, ?_⟩
+        · rw [flat_var, List.append_nil]
+          exact .var hv
+        · rw [flat_var, List.append_nil, Expr.eval_var, hv, srep_eq_of_mem_reps h.src_hasReps ht]
+  | .min _ _, _, _, ho, _, _, _, _, _ => (Expr.not_orderingFree_min ho).elim
+  | .app f args, n, σ, ho, hnames, hsrc, hσ, hreps, hm => by
+      cases hm with
+      | @app _ _ ts hargs hev hlive =>
+        obtain ⟨hf, hfns⟩ := srcNames_app hnames
+        obtain ⟨ρ₁, hfr₁, hval₁, hatoms₁, ts', hev', hcong, hids⟩ :=
+          complete_args h hc hw args n (Expr.orderingFree_app ho) hfns (by simpa using hsrc) hσ
+            hreps hargs
+        obtain rfl : ts = ts' := Option.some.inj (hev.symm.trans hev')
+        rcases hflat : encodeQueryArgsWith {} args n with ⟨xs, ps, next⟩
+        rw [hflat] at hfr₁ hatoms₁ hids
+        simp only at hfr₁ hatoms₁ hids
+        have hle := flatArgs_next_le args n
+        rw [hflat] at hle
+        simp only at hle
+        have hlen := flatArgs_length args n
+        rw [hflat] at hlen
+        simp only at hlen
+        have hts : ts.length = args.length := Expr.evalList_length hev
+        -- The held row of the class.
+        have hself : Cong src (.app f ts) (.app f ts) := hlive.1
+        obtain ⟨bs, hbs, hcl⟩ := represented_app hself
+        have hbsLen : bs.length = args.length := by
+          rw [← hts]; exact (CongList.forall₂.mp hcl).length_eq.symm
+        have hkey : Term.app f bs ∈ Keys d := h.mem_keys_of_src hbs
+        set r := root d (.app f bs) with hr
+        set ρ₂ := appBlock next bs r with hρ₂
+        have hfr₂ : Fresh next (next + bs.length + 1) ρ₂ := appBlock_fresh next bs r
+        rw [hbsLen] at hfr₂
+        have hval₂ : ∀ b ∈ ρ₂, b.2 ∈ d.terms := by
+          intro b hb
+          rcases appBlock_values hb with hb | hb
+          · exact Keys.subset_terms d
+              (h.keys_subterm hkey (Term.arg_subterms hb (Term.self_mem_subterms _)))
+          · rw [hb]; exact Keys.subset_terms d (h.root_mem_keys hkey)
+        -- Lookups of the fresh child and root variables through the whole substitution.
+        have hchild : ∀ i (hi : i < args.length), Env.lookup (freshVar (next + i))
+            (σ ++ (ρ₁ ++ ρ₂)) = some (bs[i]'(by omega)) := by
+          intro i hi
+          rw [Env.lookup_append_of_not_mem (hσ _),
+            Env.lookup_append_of_not_mem (hfr₁.not_mem_dom fun j _ hj he => by
+              have := freshVar_inj he; omega)]
+          exact appBlock_lookup_child (by omega)
+        have hrootl : Env.lookup (freshVar (next + args.length)) (σ ++ (ρ₁ ++ ρ₂)) = some r := by
+          rw [Env.lookup_append_of_not_mem (hσ _),
+            Env.lookup_append_of_not_mem (hfr₁.not_mem_dom fun j _ hj he => by
+              have := freshVar_inj he; omega)]
+          rw [← hbsLen]
+          exact appBlock_lookup_root
+        have hevalArgs :
+            Expr.evalList (freshArgs next args.length) (σ ++ (ρ₁ ++ ρ₂)) = some bs := by
+          rw [← hbsLen]
+          exact evalList_freshArgs fun i hi => by rw [hbsLen] at hi; exact hchild i hi
+        have hmatchArgs : Expr.MatchesList d (σ ++ (ρ₁ ++ ρ₂)) (freshArgs next args.length) :=
+          matchesList_freshArgs fun i hi => by rw [hchild i hi]; rfl
+        have hliveB : Term.app f bs ∈ d.live := (h.app_live_iff hf).mpr hbs
+        -- The earlier atoms and ids read the same through the extended substitution.
+        have hagree₁ : ∀ v, NotFresh v ∨ FreshIn n next v →
+            Env.lookup v (σ ++ (ρ₁ ++ ρ₂)) = Env.lookup v (σ ++ ρ₁) :=
+          fun v hv => lookup_left hfr₂ (not_freshIn_right hv)
+        have hvars₁ : ∀ p ∈ ps, ∀ v ∈ p.vars, NotFresh v ∨ FreshIn n next v := by
+          intro p hp v hv
+          have := flatArgs_vars_sub args n (v := v) (by
+            rw [hflat]; exact Query.mem_vars.mpr ⟨p, hp, hv⟩)
+          rw [hflat] at this
+          rcases this with hv | hv
+          · exact Or.inl (hsrc v (by simpa using hv))
+          · exact Or.inr hv
+        refine ⟨ρ₁ ++ ρ₂, ?_, ?_, ?_, ?_, .app f ts, by rw [Expr.eval_app_ctor, hev]; rfl, hself,
+          ?_⟩
+        · rw [flat_app hflat]
+          simp only
+          exact hfr₁.append hfr₂ hle (by omega)
+        · intro b hb
+          rcases List.mem_append.mp hb with hb | hb
+          · exact hval₁ b hb
+          · exact hval₂ b hb
+        · rw [flat_app hflat]
+          simp only
+          intro p hp
+          rw [List.mem_append, List.mem_append, List.mem_cons, List.mem_singleton] at hp
+          rcases hp with (hp | rfl | hp) | rfl
+          · exact (hatoms₁ p hp).of_agreeOn fun v hv => (hagree₁ v (hvars₁ p hp v hv)).symm
+          · exact matches_app_iff.mpr ⟨bs, hmatchArgs, hevalArgs, hliveB⟩
+          · obtain ⟨ax, hax, rfl⟩ := List.mem_map.mp hp
+            obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.mp hax
+            have hi' : i < args.length := by
+              simpa [freshArgs_length, hlen] using hi
+            rw [List.getElem_zip, freshArgs_getElem hi']
+            have hxi := (List.forall₂_iff_get.mp hids).2 i (by omega) (by omega)
+            simp only [List.get_eq_getElem] at hxi
+            obtain ⟨hxm, hxe⟩ := hxi
+            have hagx : ∀ v ∈ (xs[i]'(by omega)).vars,
+                Env.lookup v (σ ++ ρ₁) = Env.lookup v (σ ++ (ρ₁ ++ ρ₂)) := by
+              intro v hv
+              have := flatArgs_ids_vars args n (x := xs[i]'(by omega)) (by
+                rw [hflat]; exact List.getElem_mem _) hv
+              rw [hflat] at this
+              refine (hagree₁ v ?_).symm
+              rcases this with hv | hv
+              · exact Or.inl (hsrc v (by simpa using hv))
+              · exact Or.inr hv
+            obtain ⟨hxe', hxm'⟩ := Expr.Matches.of_agreeOn ⟨hxe, hxm⟩ hagx
+            have hti : Cong src (ts[i]'(by omega)) (ts[i]'(by omega)) :=
+              hcong _ (List.getElem_mem _)
+            have hedge : Edge d (bs[i]'(by omega)) (srep src (ts[i]'(by omega))) := by
+              rw [h.edge_iff_rep hc hw (h.keys_subterm hkey
+                (Term.arg_subterms (List.getElem_mem _) (Term.self_mem_subterms _)))]
+              refine ⟨(srep_spec h.src_hasReps hti).1, ?_⟩
+              have hbt : Cong src (bs[i]'(by omega)) (ts[i]'(by omega)) :=
+                ((CongList.forall₂.mp hcl).get (by omega) (by omega)).symm
+              exact hbt.trans (srep_spec h.src_hasReps hti).2
+            exact matches_uf_iff.mpr ⟨_, _, .var (hchild i hi'), hxm', hchild i hi', hxe', hedge⟩
+          · refine matches_uf_iff.mpr ⟨.app f bs, r, .app hmatchArgs hevalArgs hliveB,
+              .var hrootl, ?_, hrootl, h.edge_root hkey⟩
+            rw [Expr.eval_app_ctor, hevalArgs]; rfl
+        · rw [flat_app hflat]
+          exact .var hrootl
+        · rw [flat_app hflat]
+          simp only [Expr.eval_var]
+          rw [hrootl, hr, h.root_eq_srep hc hw hkey,
+            srep_eq_of_cong h.src_hasReps (Cong.congr hself hcl)]
+
+theorem complete_args (h : Rel src d) (hc : Canon d) (hw : src.WF) :
+    ∀ (es : List Expr) (n : Nat) {σ : Env}, Expr.OrderingFreeList es →
+    (∀ g ∈ Expr.fnsList es, g ≠ ufName) → (∀ v ∈ Expr.varsList es, NotFresh v) → NoFreshDom σ →
+    (∀ b ∈ σ, b.2 ∈ src.reps) → Expr.MatchesList src σ es → ArgsComplete src d es n σ
+  | [], n, σ, _, _, _, _, _, _ => by
+      refine ⟨[], Fresh.nil n, by simp, by rw [flatArgs_nil]; simp, [], rfl, by simp, ?_⟩
+      rw [flatArgs_nil]
+      exact .nil
+  | e :: es, n, σ, ho, hnames, hsrc, hσ, hreps, hm => by
+      cases hm with
+      | cons hme hmes =>
+        obtain ⟨hoe, hoes⟩ := Expr.orderingFreeList_cons ho
+        obtain ⟨hne, hnes⟩ := srcNames_cons hnames
+        have hsrce : ∀ v ∈ e.vars, NotFresh v := fun v hv => hsrc v (by simp [hv])
+        have hsrces : ∀ v ∈ Expr.varsList es, NotFresh v := fun v hv => hsrc v (by simp [hv])
+        obtain ⟨ρ₁, hfr₁, hval₁, hatoms₁, hx₁, t, ht, htc, hxe⟩ :=
+          complete_expr h hc hw e n hoe hne hsrce hσ hreps hme
+        rcases h₁ : encodeQueryExprWith {} e n with ⟨x, ps, next⟩
+        rw [h₁] at hfr₁ hatoms₁ hx₁ hxe
+        simp only at hfr₁ hatoms₁ hx₁ hxe
+        obtain ⟨ρ₂, hfr₂, hval₂, hatoms₂, ts, hts, htsc, hids⟩ :=
+          complete_args h hc hw es next hoes hnes hsrces hσ hreps hmes
+        rcases h₂ : encodeQueryArgsWith {} es next with ⟨xs, qs, last⟩
+        rw [h₂] at hfr₂ hatoms₂ hids
+        simp only at hfr₂ hatoms₂ hids
+        have hn := flat_next_le e n
+        have hm' := flatArgs_next_le es next
+        rw [h₁] at hn
+        rw [h₂] at hm'
+        simp only at hn hm'
+        have hagree₁ : ∀ v, NotFresh v ∨ FreshIn n next v →
+            Env.lookup v (σ ++ (ρ₁ ++ ρ₂)) = Env.lookup v (σ ++ ρ₁) :=
+          fun v hv => lookup_left hfr₂ (not_freshIn_right hv)
+        have hagree₂ : ∀ v, NotFresh v ∨ FreshIn next last v →
+            Env.lookup v (σ ++ (ρ₁ ++ ρ₂)) = Env.lookup v (σ ++ ρ₂) :=
+          fun v hv => lookup_right hfr₁ (not_freshIn_left hv)
+        have hvars₁ : ∀ p ∈ ps, ∀ v ∈ p.vars, NotFresh v ∨ FreshIn n next v := by
+          intro p hp v hv
+          have := flat_vars_sub e n (v := v) (by rw [h₁]; exact Query.mem_vars.mpr ⟨p, hp, hv⟩)
+          rw [h₁] at this
+          rcases this with hv | hv
+          · exact Or.inl (hsrce v hv)
+          · exact Or.inr hv
+        have hvars₂ : ∀ p ∈ qs, ∀ v ∈ p.vars, NotFresh v ∨ FreshIn next last v := by
+          intro p hp v hv
+          have := flatArgs_vars_sub es next (v := v) (by
+            rw [h₂]; exact Query.mem_vars.mpr ⟨p, hp, hv⟩)
+          rw [h₂] at this
+          rcases this with hv | hv
+          · exact Or.inl (hsrces v hv)
+          · exact Or.inr hv
+        have hxvars : ∀ v ∈ x.vars, NotFresh v ∨ FreshIn n next v := by
+          intro v hv
+          rcases flat_id_cases e n with ⟨hx, -, -⟩ | ⟨k, hx, hk₁, hk₂, -⟩
+          · rw [h₁] at hx; simp only at hx
+            rw [hx] at hv
+            exact Or.inl (hsrce v hv)
+          · rw [h₁] at hx hk₂; simp only at hx hk₂
+            rw [hx, Expr.vars_var, List.mem_singleton] at hv
+            exact Or.inr ⟨k, hk₁, hk₂, hv⟩
+        refine ⟨ρ₁ ++ ρ₂, ?_, ?_, ?_, t :: ts, ?_, ?_, ?_⟩
+        · rw [flatArgs_cons h₁ h₂]
+          exact hfr₁.append hfr₂ hn hm'
+        · intro b hb
+          rcases List.mem_append.mp hb with hb | hb
+          · exact hval₁ b hb
+          · exact hval₂ b hb
+        · rw [flatArgs_cons h₁ h₂]
+          simp only
+          intro p hp
+          rcases List.mem_append.mp hp with hp | hp
+          · exact (hatoms₁ p hp).of_agreeOn fun v hv => (hagree₁ v (hvars₁ p hp v hv)).symm
+          · exact (hatoms₂ p hp).of_agreeOn fun v hv => (hagree₂ v (hvars₂ p hp v hv)).symm
+        · rw [Expr.evalList_cons, ht, Option.bind_some, hts, Option.map_some]
+        · intro u hu
+          rcases List.mem_cons.mp hu with rfl | hu
+          · exact htc
+          · exact htsc u hu
+        · rw [flatArgs_cons h₁ h₂]
+          simp only
+          refine .cons ?_ ?_
+          · obtain ⟨hxe', hxm'⟩ := Expr.Matches.of_agreeOn ⟨hxe, hx₁⟩
+              fun v hv => (hagree₁ v (hxvars v hv)).symm
+            exact ⟨hxm', hxe'⟩
+          · rw [List.forall₂_iff_get] at hids ⊢
+            refine ⟨hids.1, fun i h₁' h₂' => ?_⟩
+            obtain ⟨hxm, hxe⟩ := hids.2 i h₁' h₂'
+            have hx'vars : ∀ v ∈ (xs.get ⟨i, h₁'⟩).vars, NotFresh v ∨ FreshIn next last v := by
+              intro v hv
+              have := flatArgs_ids_vars es next (x := xs.get ⟨i, h₁'⟩) (by
+                rw [h₂]; exact List.get_mem _ _) hv
+              rw [h₂] at this
+              rcases this with hv | hv
+              · exact Or.inl (hsrces v hv)
+              · exact Or.inr hv
+            obtain ⟨hxe', hxm'⟩ := Expr.Matches.of_agreeOn ⟨hxe, hxm⟩
+              fun v hv => (hagree₂ v (hx'vars v hv)).symm
+            exact ⟨hxm', hxe'⟩
+
+end
 
 end Egglog.Congruence

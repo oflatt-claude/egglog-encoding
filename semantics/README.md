@@ -1,68 +1,74 @@
 # EgglogSemantics
 
-A Lean 4 model of egglog's semantics and proof encoding, originally ported from the
-Redex model in [egglog PR #324](https://github.com/egraphs-good/egglog/pull/324).
+A Lean 4 model of egglog's semantics, compiler passes and proof production, with proofs
+of the paper's theorems. The model began as a port of the Redex model in
+[egglog PR #324](https://github.com/egraphs-good/egglog/pull/324).
 The reference interpreter targets the extended egglog implementation in this workspace.
 
 ## Language and semantics
 
-The language is untyped and has no declarations. A program runs or saturates lists of
-rules and ends in one check that decides its outcome; applying any name to any arguments
-builds a term, and an initial fact is a run of an empty-query rule. A rule's query is a
+The language is untyped and has no declarations. A program is a schedule, built from
+runs of rule lists, saturations and sequences nested as in egglog's `run-schedule`, and
+one check that decides its outcome; applying any name to any arguments builds a
+term, and an initial fact is a run of an empty-query rule. A rule's query is a
 conjunction of term patterns, equalities and disequalities, and its actions build terms,
-assert equalities with `union`, and `delete` rows. egglog's named rulesets are resolved by
+assert equalities with `union`, and `subsume` rows. egglog's named rulesets are resolved by
 the parser: a run of a ruleset fires the rules registered in it so far.
 
-A state is a set of equations. Reflexive equations record which terms exist, and
-congruence is derived over the terms the equations mention. A round fires every rule it
-names against the pre-state, applies every deletion, then adds every write. Definitions
+A state is an e-graph: a set of equations and a set of subsumed rows. Reflexive equations
+record which terms exist, and congruence is derived over the terms the equations mention.
+A query looks rows up and matches no subsumed row, in any spelling; a query variable is
+bound to the representative of a class, its least stored spelling in the term order, as
+egglog binds a variable to an e-class. A round fires every rule it names against the
+pre-state and adds every write and every subsumed row, in no particular order. Definitions
 and brief rationale are in [Spec/Step.lean](EgglogSemantics/Spec/Step.lean).
+
+## Reading guide
+
+Start with [ExtlogTheorems.lean](ExtlogTheorems.lean). It states every theorem the paper claims,
+in full and in the vocabulary of the specification; the proofs are under
+`EgglogSemantics/Proofs/`. The theorem names below are in namespace `ExtlogTheorems`.
+
+| Theorem | Statement |
+| --- | --- |
+| `congruence_pass_correct` | A well-formed source program in the fragment and its compilation have the same outcome and the same divergence (paper `thm:congruence`). |
+| `provenance_pass_correct` | For a union-free program satisfying `Provenance.Instrumentable`, instrumentation preserves outcome and divergence; erasing the final log preserves the original e-graph's meaning (paper `thm:provenance`). |
+| `passes_compose` | For a well-formed source program in the fragment, applying both passes preserves outcome and divergence. |
+| `checker_sound` | A claim the proof checker accepts, between terms of the saturated final e-graph, holds there. |
+| `log_proofs_checked` | Every proof read off the firing log is accepted by the checker. |
+| `lifted_proofs_checked`, `lifted_proofs_sound` | Lifted proofs are accepted by the source checker, and their claims hold in the saturated source e-graph. |
+
+Specification and proofs are separate: nothing outside `Proofs/`, `Tests/` and
+`ExtlogTheorems.lean` imports a proof module. The `@[blueprint "def:…"]` and
+`@[blueprint "thm:…"]` attributes carry the paper's labels and statements, and
+`make paper-sync` writes them into the paper.
+
+| Paper | Lean |
+| --- | --- |
+| Section 4, semantics | `EgglogSemantics/Spec/`: `Syntax` (programs, schedules, rules), `Term`, `Database` (an e-graph as equations and subsumed rows), `Congruence` (`Cong` and `terms`), `Match` (queries, representatives), `Eval` (expressions, actions), `Step` (rounds, schedules, outcomes: `Reach`, `Eval`), `Divergence`, `Behavior`, `Order` (the term order behind representatives) |
+| Section 5, congruence pass | `Congruence/Encode.lean` (the pass `encode`, the maintenance rules, the view and phasing options), `Source/Domain.lean` and `Source/WellFormed.lean` (the fragment and well-formedness), `Congruence/Read.lean` (reading a compiled e-graph back) |
+| Section 6, proofs | `SourceProof/Format.lean` and `Checker.lean` (proof terms and the checker), `Provenance/Encode.lean` (instrumentation) and `Log.lean` (proofs read off the log), `Resugar/Claim.lean`, `Query.lean`, `Lift.lean` (lifting), `Resugar/Execute.lean` (`prove`) |
+| The proofs | `Proofs/Congruence/` (the simulation for Section 5), `Proofs/Provenance/` (instrumentation correctness), `Proofs/SourceProof/` and `Proofs/Resugar/` (checker and lifting soundness); the remaining modules are lemmas about the specification and the reference interpreter |
+| Executable | `Impl/` (finite reference interpreter), `Congruence/Relational.lean` (execution without equality reasoning), `Tests/`, `DiffTest.lean` (comparisons with egglog and the corpus gates), `tests/` (`.egg` programs with snapshots of their encodings and lifted proofs) |
+
+To check the theorems from this directory: `lake build` (the `assert_no_sorry` lines in
+`ExtlogTheorems.lean` fail the build on any incomplete proof), `make lean-holes` (no `sorry`
+anywhere), and `#print axioms ExtlogTheorems.congruence_pass_correct` and the others, which
+show only `propext`, `Classical.choice` and `Quot.sound`.
 
 ## Encoding passes
 
-The congruence compiler translates source programs, which use neither `delete` nor
-disequality, into explicit union-find and view relations maintained by rules that delete
+The congruence compiler translates source programs, which use neither `subsume` nor
+disequality, into an explicit union-find relation maintained by rules that subsume
 a stale row and write its replacement; the output has no merge function. It handles query
 flattening and rebuilding, with one id column per relation. The provenance pass adds a
 firing log, one relation per rule recording the values each firing bound, and proofs are
 reconstructed from the log afterwards. Proof lifting turns them into source proofs that
 both the Lean and Rust checkers accept. The [encoding guide](ENCODING.md) describes the
-encoding, the log, and the rationale.
-
-Compiler correctness is stated in
-[Congruence/Correctness.lean](EgglogSemantics/Congruence/Correctness.lean): well-formed
-source programs in the fragment without `saturate` and their compilations have exactly the
-same success, check-failure, and divergence behaviors, over mathematical databases. Its
-proof for the constructor-and-delete encoding is open; the proofs under
-`Proofs/Congruence/` concern the previous, merge-function encoding and are not built. The
-specification-level proofs, the interpreter refinement (delete-free programs, and
-union-free programs with deletes such as the compiler's output), and the certificate
-soundness proofs are ported to the declaration-free specification; `EgglogPaper.lean`
-lists the theorems the paper relies on. Brief certificate notes live with the
-[source checker](EgglogSemantics/SourceProof/Checker.lean) and
+encoding, the log, and the rationale; the corpus gates (`difftest congruence`,
+`difftest provenance`) also check both correctness statements executably. Brief certificate
+notes live with the [source checker](EgglogSemantics/SourceProof/Checker.lean) and
 [relational checker](EgglogSemantics/Provenance/Checker.lean).
-
-## Layout
-
-| Directory | Contents |
-| --- | --- |
-| `EgglogSemantics/Spec/` | Syntax, databases, congruence, evaluation, matching, relational steps, scope |
-| `EgglogSemantics/Impl/` | Finite reference interpreter |
-| `EgglogSemantics/Source/` | The source fragment the compiler accepts, and the generated names |
-| `EgglogSemantics/Congruence/` | Congruence compiler and relational execution |
-| `EgglogSemantics/SourceProof/` | Source proof format and checker |
-| `EgglogSemantics/Provenance/` | Firing-log instrumentation, proof format, checker, and extraction |
-| `EgglogSemantics/Resugar/` | Proof lifting to source proofs, fixtures, and JSON export |
-| `EgglogSemantics/Proofs/` | Theorems about the specification, checker and lifting soundness; the compiler proofs there predate this encoding |
-| `EgglogSemantics/Tests/` | Executable regressions, `.egg` parsing and emission, and proof rendering |
-| `tests/` | Hand-written `.egg` programs with snapshots of their encodings and lifted proofs |
-| `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
-
-Start with [Syntax.lean](EgglogSemantics/Spec/Syntax.lean),
-[Eval.lean](EgglogSemantics/Spec/Eval.lean), and
-[Step.lean](EgglogSemantics/Spec/Step.lean), then read
-[Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean) and
-[Congruence/Correctness.lean](EgglogSemantics/Congruence/Correctness.lean).
 
 ## Validation
 
@@ -73,7 +79,8 @@ make check                 # Python and Rust formatting, checks, and tests
 make -C semantics lean-check            # Lean build, proof-hole audit, corpus gates, Rust certificate check
 cargo build --release -p egglog
 make -C semantics lean-difftest          # compare Lean and egglog per-function row counts
-make -C semantics lean-compiled-difftest # run the compiled programs in egglog and compare view sizes
+make -C semantics lean-compiled-difftest # run the compiled programs in egglog and compare e-node censuses
+make -C semantics paper-sync             # regenerate the semantics section of ../extended-egglog-paper
 ```
 
 Additional executable probes, from `semantics/`:
