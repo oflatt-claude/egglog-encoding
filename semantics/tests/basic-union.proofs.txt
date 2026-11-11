@@ -14,8 +14,24 @@
 
 (F (B)) = (F (B))  rule 1 {}
 
+(F (B)) = (F (B))  rule 1 {}
+
+(F (B)) = (F (B))  rule 1 {}
+
+(B) = (B)  rule 1 {}
+
+(B) = (B)  rule 1 {}
+
 (B) = (B)  rule 1 {}
 
 (F (A)) = (F (A))  rule 0 {}
+
+(F (A)) = (F (A))  rule 0 {}
+
+(F (A)) = (F (A))  rule 0 {}
+
+(A) = (A)  rule 0 {}
+
+(A) = (A)  rule 0 {}
 
 (A) = (A)  rule 0 {}

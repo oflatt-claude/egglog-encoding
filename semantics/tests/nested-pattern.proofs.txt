@@ -8,8 +8,30 @@
     (F (G (A))) = (F (G (A)))  rule 0 {}
     (G (A)) = (G (A))  rule 0 {}
 
+(H (A)) = (H (A))  rule 1 {x := (A)}
+  (F (G (A))) = (F (G (A)))  congr 0
+    (F (G (A))) = (F (G (A)))  rule 0 {}
+    (G (A)) = (G (A))  rule 0 {}
+
+(H (A)) = (H (A))  rule 1 {x := (A)}
+  (F (G (A))) = (F (G (A)))  congr 0
+    (F (G (A))) = (F (G (A)))  rule 0 {}
+    (G (A)) = (G (A))  rule 0 {}
+
+(F (G (A))) = (F (G (A)))  rule 0 {}
+
+(F (G (A))) = (F (G (A)))  rule 0 {}
+
 (F (G (A))) = (F (G (A)))  rule 0 {}
 
 (G (A)) = (G (A))  rule 0 {}
+
+(G (A)) = (G (A))  rule 0 {}
+
+(G (A)) = (G (A))  rule 0 {}
+
+(A) = (A)  rule 0 {}
+
+(A) = (A)  rule 0 {}
 
 (A) = (A)  rule 0 {}

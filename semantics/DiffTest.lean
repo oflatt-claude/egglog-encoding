@@ -873,6 +873,10 @@ private def provenanceCheck (fuel : Nat) (p : Program) (liftProofs : Bool) : Lis
   -- Without its log, the instrumented state is the original state.
   if (Provenance.eraseLog annotated.terms).toFinset != original.terms.toFinset then
     errors := errors ++ ["states differ without the log"]
+  if annotated.subsumed.toFinset != original.subsumed.toFinset then
+    errors := errors ++ ["subsumed rows differ after instrumentation"]
+  if Relational.holds original q.check != Relational.holds annotated encoded.check then
+    errors := errors ++ ["check outcome differs after instrumentation"]
   let proofs := Provenance.rowProofs q annotated.terms
   let bad := proofs.filter fun tp => match tp.2 with
     | none => true

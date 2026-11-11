@@ -110,7 +110,7 @@ def Query.checkToEggExpecting (q : Query) (holds : Bool) : List String :=
 Every name has to be declared before egglog runs the program, so the arities are read off
 the program's uses (`Program.ctors`). -/
 
-/-- Every generated table, the union-find, the views and the provenance log, is a relation
+/-- Every generated table, including node rows, subsumption markers and the provenance log, is a relation
 in egglog: its rows are never nested, so they need no id. Source names never start with
 `@`. -/
 def isRelationName (f : FnName) : Bool := "@".isPrefixOf f
@@ -190,9 +190,10 @@ def Program.render (p : Program) : String := p.renderWith fun _ => none
 
 egglog's `(print-size)` counts subsumed rows, and which spellings a run builds depends on
 which representative each engine picked, so a compiled program is compared through a
-census of canonical e-nodes: a final ruleset joins every application of a source
+census of live canonical e-nodes: a final ruleset joins every live application of a source
 constructor with the live union-find edges of its children and records the tuple of
-parents in the constructor's `:live` relation, whose size is the number of canonical
+parents in the constructor's `:live` relation. Subsumed source rows do not match this
+rule, although they remain in the raw table counts. Its size is the number of live canonical
 e-nodes on both sides. Source programs have no union-find and no census. -/
 
 /-- The census relation of a source constructor. -/
