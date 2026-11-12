@@ -368,22 +368,20 @@ the replacement's key is new. -/
   \[
   \begin{aligned}
    \textsc{Migrate}:\quad
-   &a=N_g(s,\rho,c)\land\mathtt{RenamesTo}(a,m,b)\land\mathtt{FS}(b,B)\\
+   &a=\mathtt{Mul}(g,\rho_1,c_1,\rho_2,c_2)\land\mathtt{RenamesTo}(a,m,b)\land\mathtt{FS}(b,B)\\
    &\land b=\min(a,b)\land b\ne a
-     \land\widehat m=\operatorname{extend}(m^{-1},\{s\}\cup\operatorname{img}(\rho),B)\\
-   &\Rightarrow\kw{union}(b,N_{g+1}(\widehat m(s),\widehat m\circ\rho,c)),\
-     \kw{subsume}(N_g(s,\rho,c))\\[2pt]
+     \land\widehat m=\operatorname{extend}(m^{-1},\operatorname{img}(\rho_1)\cup\operatorname{img}(\rho_2),B)\\
+   &\Rightarrow\kw{union}(b,\mathtt{Mul}(g{+}1,\widehat m\circ\rho_1,c_1,\widehat m\circ\rho_2,c_2)),\
+     \kw{subsume}(a)\\[2pt]
    \textsc{Child}:\quad
-   &a=N_g(s,\rho,c)\land\mathtt{RenamesTo}(c,m,d)\land c\ne d\land d=\min(c,d)\\
-   &\Rightarrow\kw{union}(a,N_{g+1}(s,\rho\circ m,d)),\
-     \kw{subsume}(N_g(s,\rho,c))\\[2pt]
+   &a=\mathtt{Mul}(g,\rho_1,c_1,\rho_2,c_2)\land\mathtt{RenamesTo}(c_1,m,d)\land c_1\ne d\land d=\min(c_1,d)\\
+   &\Rightarrow\kw{union}(a,\mathtt{Mul}(g{+}1,\rho_1\circ m,d,\rho_2,c_2)),\ \kw{subsume}(a)\\[2pt]
    \textsc{Restrict}:\quad
-   &a=N_g(s,\rho,c)\land\mathtt{FS}(c,A)\land\rho'=\rho|_A\land\rho'\ne\rho\\
-   &\Rightarrow\kw{union}(a,N_{g+1}(s,\rho',c)),\
-     \kw{subsume}(N_g(s,\rho,c))\\[2pt]
+   &a=\mathtt{Mul}(g,\rho_1,c_1,\rho_2,c_2)\land\mathtt{FS}(c_1,A)\land\rho_1'=\rho_1|_A\land\rho_1'\ne\rho_1\\
+   &\Rightarrow\kw{union}(a,\mathtt{Mul}(g{+}1,\rho_1',c_1,\rho_2,c_2)),\ \kw{subsume}(a)\\[2pt]
    \textsc{Dedup}_f:\quad
-   &a=f(g,\bar t)\land a'=f(g',\bar t)\land g<g'\\
-   &\Rightarrow\kw{union}(a,a'),\ \kw{subsume}(f(g,\bar t)).
+   &a=f(g,\bar t)\land a'=f(g',\bar t)\land g<g'
+     \Rightarrow\kw{union}(a,a'),\ \kw{subsume}(a).
   \end{aligned}
   \]
   -/)
