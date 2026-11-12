@@ -43,8 +43,8 @@ injective: the correspondence the Collide rule assembles from its children. -/
 @[blueprint "def:slotted-align"
   (statement := /--
   \[
-  \operatorname{align}(m_1,\ldots,m_n)=\textstyle\bigcup_i m_i
-  \quad\text{if this union is a partial injection; undefined otherwise.}
+  \operatorname{align}(m_1,\ldots,m_n)\triangleq\textstyle\bigcup_i m_i,
+  \quad\text{defined when this union is a partial injection, i.e., a renaming.}
   \]
   -/)
   (latexEnv := "paperfragment")]

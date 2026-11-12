@@ -167,12 +167,6 @@ child maps and self-equations need not yet be restricted to the current free slo
    &\Rightarrow\mathtt{RenamesTo}(a,m,a').
   \end{aligned}
   \]
-  The $\pi_i$ are the symmetries of the children, the self-equations
-  $\mathtt{RenamesTo}(c_i,\pi_i,c_i)$, which \textsc{Trim} keeps as permutations of
-  their free slots.
-  A binding position is a slot name stored in the node itself, so for the sum
-  $\operatorname{align}$ also receives $[\$j\mapsto\$i]$; with $a=a'$ the rule discovers
-  a symmetry of the parent.
   -/)
   (latexEnv := "paperfragment")]
 def collideRule (L : Layout) (f : FnName) (n : Nat) : Option Rule :=
@@ -309,8 +303,6 @@ restriction. Collision discovers equations; finite witnesses support negative co
    \end{aligned}
   \end{gathered}
   \]
-  Endpoints are unordered; self-equations are symmetries. Only strict map restriction
-  retires an equation. Migration and child update choose their direction when they fire.
   -/)
   (latexEnv := "paperfragment")]
 def renamingRules (L : Layout) (ctors : List (FnName × Nat)) : List Rule :=
@@ -373,9 +365,6 @@ the replaced row and writes its replacement at the replaced row's generation plu
 the replacement's key is new. -/
 @[blueprint "def:slotted-term-updates"
   (statement := /--
-  For sums, write $N_g(s,\rho,c)=\SumZeroTen(g,s,\rho,c)$.
-  Updates write generation $g+1$ and subsume the replaced row in the same firing.
-  At each use, $m$ is restricted to the current supports of its two endpoints.
   \[
   \begin{aligned}
    \textsc{Migrate}:\quad
@@ -397,11 +386,6 @@ the replacement's key is new. -/
    &\Rightarrow\kw{union}(a,a'),\ \kw{subsume}(f(g,\bar t)).
   \end{aligned}
   \]
-  Other constructors update each child similarly. Before collision or migration can align
-  a binder with an outside occurrence, \textsc{Refresh} renames that binder and its covered
-  edge images by $\mathrm{id}_{L\setminus\{s\}}\cup[s\mapsto\operatorname{mint}(L)]$.
-  \textsc{Shadow} refreshes the earlier of two equal binding fields with the same scope;
-  the later field binds the occurrences. Both use the same replacement and subsumption form.
   -/)
   (latexEnv := "paperfragment")]
 def updateRulesAll (L : Layout) (ctors : List (FnName × Nat)) : List Rule :=
